@@ -1,0 +1,28 @@
+[project]
+name = "autoscraper"
+version = "0.1.0"
+description = "Declarative scraping protocol and deterministic Playwright executor"
+requires-python = ">=3.12"
+dependencies = ["pydantic>=2.10,<3", "playwright>=1.49,<2"]
+
+[dependency-groups]
+dev = ["pytest>=8,<10", "ruff>=0.9"]
+
+[project.scripts]
+autoscraper = "autoscraper.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["live: accesses Books to Scrape (opt in)"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+extend-exclude = [".uv-cache", ".browsers"]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]
