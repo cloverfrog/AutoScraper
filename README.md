@@ -1,66 +1,122 @@
-# AutoScraper：第一阶段
+# AutoScraper
 
-Python 3.12 + Pydantic v2 + Playwright + uv。自然语言探索与 browser-use Agent 留给后续阶段；当前实现可独立运行的 JSON 规则协议及确定性执行器。
+输入网站 URL 和自然语言需求，由 browser-use Agent 探索网页并生成抓取规则，再交给 Playwright Executor 导出数据。
 
-## 安装与运行
+## 运行 Agent
+
+以下命令使用 **Windows PowerShell**，需要 Python 3.12 和 uv。
+
+### 1. 安装依赖和浏览器（首次运行）
 
 ```powershell
-uv sync --locked
-uv run playwright install chromium
-uv run autoscraper examples/books.json --output output/books.json --output output/books.csv
-uv run pytest
+cd C:\MySpace\program\AutoScraper
+uv sync --extra agent --locked
+uv run --extra agent playwright install chromium
 ```
 
-如需把缓存和浏览器保存在项目内（本项目验证使用此配置）：
+### 2. 配置 DeepSeek 和浏览器（每个新终端执行）
 
 ```powershell
-$env:UV_CACHE_DIR = "$PWD\.uv-cache"
+$env:DEEPSEEK_API_KEY = "替换为你的 DeepSeek API Key"
+$env:AUTOSCRAPER_BROWSER_PATH = uv run --extra agent python -c "from playwright.sync_api import sync_playwright; p = sync_playwright().start(); print(p.chromium.executable_path); p.stop()"
+```
+
+如果终端已经配置 `DEEPSEEK_API_KEY`，无需再次赋值。默认接口为 `https://api.deepseek.com/v1`，模型为 `deepseek-flash`。
+
+### 3. 启动 Agent，生成规则并抓取数据
+
+```powershell
+uv run --extra agent autoscraper-agent "https://books.toscrape.com/" "抓取前25本书，字段名为title、price、url，分别为完整书名、价格、绝对详情链接，需要分页" --spec-output output/books-agent.json --output output/books.json --output output/books.csv --headed
+```
+
+`--headed` 显示 Agent 探索浏览器；去掉后使用无头模式。此命令会调用 LLM，产生 API 费用。
+
+成功后得到：
+
+| 文件 | 内容 |
+| --- | --- |
+| `output/books-agent.json` | Agent 生成的可复用抓取规则 |
+| `output/books.json` | 抓取数据，JSON 格式 |
+| `output/books.csv` | 抓取数据，CSV 格式 |
+
+换网站时，替换命令里的 URL 和自然语言需求即可。
+
+## 只生成规则 / 重复抓取
+
+**只探索并生成规则**：不传 `--output`。
+
+```powershell
+uv run --extra agent autoscraper-agent "https://books.toscrape.com/" "抓取前25本书的完整书名、价格和详情链接，需要分页" --spec-output output/books-agent.json
+```
+
+**用已有规则抓取**：运行 Executor，不调用 LLM。
+
+```powershell
+uv run autoscraper output/books-agent.json --output output/books.json --output output/books.csv
+```
+
+也可直接使用仓库中已验证的 Agent 规则快照：
+
+```powershell
+uv run autoscraper examples/books.agent-generated.json --output output/books.json
+```
+
+## 常用配置
+
+| 参数 | 用途 | 默认值 |
+| --- | --- | --- |
+| `--spec-output` | 规则输出路径，必填 | — |
+| `--output` | 数据输出路径，可重复指定 CSV / JSON | 不抓取数据 |
+| `--headed` | 显示探索浏览器 | 无头模式 |
+| `--model` | LLM 模型名 | `deepseek-flash` |
+| `--base-url` | OpenAI-compatible 接口地址 | `https://api.deepseek.com/v1` |
+| `--max-steps` | 最大探索步数及 LLM 调用数 | 12 |
+| `--timeout` | 探索总超时，秒 | 240 |
+| `--llm-timeout` | 单次 LLM 超时，秒 | 45 |
+| `--max-output-tokens` | 单次 LLM 输出 token 上限 | 3000 |
+| `--browser-path` | Chromium / Chrome 可执行文件路径 | 读取环境配置或自动查找 |
+| `--structured-output` | 开启服务端 JSON Schema 模式 | 关闭，以兼容更多接口 |
+
+其他兼容接口可设置 `AUTOSCRAPER_API_KEY`、`AUTOSCRAPER_BASE_URL` 和 `AUTOSCRAPER_MODEL`。密钥优先读取 `AUTOSCRAPER_API_KEY`，其次读取 `DEEPSEEK_API_KEY`；配置不自动加载 `.env`。
+
+完整参数：`uv run --extra agent autoscraper-agent --help`。
+
+## 浏览器与缓存路径
+
+如果之前使用了项目内的 `.browsers`，在上面的安装、浏览器路径获取和运行命令**之前**执行：
+
+```powershell
 $env:PLAYWRIGHT_BROWSERS_PATH = "$PWD\.browsers"
-uv sync --locked
-uv run playwright install chromium
+$env:UV_CACHE_DIR = "$PWD\.uv-cache"
 ```
 
-线上验证显式启用，不影响默认离线测试：
+这两个变量只在当前终端有效，新终端需重新设置。也可直接用 `--browser-path` 指定本机 Chrome 路径。
+
+## 测试
+
+默认测试不调用真实 LLM：
 
 ```powershell
-$env:RUN_LIVE = "1"
-uv run pytest -m live
+uv run --extra agent pytest
 ```
 
-## 模块边界
+付费 LLM 测试单独启用，需要前面的密钥和浏览器配置：
+
+```powershell
+$env:RUN_LLM = "1"
+uv run --extra agent pytest -m llm
+```
+
+原 Executor 的线上测试用 `RUN_LIVE=1` 和 `pytest -m live` 单独启用。受限 Windows 环境可以追加 `--basetemp .pytest-tmp-local`。
+
+## 项目结构与当前范围
 
 ```text
-未来 browser-use Agent → ScraperSpec JSON → ScraperExecutor → records → CSV / JSON
-                         spec.py            executor.py               export.py
+自然语言需求 → browser-use Agent → ScraperSpec JSON → Executor → CSV / JSON
 ```
 
-- `spec.py` 仅依赖 Pydantic；通过 `ScraperSpec.model_validate_json(...)` 验证规则，通过 `ScraperSpec.model_json_schema()` 提供未来 Agent 使用的 JSON Schema。
-- `executor.py` 接受已验证的规则，管理浏览器生命周期；`run_page` 可注入调用方管理的 Playwright Page，方便离线测试和后续集成。
-- `export.py` 处理 UTF-8 CSV/JSON，空 CSV 也保留字段表头；`cli.py` 负责文件读取、调用与退出状态。
-- `examples/books.json` 是手写规则；`tests/test_scraper.py` 用 Playwright 路由提供离线 HTML，并提供可选线上测试。
+Agent 负责探索和生成规则，Executor 只负责执行。当前支持列表字段、文本/属性提取、绝对 URL、Next 链接分页、数量限制和去重，不接受模型生成的 Python/JavaScript 脚本。
 
-## 规则语义
+真实验证：DeepSeek 在未提供 CSS Selector 的情况下，7 步生成规则并抓取 25 本书；同一规则用原 CLI 重跑结果一致。回归测试 42 项通过，2 项线上测试默认跳过。
 
-参考完整示例 `examples/books.json`：`item_selector` 匹配每条列表记录；`fields` 中每个 CSS Selector 相对于该记录解析，必须至多匹配一个元素。`extract` 支持 `text` 或 `attribute`，后者必须指定 `attribute`。文本和属性值会去除首尾并合并连续空白；价格保持字符串，不隐式转换数值。
-
-`transform: "absolute_url"` 使用当前页面最终 URL 解析相对链接，只接受 HTTP(S)。`required` 默认 true；可选字段缺失输出 null。未知协议字段、未知版本、无效数量及无效去重字段会在执行前被拒绝。CSS 语法在浏览器执行时验证。
-
-`pagination.next_selector` 是页面范围的 Next 链接选择器。第一阶段要求唯一匹配、具有 href，按链接导航；不支持依赖 JavaScript 点击的分页或无限滚动。缺少/禁用 Next 正常结束，重复页面 URL 终止循环，`max_pages` 始终限制总访问页数。列表未出现按超时失败，以免规则失效时静默输出空数据。
-
-`max_items` 限制成功且去重后的记录数，达到上限立即停止。`dedupe_by` 指定必填字段组成去重键，留空则按整条记录去重；保留首次出现的记录。
-
-缺失必填字段、多匹配字段或不支持的字段 URL 按 `on_item_error` 跳过并记录错误，或立即失败。导航错误、HTTP 4xx/5xx、无效选择器、异常分页立即失败，不自动重试。结果包含记录、错误、访问页数、重复条数和停止原因。CLI 成功退出 0；跳过错误并导出部分数据退出 2；致命错误退出 1 且不导出本次部分数据。导出文件存在时会覆盖；多个导出文件不保证事务性。
-
-## 测试范围
-
-默认测试实际启动 Chromium，但通过路由拦截所有请求，无需外网。覆盖分页、相对 URL、去重、数量与页数限制、分页循环、可选/必填字段、异常分页、HTTP 错误、协议校验和导出。线上测试断言前 100 条、5 页、URL 唯一、首本标题和价格格式。
-
-当前不实现 Agent、Web UI、数据库、反爬、详情页跟进或复杂动态页面。不接收规则提供的 Python/JavaScript，也不使用 eval、exec 或 page.evaluate。网页自身脚本仍由正常浏览器运行；执行器不是用于不可信网络的安全沙箱。
-
-## 本次验证（2026-10-17）
-
-Python 3.12.10；依赖版本记录于 `uv.lock`。全套测试（包含线上测试）21 项通过，Ruff 检查与格式检查通过。手写 Books 规则实际访问 5 页，获得 100 条唯一记录，无错误、无重复，停止原因为 `max_items`。`output/books.json` 和 `output/books.csv` 均已回读确认 100 条；首本为 `A Light in the Attic`，第 100 本为 `In the Country We Love: My Family Divided`。输出目录已加入忽略规则，可随时重新生成。
-
-受限 Windows 环境下可用 `pytest --basetemp .pytest-tmp-local` 将测试临时文件放在项目内；浏览器进程与线上访问需要环境允许。
-
-接口参考：[Playwright Locator](https://playwright.dev/python/docs/api/class-locator)、[Pydantic Models](https://docs.pydantic.dev/latest/concepts/models/)、测试站点 [Books to Scrape](https://books.toscrape.com/)。
+模块边界、协议语义、工具限制和验证记录见 [协议与实现参考](docs/reference.md)。

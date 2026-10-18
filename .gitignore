@@ -8,3 +8,5 @@ __pycache__/
 output/
 dist/
 *.egg-info/
+.env
+.agent-runtime/

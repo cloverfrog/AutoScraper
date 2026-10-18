@@ -10,6 +10,12 @@ dev = ["pytest>=8,<10", "ruff>=0.9"]
 
 [project.scripts]
 autoscraper = "autoscraper.cli:main"
+autoscraper-agent = "autoscraper.agent_cli:main"
+
+[project.optional-dependencies]
+agent = [
+    "browser-use==0.13.11",
+]
 
 [build-system]
 requires = ["hatchling"]
@@ -17,7 +23,7 @@ build-backend = "hatchling.build"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-markers = ["live: accesses Books to Scrape (opt in)"]
+markers = ["live: accesses Books to Scrape (opt in)", "llm: paid real LLM calls (opt in)"]
 
 [tool.ruff]
 target-version = "py312"
