@@ -4,17 +4,24 @@
 
 ## 运行 Agent
 
-以下命令使用 **Windows PowerShell**，需要 Python 3.12 和 uv。
+以下命令以 Linux Bash 为例，需要 Python 3.12 和 uv。PowerShell 中相同的 `uv` 命令可直接使用。
 
 ### 1. 安装依赖和浏览器（首次运行）
 
-```powershell
-cd C:\MySpace\program\AutoScraper
+```bash
+cd /path/to/AutoScraper
 uv sync --extra agent --locked
 uv run --extra agent playwright install chromium
 ```
 
 ### 2. 配置 DeepSeek 和浏览器（每个新终端执行）
+
+```bash
+export DEEPSEEK_API_KEY="替换为你的 DeepSeek API Key"
+export AUTOSCRAPER_BROWSER_PATH="$(uv run --extra agent python -c 'from playwright.sync_api import sync_playwright; p = sync_playwright().start(); print(p.chromium.executable_path); p.stop()')"
+```
+
+PowerShell 对应命令：
 
 ```powershell
 $env:DEEPSEEK_API_KEY = "替换为你的 DeepSeek API Key"
@@ -25,7 +32,7 @@ $env:AUTOSCRAPER_BROWSER_PATH = uv run --extra agent python -c "from playwright.
 
 ### 3. 启动 Agent，生成规则并抓取数据
 
-```powershell
+```bash
 uv run --extra agent autoscraper-agent "https://books.toscrape.com/" "抓取前25本书，字段名为title、price、url，分别为完整书名、价格、绝对详情链接，需要分页" --spec-output output/books-agent.json --output output/books.json --output output/books.csv --headed
 ```
 
@@ -45,19 +52,19 @@ uv run --extra agent autoscraper-agent "https://books.toscrape.com/" "抓取前2
 
 **只探索并生成规则**：不传 `--output`。
 
-```powershell
+```bash
 uv run --extra agent autoscraper-agent "https://books.toscrape.com/" "抓取前25本书的完整书名、价格和详情链接，需要分页" --spec-output output/books-agent.json
 ```
 
 **用已有规则抓取**：运行 Executor，不调用 LLM。
 
-```powershell
+```bash
 uv run autoscraper output/books-agent.json --output output/books.json --output output/books.csv
 ```
 
 也可直接使用仓库中已验证的 Agent 规则快照：
 
-```powershell
+```bash
 uv run autoscraper examples/books.agent-generated.json --output output/books.json
 ```
 
@@ -85,6 +92,13 @@ uv run autoscraper examples/books.agent-generated.json --output output/books.jso
 
 如果之前使用了项目内的 `.browsers`，在上面的安装、浏览器路径获取和运行命令**之前**执行：
 
+```bash
+export PLAYWRIGHT_BROWSERS_PATH="$PWD/.browsers"
+export UV_CACHE_DIR="$PWD/.uv-cache"
+```
+
+PowerShell 对应命令：
+
 ```powershell
 $env:PLAYWRIGHT_BROWSERS_PATH = "$PWD\.browsers"
 $env:UV_CACHE_DIR = "$PWD\.uv-cache"
@@ -96,11 +110,18 @@ $env:UV_CACHE_DIR = "$PWD\.uv-cache"
 
 默认测试不调用真实 LLM：
 
-```powershell
+```bash
 uv run --extra agent pytest
 ```
 
 付费 LLM 测试单独启用，需要前面的密钥和浏览器配置：
+
+```bash
+export RUN_LLM="1"
+uv run --extra agent pytest -m llm
+```
+
+PowerShell 对应命令：
 
 ```powershell
 $env:RUN_LLM = "1"
