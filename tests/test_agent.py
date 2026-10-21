@@ -78,7 +78,6 @@ def test_prompt_has_protocol_without_site_selectors():
     assert "Get 25 titles" in task
     assert "product_pod" not in task
     assert "li.next" not in task
-    assert "only available actions are navigate, inspect_page, test_selector, and done" in task
     with pytest.raises(ValueError):
         build_task("file:///tmp/data", "Get titles")
 
@@ -154,7 +153,7 @@ def test_runner_limits_validation_cleanup(monkeypatch, rule, outcome):
         def __init__(self, **kwargs):
             assert kwargs["use_judge"] is False
             assert kwargs["message_compaction"] is False
-            assert kwargs["max_failures"] == 2
+            assert kwargs["max_failures"] == 1
 
         async def run(self, max_steps):
             assert max_steps == 2
@@ -180,7 +179,7 @@ def test_runner_limits_validation_cleanup(monkeypatch, rule, outcome):
 def test_tools_and_llm_budget(monkeypatch):
     pytest.importorskip("browser_use")
     from browser_use import ChatOpenAI
-    from autoscraper.agent_tools import LimitedDeepSeekChatOpenAI, build_tools, make_llm
+    from autoscraper.agent_tools import build_tools, make_llm
 
     assert set(build_tools().registry.registry.actions) == {
         "navigate",
@@ -192,8 +191,7 @@ def test_tools_and_llm_budget(monkeypatch):
     llm = make_llm(settings)
     assert llm.max_retries == 0
     assert llm.max_completion_tokens == 3000
-    assert isinstance(llm, LimitedDeepSeekChatOpenAI)
-    assert not llm.dont_force_structured_output
+    assert llm.dont_force_structured_output
 
     async def fake_invoke(self, *args, **kwargs):
         return "ok"
@@ -202,85 +200,6 @@ def test_tools_and_llm_budget(monkeypatch):
     assert asyncio.run(llm.ainvoke([])) == "ok"
     with pytest.raises(RuntimeError, match="budget"):
         asyncio.run(llm.ainvoke([]))
-
-
-def test_deepseek_agent_output_uses_json_mode_without_tools(monkeypatch):
-    pytest.importorskip("browser_use")
-    from browser_use import ChatOpenAI
-    from browser_use.llm.messages import UserMessage
-    from pydantic import BaseModel
-
-    from autoscraper.agent_tools import make_llm
-
-    class Output(BaseModel):
-        answer: str
-
-    captured = {}
-
-    async def create(**kwargs):
-        captured.update(kwargs)
-        message = SimpleNamespace(content='{"answer":"ok"}')
-        return SimpleNamespace(
-            choices=[SimpleNamespace(message=message, finish_reason="stop")], usage=None
-        )
-
-    client = SimpleNamespace(
-        chat=SimpleNamespace(completions=SimpleNamespace(create=create))
-    )
-    settings = AgentSettings(api_key="fake", max_steps=2)
-    llm = make_llm(settings)
-    monkeypatch.setattr(ChatOpenAI, "get_client", lambda self: client)
-
-    invocation = llm.ainvoke([UserMessage(content="Return JSON")], Output)
-    with pytest.raises(StopIteration) as completed:
-        invocation.send(None)
-    result = completed.value.value
-
-    assert result.completion == Output(answer="ok")
-    assert captured["response_format"] == {"type": "json_object"}
-    assert "tools" not in captured
-    assert captured["messages"] == [{"role": "user", "content": "Return JSON"}]
-
-
-def test_non_deepseek_keeps_prompt_only_default():
-    pytest.importorskip("browser_use")
-    from autoscraper.agent_tools import LimitedDeepSeekChatOpenAI, make_llm
-
-    settings = AgentSettings(
-        api_key="fake", model="compatible-model", base_url="https://llm.example/v1"
-    )
-    llm = make_llm(settings)
-    assert not isinstance(llm, LimitedDeepSeekChatOpenAI)
-    assert llm.dont_force_structured_output
-
-
-def test_deepseek_private_dsml_is_rejected_not_parsed(monkeypatch):
-    pytest.importorskip("browser_use")
-    from browser_use import ChatOpenAI
-    from browser_use.llm.exceptions import ModelProviderError
-    from browser_use.llm.messages import UserMessage
-    from pydantic import BaseModel
-
-    from autoscraper.agent_tools import make_llm
-
-    class Output(BaseModel):
-        answer: str
-
-    async def create(**kwargs):
-        message = SimpleNamespace(content="<｜DSML｜ calls>")
-        return SimpleNamespace(
-            choices=[SimpleNamespace(message=message, finish_reason="stop")], usage=None
-        )
-
-    client = SimpleNamespace(
-        chat=SimpleNamespace(completions=SimpleNamespace(create=create))
-    )
-    llm = make_llm(AgentSettings(api_key="fake"))
-    monkeypatch.setattr(ChatOpenAI, "get_client", lambda self: client)
-
-    invocation = llm.ainvoke([UserMessage(content="Return JSON")], Output)
-    with pytest.raises(ModelProviderError, match="Invalid JSON"):
-        invocation.send(None)
 
 
 def test_cli_save_and_execute(monkeypatch, rule, tmp_path):

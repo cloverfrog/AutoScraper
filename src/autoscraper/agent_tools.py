@@ -1,8 +1,6 @@
 """Fixed, read-only DOM helpers; no model-controlled executable source."""
 
 from dataclasses import dataclass, field
-from types import SimpleNamespace
-from urllib.parse import urlparse
 
 from browser_use import ActionResult, BrowserSession, ChatOpenAI, Tools
 
@@ -85,38 +83,8 @@ class LimitedChatOpenAI(ChatOpenAI):
         return await super().ainvoke(messages, output_format=output_format, **kwargs)
 
 
-class _JSONModeCompletions:
-    """Translate OpenAI JSON Schema requests to DeepSeek's supported JSON mode."""
-
-    def __init__(self, completions):
-        self._completions = completions
-
-    async def create(self, *args, **kwargs):
-        if "response_format" in kwargs:
-            kwargs["response_format"] = {"type": "json_object"}
-        return await self._completions.create(*args, **kwargs)
-
-
-@dataclass
-class LimitedDeepSeekChatOpenAI(LimitedChatOpenAI):
-    """Use DeepSeek JSON mode for browser-use AgentOutput, without function tools."""
-
-    def get_client(self):
-        client = super().get_client()
-        return SimpleNamespace(
-            chat=SimpleNamespace(
-                completions=_JSONModeCompletions(client.chat.completions),
-            )
-        )
-
-
 def make_llm(settings) -> LimitedChatOpenAI:
-    hostname = (urlparse(str(settings.base_url)).hostname or "").lower()
-    is_official_deepseek = hostname == "api.deepseek.com" and settings.model.startswith(
-        "deepseek-"
-    )
-    llm_type = LimitedDeepSeekChatOpenAI if is_official_deepseek else LimitedChatOpenAI
-    return llm_type(
+    return LimitedChatOpenAI(
         model=settings.model,
         api_key=settings.api_key.get_secret_value(),
         base_url=str(settings.base_url),
@@ -127,9 +95,5 @@ def make_llm(settings) -> LimitedChatOpenAI:
         temperature=0,
         frequency_penalty=None,
         add_schema_to_system_prompt=True,
-        # deepseek-flash may emit its private DSML tool syntax as text when JSON is
-        # prompt-only. Official JSON mode keeps AgentOutput in message.content.
-        dont_force_structured_output=False
-        if is_official_deepseek
-        else not settings.structured_output,
+        dont_force_structured_output=not settings.structured_output,
     )
