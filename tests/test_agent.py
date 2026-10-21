@@ -12,7 +12,7 @@ from autoscraper.agent import (
     generate_spec,
     parse_spec_output,
 )
-from autoscraper.agent_cli import main
+from autoscraper.agent_cli import main, settings_from_env
 from autoscraper.executor import ScraperExecutor
 
 
@@ -65,11 +65,12 @@ def test_env_settings(monkeypatch):
     monkeypatch.delenv("AUTOSCRAPER_API_KEY", raising=False)
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
     with pytest.raises(AgentError, match="API_KEY"):
-        AgentSettings.from_env()
+        settings_from_env()
     monkeypatch.setenv("DEEPSEEK_API_KEY", "test-secret")
-    settings = AgentSettings.from_env(model="example", max_steps=3)
+    settings = settings_from_env(model="example", max_steps=3)
     assert settings.model == "example"
     assert settings.max_steps == 3
+    assert str(settings.base_url) == "https://api.deepseek.com/"
     assert "test-secret" not in repr(settings)
 
 
@@ -152,6 +153,8 @@ def test_runner_limits_validation_cleanup(monkeypatch, rule, outcome):
     class Agent:
         def __init__(self, **kwargs):
             assert kwargs["use_judge"] is False
+            assert kwargs["use_thinking"] is False
+            assert kwargs["flash_mode"] is True
             assert kwargs["message_compaction"] is False
             assert kwargs["max_failures"] == 1
 
@@ -167,7 +170,13 @@ def test_runner_limits_validation_cleanup(monkeypatch, rule, outcome):
     monkeypatch.setattr(bu, "BrowserSession", Browser)
     monkeypatch.setattr(bu, "Agent", Agent)
     monkeypatch.setattr(helpers, "make_llm", lambda settings: object())
-    settings = AgentSettings(api_key="fake", max_steps=2, timeout_seconds=1)
+    settings = AgentSettings(
+        api_key="fake",
+        model="deepseek-flash",
+        base_url="https://api.deepseek.com",
+        max_steps=2,
+        timeout_seconds=1,
+    )
     if outcome == "success":
         assert asyncio.run(generate_spec(rule["start_url"], "title", settings)).max_items == 1
     else:
@@ -178,8 +187,9 @@ def test_runner_limits_validation_cleanup(monkeypatch, rule, outcome):
 
 def test_tools_and_llm_budget(monkeypatch):
     pytest.importorskip("browser_use")
-    from browser_use import ChatOpenAI
+    from browser_use.llm.views import ChatInvokeCompletion
     from autoscraper.agent_tools import build_tools, make_llm
+    from autoscraper.openai_responses import ChatOpenAIResponses
 
     assert set(build_tools().registry.registry.actions) == {
         "navigate",
@@ -187,19 +197,99 @@ def test_tools_and_llm_budget(monkeypatch):
         "inspect_page",
         "test_selector",
     }
-    settings = AgentSettings(api_key="fake", max_steps=1)
+    settings = AgentSettings(
+        api_key="fake",
+        model="deepseek-flash",
+        base_url="https://api.deepseek.com",
+        max_steps=1,
+    )
     llm = make_llm(settings)
+    assert isinstance(llm, ChatOpenAIResponses)
     assert llm.max_retries == 0
-    assert llm.max_completion_tokens == 3000
-    assert llm.dont_force_structured_output
+    assert llm.max_output_tokens == 3000
 
-    async def fake_invoke(self, *args, **kwargs):
-        return "ok"
+    async def fake_create(**kwargs):
+        return SimpleNamespace(
+            status="completed",
+            output_text="ok",
+            usage=None,
+        )
 
-    monkeypatch.setattr(ChatOpenAI, "ainvoke", fake_invoke)
-    assert asyncio.run(llm.ainvoke([])) == "ok"
+    monkeypatch.setattr(
+        llm,
+        "get_client",
+        lambda: SimpleNamespace(responses=SimpleNamespace(create=fake_create)),
+    )
+    assert asyncio.run(llm.ainvoke([])) == ChatInvokeCompletion(
+        completion="ok", usage=None, stop_reason="completed"
+    )
     with pytest.raises(RuntimeError, match="budget"):
         asyncio.run(llm.ainvoke([]))
+
+
+def test_openai_responses_structured_request(monkeypatch):
+    pytest.importorskip("browser_use")
+    from browser_use.llm.messages import SystemMessage, UserMessage
+    from pydantic import BaseModel
+
+    from autoscraper.openai_responses import ChatOpenAIResponses
+
+    class Output(BaseModel):
+        answer: str
+
+    captured = {}
+
+    async def fake_create(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(
+            status="completed",
+            output_text='{"answer":"ok"}',
+            usage=SimpleNamespace(
+                input_tokens=10,
+                input_tokens_details=SimpleNamespace(cached_tokens=4),
+                output_tokens=3,
+                total_tokens=13,
+            ),
+        )
+
+    llm = ChatOpenAIResponses(model="test-model", api_key="fake", reasoning_effort="none")
+    monkeypatch.setattr(
+        llm,
+        "get_client",
+        lambda: SimpleNamespace(responses=SimpleNamespace(create=fake_create)),
+    )
+    result = asyncio.run(
+        llm.ainvoke(
+            [SystemMessage(content="Return JSON"), UserMessage(content="answer")],
+            Output,
+            session_id="browser-use-only",
+        )
+    )
+
+    assert result.completion == Output(answer="ok")
+    assert result.usage.prompt_cached_tokens == 4
+    assert captured["input"] == [
+        {"role": "system", "content": "Return JSON"},
+        {"role": "user", "content": "answer"},
+    ]
+    assert captured["text"]["format"]["type"] == "json_schema"
+    assert captured["text"]["format"]["name"] == "agent_output"
+    assert "strict" not in captured["text"]["format"]
+    assert captured["reasoning"] == {"effort": "none"}
+    assert "session_id" not in captured
+    assert "tools" not in captured
+
+
+def test_custom_endpoint_uses_responses_adapter():
+    pytest.importorskip("browser_use")
+    from autoscraper.agent_tools import LimitedChatOpenAI, make_llm
+
+    settings = AgentSettings(
+        api_key="fake", model="compatible", base_url="https://llm.example/v1"
+    )
+    llm = make_llm(settings)
+    assert isinstance(llm, LimitedChatOpenAI)
+    assert str(llm.base_url) == "https://llm.example/v1"
 
 
 def test_cli_save_and_execute(monkeypatch, rule, tmp_path):
@@ -258,7 +348,7 @@ def test_real_books_agent(tmp_path):
     """No reference selectors/spec supplied to the model; prove actual end-to-end extraction."""
     from autoscraper.agent import save_spec
 
-    settings = AgentSettings.from_env(max_steps=10, timeout_seconds=240)
+    settings = settings_from_env(max_steps=10, timeout_seconds=240)
     spec = asyncio.run(
         generate_spec(
             "https://books.toscrape.com/",

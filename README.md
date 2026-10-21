@@ -28,7 +28,7 @@ $env:DEEPSEEK_API_KEY = "替换为你的 DeepSeek API Key"
 $env:AUTOSCRAPER_BROWSER_PATH = uv run --extra agent python -c "from playwright.sync_api import sync_playwright; p = sync_playwright().start(); print(p.chromium.executable_path); p.stop()"
 ```
 
-如果终端已经配置 `DEEPSEEK_API_KEY`，无需再次赋值。默认接口为 `https://api.deepseek.com/v1`，模型为 `deepseek-flash`。
+如果终端已经配置 `DEEPSEEK_API_KEY`，无需再次赋值。默认接口为 `https://api.deepseek.com`，模型为 `deepseek-flash`；Agent 通过 DeepSeek Responses API 的 JSON Schema 模式生成结构化动作。
 
 ### 3. 启动 Agent，生成规则并抓取数据
 
@@ -76,15 +76,15 @@ uv run autoscraper examples/books.agent-generated.json --output output/books.jso
 | `--output` | 数据输出路径，可重复指定 CSV / JSON | 不抓取数据 |
 | `--headed` | 显示探索浏览器 | 无头模式 |
 | `--model` | LLM 模型名 | `deepseek-flash` |
-| `--base-url` | OpenAI-compatible 接口地址 | `https://api.deepseek.com/v1` |
+| `--base-url` | 模型接口地址 | `https://api.deepseek.com` |
 | `--max-steps` | 最大探索步数及 LLM 调用数 | 12 |
 | `--timeout` | 探索总超时，秒 | 240 |
 | `--llm-timeout` | 单次 LLM 超时，秒 | 45 |
 | `--max-output-tokens` | 单次 LLM 输出 token 上限 | 3000 |
 | `--browser-path` | Chromium / Chrome 可执行文件路径 | 读取环境配置或自动查找 |
-| `--structured-output` | 开启服务端 JSON Schema 模式 | 关闭，以兼容更多接口 |
+| `--structured-output` | 保留的兼容参数 | Responses 适配器始终使用 JSON Schema |
 
-其他兼容接口可设置 `AUTOSCRAPER_API_KEY`、`AUTOSCRAPER_BASE_URL` 和 `AUTOSCRAPER_MODEL`。密钥优先读取 `AUTOSCRAPER_API_KEY`，其次读取 `DEEPSEEK_API_KEY`；配置不自动加载 `.env`。
+其他兼容 Responses API 的接口可设置 `AUTOSCRAPER_API_KEY`、`AUTOSCRAPER_BASE_URL` 和 `AUTOSCRAPER_MODEL`。密钥优先读取 `AUTOSCRAPER_API_KEY`，其次读取 `DEEPSEEK_API_KEY`；配置不自动加载 `.env`。
 
 完整参数：`uv run --extra agent autoscraper-agent --help`。
 
