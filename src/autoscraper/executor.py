@@ -1,6 +1,7 @@
 """Deterministic CSS-only execution. Never evaluates rule-provided code."""
 
 from dataclasses import dataclass, field
+from typing import Literal
 from urllib.parse import urldefrag, urljoin, urlsplit
 
 from playwright.sync_api import Error as PlaywrightError
@@ -15,7 +16,24 @@ class ScrapeError(RuntimeError):
 
 
 class ItemError(ScrapeError):
-    """A required value is missing from an individual item."""
+    """An individual item could not be extracted."""
+
+
+class NavigationError(ItemError):
+    """A navigation failed, without evidence that extraction selectors are wrong."""
+
+    def __init__(self, url: str, message: str):
+        self.url = url
+        super().__init__(f"Navigation failed at {url}: {message}")
+
+
+@dataclass
+class ScrapeFailure:
+    """Typed diagnostic accompanying a legacy string in ScrapeResult.errors."""
+
+    code: Literal["navigation_failure", "selector_failure"]
+    message: str
+    url: str
 
 
 @dataclass
@@ -26,6 +44,18 @@ class ScrapeResult:
     detail_pages_visited: int = 0
     duplicates: int = 0
     stop_reason: str = ""
+    error_details: list[ScrapeFailure] = field(default_factory=list)
+
+
+def navigate(page: Page, url: str, timeout_ms: int):
+    """Classify errors at the operation boundary, not by matching error text."""
+    try:
+        response = page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
+    except PlaywrightError as exc:
+        raise NavigationError(url, str(exc)) from exc
+    if response is not None and response.status >= 400:
+        raise NavigationError(url, f"HTTP {response.status} at {page.url}")
+    return response
 
 
 def http_url(base: str, value: str) -> str:
@@ -86,13 +116,8 @@ def extract_item(item: Locator, spec: ScraperSpec, base_url: str) -> dict[str, s
 
 
 def extract_detail(page: Page, url: str, spec: ScraperSpec) -> dict[str, str | None]:
-    try:
-        response = page.goto(url, wait_until="domcontentloaded", timeout=spec.timeout_ms)
-        http_url(page.url, page.url)
-        if response is not None and response.status >= 400:
-            raise ItemError(f"HTTP {response.status} at {page.url}")
-    except PlaywrightError as exc:
-        raise ItemError(f"Detail navigation failed: {exc}") from exc
+    navigate(page, url, spec.timeout_ms)
+    http_url(page.url, page.url)
     try:
         return extract_fields(page, spec.detail.fields, page.url, wait=True)
     except PlaywrightTimeout as exc:
@@ -128,11 +153,7 @@ class ScraperExecutor:
                 if identity in seen_pages:
                     result.stop_reason = "pagination_cycle"
                     break
-                response = page.goto(
-                    next_url, wait_until="domcontentloaded", timeout=spec.timeout_ms
-                )
-                if response is not None and response.status >= 400:
-                    raise ScrapeError(f"HTTP {response.status} at {page.url}")
+                navigate(page, next_url, spec.timeout_ms)
                 final_identity = urldefrag(page.url).url
                 if final_identity in seen_pages:
                     result.stop_reason = "pagination_cycle"
@@ -167,8 +188,21 @@ class ScraperExecutor:
                     except ItemError as exc:
                         message = f"{page.url} item {index + 1} detail={detail_url!r}: {exc}"
                         if spec.on_item_error == "fail":
+                            if isinstance(exc, NavigationError):
+                                raise NavigationError(exc.url, message) from exc
                             raise ScrapeError(message) from exc
                         result.errors.append(message)
+                        result.error_details.append(
+                            ScrapeFailure(
+                                code=(
+                                    "navigation_failure"
+                                    if isinstance(exc, NavigationError)
+                                    else "selector_failure"
+                                ),
+                                message=message,
+                                url=exc.url if isinstance(exc, NavigationError) else page.url,
+                            )
+                        )
                         continue
                     keys = spec.dedupe_by or list(spec.all_fields)
                     identity_record = tuple(record[key] for key in keys)

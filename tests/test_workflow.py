@@ -191,8 +191,12 @@ def test_supported_task(candidate, settings, workflow, monkeypatch, executor_pag
     assert received[0]["requirements"].fields == ["title", "price"]
 
 
-def test_repair_real_selector_failure(candidate, settings, workflow, monkeypatch, executor_page):
+@pytest.mark.parametrize("mode", ["fail", "skip"])
+def test_repair_real_selector_failure(
+    candidate, settings, workflow, monkeypatch, executor_page, mode
+):
     broken = candidate.model_copy(deep=True)
+    broken.on_item_error = mode
     broken.fields["price"].selector = ".not-there"
     received = install_candidates(monkeypatch, workflow, [broken, candidate])
     result = run_task(URL, TASK, settings, execute=True)
@@ -482,11 +486,13 @@ def test_detail_field_validation(candidate):
     assert validate_spec(spec, requirements)[0].fields == ["description"]
 
 
-def test_detail_selector_repair_and_full_workflow(candidate, settings, workflow, monkeypatch):
+@pytest.mark.parametrize("mode", ["fail", "skip"])
+def test_detail_selector_repair_and_full_workflow(candidate, settings, workflow, monkeypatch, mode):
     from playwright.sync_api import sync_playwright
 
     spec = detail_candidate(candidate)
     broken = spec.model_copy(deep=True)
+    broken.on_item_error = mode
     broken.detail.fields["description"].selector = ".not-there"
     received = install_candidates(monkeypatch, workflow, [broken, spec])
 
@@ -573,3 +579,108 @@ def test_detail_full_execution_after_sample(candidate, settings, workflow, monke
     )
     assert seen == [1, 2]
     assert outcome.summary()["task_fulfilled"]
+
+
+@pytest.mark.parametrize("stage", ["listing", "pagination", "detail"])
+@pytest.mark.parametrize("mode", ["fail", "skip"])
+@pytest.mark.parametrize("failure", ["timeout", "proxy", "http"])
+def test_navigation_failure_does_not_repair(
+    candidate, settings, workflow, monkeypatch, stage, mode, failure
+):
+    from playwright.sync_api import Error, Page, TimeoutError, sync_playwright
+
+    spec = detail_candidate(candidate) if stage == "detail" else candidate.model_copy(deep=True)
+    spec.on_item_error = mode
+    if stage == "pagination":
+        spec = ScraperSpec.model_validate(
+            {**spec.model_dump(), "max_pages": 2, "pagination": {"next_selector": ".next"}}
+        )
+    target = URL + {"listing": "", "pagination": "page-2", "detail": "detail"}[stage]
+    original = Page.goto
+    message = {
+        "timeout": "Page.goto: Timeout 500ms exceeded.",
+        "proxy": "Page.goto: net::ERR_PROXY_CONNECTION_FAILED",
+        "http": "HTTP 503",
+    }[failure]
+    error_type = TimeoutError if failure == "timeout" else Error
+
+    def goto(self, url, **kwargs):
+        if url == target and failure != "http":
+            raise error_type(message)
+        return original(self, url, **kwargs)
+
+    monkeypatch.setattr(Page, "goto", goto)
+
+    def execute(self, rule):
+        with sync_playwright() as p:
+            browser = p.chromium.launch()
+            try:
+                page = browser.new_context().new_page()
+                page.context.route(
+                    "**/*",
+                    lambda route: route.fulfill(
+                        status=503 if failure == "http" and route.request.url == target else 200,
+                        content_type="text/html",
+                        body='<article><h2>A</h2><b class="price">1</b>'
+                        '<a href="/detail">Detail</a></article>'
+                        '<a class="next" href="/page-2">Next</a>',
+                    ),
+                )
+                return self.run_page(rule, page)
+            finally:
+                browser.close()
+
+    monkeypatch.setattr(ScraperExecutor, "run", execute)
+    received = install_candidates(monkeypatch, workflow, [spec])
+    outcome = run_task(URL, TASK, settings, execute=True)
+    assert outcome.status == "unfulfilled"
+    assert outcome.attempts == outcome.llm_calls == len(received) == 1
+    assert outcome.spec == spec
+    assert not outcome.summary()["execution_success"]
+    assert len(outcome.feedback) == 1
+    feedback = outcome.feedback[0]
+    assert feedback.code == "navigation_failure"
+    assert not feedback.recoverable
+    assert message in feedback.message
+    assert target in feedback.message
+    assert outcome.history[0]["feedback"][0] == feedback.model_dump()
+    if stage == "detail" and mode == "skip":
+        assert outcome.data.error_details[0].url == target
+        assert outcome.data.errors[0] == feedback.message
+
+
+def test_navigation_failure_in_full_execution(candidate, settings, workflow, monkeypatch):
+    from autoscraper.executor import NavigationError
+
+    received = install_candidates(monkeypatch, workflow, [candidate])
+    seen = []
+
+    def execute(self, spec):
+        seen.append(spec.max_items)
+        if len(seen) == 1:
+            return ScrapeResult(records=[{"title": "A", "price": "1"}], stop_reason="max_items")
+        raise NavigationError(URL + "page-2", "net::ERR_CONNECTION_RESET")
+
+    monkeypatch.setattr(ScraperExecutor, "run", execute)
+    outcome = run_task(
+        URL, TASK, settings, execute=True, validation=ValidationSettings(max_items=1)
+    )
+    assert seen == [1, 2]
+    assert outcome.status == "unfulfilled"
+    assert len(received) == outcome.attempts == 1
+    assert outcome.feedback[0].code == "navigation_failure"
+    assert not outcome.feedback[0].recoverable
+
+
+def test_navigation_feedback_preserves_full_diagnostic():
+    from autoscraper.executor import ScrapeFailure
+
+    message = "Navigation failed: " + "x" * 2100 + " net::ERR_NAME_NOT_RESOLVED at " + URL
+    result = ScrapeResult(
+        errors=[message], error_details=[ScrapeFailure("navigation_failure", message, URL)]
+    )
+    issues = validate_data(result, TaskRequirements(fields=["title"], count=2))
+    assert len(issues) == 1
+    assert issues[0].code == "navigation_failure"
+    assert issues[0].message == message
+    assert not issues[0].recoverable

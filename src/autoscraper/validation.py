@@ -33,6 +33,7 @@ class Feedback(ProtocolModel):
         "count_mismatch",
         "invalid_spec",
         "selector_failure",
+        "navigation_failure",
         "empty_extraction",
         "missing_data",
         "insufficient_items",
@@ -105,8 +106,22 @@ def validate_data(
                 "or --validation-detail-pages if the preview was capped",
             )
         )
-    if result.errors:
-        issues.append(Feedback(code="selector_failure", message="; ".join(result.errors)[:2000]))
+    for error in result.error_details:
+        issues.append(
+            Feedback(
+                code=error.code,
+                message=error.message,
+                recoverable=error.code != "navigation_failure",
+            )
+        )
+    # Keep compatibility with callers that only supply the original string errors.
+    described = {error.message for error in result.error_details}
+    remaining_errors = [message for message in result.errors if message not in described]
+    if remaining_errors:
+        issues.append(Feedback(code="selector_failure", message="; ".join(remaining_errors)[:2000]))
+    if any(item.code == "navigation_failure" for item in issues):
+        # Missing rows are a consequence of failed navigation, not evidence for rule repair.
+        return issues
     if not result.records:
         issues.append(Feedback(code="empty_extraction", message="No records were extracted"))
         return issues

@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from playwright.sync_api import Error as PlaywrightError
 
 from .agent import AgentError, AgentSettings, InvalidSpecError, UnsupportedTaskError, generate_spec
-from .executor import ScrapeError, ScrapeResult, ScraperExecutor
+from .executor import NavigationError, ScrapeError, ScrapeResult, ScraperExecutor
 from .spec import ScraperSpec
 from .validation import Feedback, TaskRequirements, ValidationSettings, validate_data, validate_spec
 
@@ -259,6 +259,9 @@ def run_task(
                     }
                 )
                 return outcome
+            except NavigationError as exc:
+                issues = [Feedback(code="navigation_failure", message=str(exc), recoverable=False)]
+                outcome.spec, outcome.data = candidate, None
             except (ScrapeError, PlaywrightError) as exc:
                 issues = [Feedback(code="selector_failure", message=str(exc)[:2000])]
                 outcome.spec, outcome.data = candidate, None
