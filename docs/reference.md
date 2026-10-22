@@ -14,12 +14,13 @@ browser-use Agent → ScraperSpec JSON → ScraperExecutor → records → CSV /
 - `export.py` 处理 UTF-8 CSV/JSON，空 CSV 也保留字段表头；`cli.py` 负责文件读取、调用与退出状态。
 - `examples/books.json` 是手写规则；`tests/test_scraper.py` 用 Playwright 路由提供离线 HTML，并提供可选线上测试。
 - `agent.py` 编排探索、超时、输出解析和规则保存；`agent_tools.py` 使用 browser-use 扩展接口提供 DOM 检查与选择器测试；`agent_cli.py` 提供独立入口。Agent 不导入 Executor，CLI 在探索结束后选择性调用现有执行器。
+- `validation.py` 定义独立需求约束、反馈及确定性规则/数据检查；`workflow.py` 负责需求解析、试跑现有 Executor、反馈修复和最终任务状态。只有工作流验证通过，CLI 才写规则和数据。`generate_spec` 是候选规则生成接口，本身不承诺任务已完成。
 - 应用内 `ChatOpenAIResponses` 与 browser-use `ChatOpenAI` 同级，通过 OpenAI-compatible Responses API 提交完整消息，并用 `text.format=json_schema` 校验每一步 `AgentOutput`。`LimitedChatOpenAI` 仅继承它并增加付费调用预算；DeepSeek 的模型、Base URL和非思考模式都由构造参数传入，不存在 DeepSeek 专属 provider 类。browser-use 同时使用精简的 flash prompt/schema，避免 `deepseek-flash` 输出内部 DSML 工具语法。
 
 
 ## 探索工具与限制
 
-工具白名单仅包含 `navigate`、结构化 `done`、`inspect_page`、`test_selector`。前两者使用 browser-use 内置实现；后两者使用当前 `BrowserSession` 的页面接口。`inspect_page` 输出 DOM 标签、class/id、链接属性与有限文本，支持 CSS 根节点缩小范围；`test_selector` 返回匹配数量和前 5 项样本，支持相对字段选择器与属性提取。
+基础工具包含 `navigate`、结构化 `done`、`inspect_page`、`test_selector`。验证工作流额外提供 `report_unsupported`，将能力限制作为失败终态提交，不生成部分规则。前两者使用 browser-use 内置实现；DOM 工具使用当前 `BrowserSession` 的页面接口。`inspect_page` 输出 DOM 标签、class/id、链接属性与有限文本，支持 CSS 根节点缩小范围；`test_selector` 返回匹配数量和前 5 项样本，支持相对字段选择器与属性提取。
 
 DOM 工具使用应用内固定、只读 JavaScript；模型只能传入经 JSON 序列化的选择器和属性参数，不能提供可执行源码。browser-use 的 evaluate、文件操作、表单输入等其余工具不对模型开放。探索提示要求检查实际 DOM、测试字段和 Next，分页时到下一页验证后提交规则。程序不包含 Books 专用选择器，也不会读取手写示例作为 Agent 输入。
 
@@ -32,7 +33,7 @@ DOM 工具使用应用内固定、只读 JavaScript；模型只能传入经 JSON
 | 每步工具动作 | 最多 3 个 |
 | 错误与辅助调用 | SDK 重试为 0，连续失败上限 1；关闭 judge、planning、compaction 及失败后的最终 LLM 调用 |
 
-DOM 样本、历史窗口与输入任务长度也有限制。计费由接口提供方决定，这些限制控制调用次数、输出规模和时间，不承诺固定金额或精确输入 token 上限。总超时仅覆盖探索，后续确定性抓取仍遵守 ScraperSpec 的数量、页数和单页超时限制。没有自动修复循环。未显式启用时关闭 browser-use 遥测与云同步。
+DOM 样本、历史窗口与输入任务长度也有限制。计费由接口提供方决定，这些限制控制调用次数、输出规模和时间，不承诺固定金额或精确输入 token 上限。需求解析和所有探索/修复共用调用上限与探索时间预算；试抓取有独立的数量、页数和操作超时限制，批量执行仍遵守 ScraperSpec 的限制。验证失败最多修复 2 次，不支持的能力直接停止。未显式启用时关闭 browser-use 遥测与云同步。详见 [验证循环](validation-loop.md)。
 
 
 ## 规则语义

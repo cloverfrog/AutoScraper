@@ -35,7 +35,7 @@ SELECTOR_SCRIPT = """(itemSelector, fieldSelector, attribute) => {
 }"""
 
 
-def build_tools() -> Tools:
+def build_tools(*, allow_unsupported: bool = False) -> Tools:
     tools = Tools()
     for name in list(tools.registry.registry.actions):
         if name not in {"navigate", "done"}:
@@ -67,6 +67,20 @@ def build_tools() -> Tools:
                 SELECTOR_SCRIPT, item_selector, field_selector, attribute
             )
         )
+
+    if allow_unsupported:
+
+        @tools.action(
+            description="Stop immediately when required fields/capabilities cannot be "
+            "represented by ScraperSpec. Explain observed evidence; never omit fields."
+        )
+        async def report_unsupported(reason: str, fields: list[str]) -> ActionResult:
+            from .validation import UnsupportedResult
+
+            output = UnsupportedResult(reason=reason, unsupported_fields=fields)
+            return ActionResult(
+                is_done=True, success=False, extracted_content=output.model_dump_json()
+            )
 
     return tools
 
