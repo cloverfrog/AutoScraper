@@ -25,12 +25,13 @@ def main() -> int:
         spec = ScraperSpec.model_validate_json(args.spec.read_text(encoding="utf-8"))
         result = ScraperExecutor().run(spec)
         for output in args.output:
-            export_records(result.records, output, list(spec.fields))
+            export_records(result.records, output, list(spec.all_fields))
         print(
             json.dumps(
                 {
                     "items": len(result.records),
                     "pages": result.pages_visited,
+                    "detail_pages": result.detail_pages_visited,
                     "duplicates": result.duplicates,
                     "errors": result.errors,
                     "stop_reason": result.stop_reason,
@@ -38,7 +39,7 @@ def main() -> int:
                 ensure_ascii=False,
             )
         )
-        return 2 if result.errors else 0
+        return 2 if result.errors or result.stop_reason == "detail_limit" else 0
     except (OSError, ValueError, ValidationError, ScrapeError, PlaywrightError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1

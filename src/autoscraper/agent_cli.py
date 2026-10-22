@@ -46,6 +46,7 @@ def main() -> int:
     parser.add_argument("--max-repairs", type=int, default=2)
     parser.add_argument("--validation-items", type=int, default=100)
     parser.add_argument("--validation-pages", type=int, default=5)
+    parser.add_argument("--validation-detail-pages", type=int, default=100)
     parser.add_argument("--validation-timeout-ms", type=int, default=5000)
     parser.add_argument(
         "--structured-output",
@@ -81,6 +82,7 @@ def main() -> int:
             max_repairs=args.max_repairs,
             max_items=args.validation_items,
             max_pages=args.validation_pages,
+            max_detail_pages=args.validation_detail_pages,
             timeout_ms=args.validation_timeout_ms,
         )
         outcome = run_task(
@@ -100,7 +102,7 @@ def main() -> int:
         save_spec(outcome.spec, args.spec_output)
         if args.output:
             for output in args.output:
-                export_records(outcome.data.records, output, list(outcome.spec.fields))
+                export_records(outcome.data.records, output, list(outcome.spec.all_fields))
         summary["spec"] = str(args.spec_output)
         print(json.dumps(summary, ensure_ascii=False))
         return 0

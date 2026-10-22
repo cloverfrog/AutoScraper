@@ -86,6 +86,7 @@ def install_candidates(monkeypatch, workflow, values):
     async def generate(url, task, settings, **kwargs):
         received.append(kwargs)
         model.calls += 1
+        assert len(received) <= len(values), kwargs["feedback"]
         value = values[len(received) - 1]
         if isinstance(value, Exception):
             raise value
@@ -223,7 +224,7 @@ def test_known_unsupported_stops_without_repairs(settings, workflow, monkeypatch
     received = install_candidates(
         monkeypatch,
         workflow,
-        [UnsupportedTaskError("description exists only on detail pages", ["description"])],
+        [UnsupportedTaskError("description requires login", ["description"])],
     )
     result = run_task(URL, "抓取前25本书，字段名为title、price、description", settings)
     assert result.status == "unsupported"
@@ -257,7 +258,7 @@ def test_explorer_unsupported_tool_is_a_failure_terminal(settings, monkeypatch):
                 final_result=lambda: json.dumps(
                     {
                         "status": "unsupported",
-                        "reason": "description is only on detail pages",
+                        "reason": "description requires login",
                         "unsupported_fields": ["description"],
                     }
                 ),
@@ -265,7 +266,7 @@ def test_explorer_unsupported_tool_is_a_failure_terminal(settings, monkeypatch):
 
     monkeypatch.setattr(bu, "BrowserSession", Browser)
     monkeypatch.setattr(bu, "Agent", Agent)
-    with pytest.raises(UnsupportedTaskError, match="detail pages"):
+    with pytest.raises(UnsupportedTaskError, match="login"):
         asyncio.run(
             generate_spec(
                 URL,
@@ -282,7 +283,7 @@ def test_explicit_unsupported_requirements_skip_browser(settings, workflow, monk
     module, model = workflow
 
     async def requirements(*args):
-        return TaskRequirements(fields=["description"], unsupported_capabilities=["detail_pages"])
+        return TaskRequirements(fields=["description"], unsupported_capabilities=["login"])
 
     monkeypatch.setattr(module, "extract_requirements", requirements)
     monkeypatch.setattr(
@@ -448,3 +449,127 @@ def test_failed_cli_preserves_existing_files(monkeypatch, tmp_path, status, exit
     )
     assert cli.main() == exit_code
     assert all(path.read_text(encoding="utf-8") == "previous successful output" for path in paths)
+
+
+def test_detail_requirements_and_agent_prompt():
+    from autoscraper.agent import build_task
+
+    assert "detail_pages" not in str(TaskRequirements.model_json_schema())
+    prompt = build_task(URL, "Get descriptions from detail pages")
+    assert 'version="2"' in prompt
+    assert "observed detail href" in prompt
+    assert 'item_selector="html"' in prompt
+
+
+def detail_candidate(candidate):
+    data = candidate.model_dump()
+    data.update(
+        version="2",
+        detail={
+            "url_selector": "a",
+            "max_pages": 2,
+            "fields": {"description": {"selector": ".description"}},
+        },
+    )
+    return ScraperSpec.model_validate(data)
+
+
+def test_detail_field_validation(candidate):
+    spec = detail_candidate(candidate)
+    requirements = TaskRequirements(fields=["title", "description"], count=2)
+    assert validate_spec(spec, requirements) == []
+    spec.detail.fields["description"].required = False
+    assert validate_spec(spec, requirements)[0].fields == ["description"]
+
+
+def test_detail_selector_repair_and_full_workflow(candidate, settings, workflow, monkeypatch):
+    from playwright.sync_api import sync_playwright
+
+    spec = detail_candidate(candidate)
+    broken = spec.model_copy(deep=True)
+    broken.detail.fields["description"].selector = ".not-there"
+    received = install_candidates(monkeypatch, workflow, [broken, spec])
+
+    def execute(self, rule):
+        with sync_playwright() as p:
+            browser = p.chromium.launch()
+            try:
+                page = browser.new_context().new_page()
+                page.context.route(
+                    "**/*",
+                    lambda route: route.fulfill(
+                        content_type="text/html",
+                        body=(
+                            '<article><h2>A</h2><b class="price">1</b><a href="/a">a</a></article>'
+                            '<article><h2>B</h2><b class="price">2</b><a href="/b">b</a></article>'
+                            if route.request.url == URL
+                            else '<p class="description">Full text</p>'
+                        ),
+                    ),
+                )
+                return self.run_page(rule, page)
+            finally:
+                browser.close()
+
+    monkeypatch.setattr(ScraperExecutor, "run", execute)
+    outcome = run_task(URL, "前2本，字段名为title、price、description", settings, execute=True)
+    assert outcome.status == "success"
+    assert outcome.attempts == 2
+    assert outcome.summary()["detail_pages"] == 2
+    assert received[1]["previous_spec"] == broken
+    assert "/a" in received[1]["feedback"][0].message
+    assert "description" in received[1]["feedback"][0].message
+    assert all(row["description"] == "Full text" for row in outcome.data.records)
+
+
+def test_detail_preview_budget_is_nonrecoverable(candidate, settings, workflow, monkeypatch):
+    spec = detail_candidate(candidate)
+    install_candidates(monkeypatch, workflow, [spec])
+    seen = []
+
+    def execute(self, rule):
+        seen.append(rule.detail.max_pages)
+        return ScrapeResult(
+            records=[{"title": "A", "price": "1", "description": "D"}],
+            detail_pages_visited=1,
+            stop_reason="detail_limit",
+        )
+
+    monkeypatch.setattr(ScraperExecutor, "run", execute)
+    outcome = run_task(
+        URL,
+        "前2本，字段名为title、price、description",
+        settings,
+        validation=ValidationSettings(max_detail_pages=1),
+    )
+    assert seen == [1]
+    assert spec.detail.max_pages == 2
+    assert outcome.status == "unfulfilled"
+    assert not outcome.summary()["task_fulfilled"]
+    assert outcome.attempts == 1
+    assert outcome.feedback[0].code == "validation_limit"
+    assert not outcome.feedback[0].recoverable
+
+
+def test_detail_full_execution_after_sample(candidate, settings, workflow, monkeypatch):
+    spec = detail_candidate(candidate)
+    install_candidates(monkeypatch, workflow, [spec])
+    seen = []
+
+    def execute(self, rule):
+        seen.append(rule.max_items)
+        return ScrapeResult(
+            records=[{"title": "A", "price": "1", "description": "D"}] * rule.max_items,
+            stop_reason="max_items",
+        )
+
+    monkeypatch.setattr(ScraperExecutor, "run", execute)
+    outcome = run_task(
+        URL,
+        "前2本，字段名为title、price、description",
+        settings,
+        execute=True,
+        validation=ValidationSettings(max_items=1),
+    )
+    assert seen == [1, 2]
+    assert outcome.summary()["task_fulfilled"]

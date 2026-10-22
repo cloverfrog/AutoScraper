@@ -29,11 +29,25 @@ class PaginationSpec(ProtocolModel):
     next_selector: NonEmpty
 
 
+class DetailSpec(ProtocolModel):
+    url_selector: NonEmpty
+    fields: dict[NonEmpty, FieldSpec] = Field(min_length=1)
+    max_pages: int = Field(default=100, ge=1, le=100_000)
+
+    @field_validator("fields")
+    @classmethod
+    def check_names(cls, fields):
+        if any(not name.strip() for name in fields):
+            raise ValueError("field names must not be whitespace")
+        return fields
+
+
 class ScraperSpec(ProtocolModel):
-    version: Literal["1"] = "1"
+    version: Literal["1", "2"] = "1"
     start_url: HttpUrl
     item_selector: NonEmpty
     fields: dict[NonEmpty, FieldSpec] = Field(min_length=1)
+    detail: DetailSpec | None = None
     pagination: PaginationSpec | None = None
     max_items: int = Field(default=100, ge=1, le=1_000_000)
     max_pages: int = Field(default=100, ge=1, le=100_000)
@@ -48,10 +62,19 @@ class ScraperSpec(ProtocolModel):
             raise ValueError("field names must not be whitespace")
         return fields
 
+    @property
+    def all_fields(self) -> dict[str, FieldSpec]:
+        return {**self.fields, **(self.detail.fields if self.detail else {})}
+
     @model_validator(mode="after")
     def check_dedupe(self):
-        if set(self.dedupe_by) - self.fields.keys():
+        if self.detail is not None:
+            if self.version != "2":
+                raise ValueError("detail requires protocol version '2'")
+            if self.fields.keys() & self.detail.fields.keys():
+                raise ValueError("Listing and detail field names must not overlap")
+        if set(self.dedupe_by) - self.all_fields.keys():
             raise ValueError("dedupe_by must reference declared fields")
-        if any(not self.fields[name].required for name in self.dedupe_by):
+        if any(not self.all_fields[name].required for name in self.dedupe_by):
             raise ValueError("dedupe_by fields must be required")
         return self

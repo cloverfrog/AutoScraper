@@ -152,7 +152,7 @@ def test_no_pagination_and_disabled_next(page):
     [
         {"max_items": 0},
         {"dedupe_by": ["unknown"]},
-        {"version": "2"},
+        {"version": "3"},
         {"python": "print(1)"},
         {"start_url": "file:///tmp/data"},
         {"fields": {"x": {"selector": "a", "extract": "attribute"}}},

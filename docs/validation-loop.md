@@ -15,7 +15,7 @@ uv run --extra agent autoscraper-agent "https://books.toscrape.com/" "抓取前2
 ## 流程
 
 1. 从原始任务建立 `TaskRequirements`：必需字段、显式请求数量和显式不支持的能力。命令行的 `--fields` / `--count` 优先；明确写出的字段标识符和常见数量表达直接解析，其他自然语言最多调用一次 LLM，且不向该步骤提供候选规则。
-2. 将约束交给单 browser-use Agent。成功时仍提交原有 ScraperSpec；发现必需字段只在详情页等协议不能表达的情况时，调用 `report_unsupported`，附带具体原因和字段，立即结束。
+2. 将约束交给单 browser-use Agent。成功时仍提交原有 ScraperSpec；发现登录等当前协议不能表达的情况时，调用 `report_unsupported`，附带具体原因和字段，立即结束。
 3. 独立检查规则：所有必需字段必须存在并标记 required；显式数量必须等于 max_items。沿用 Pydantic 协议校验，不扩展 ScraperSpec，不允许脚本。
 4. 使用现有 Executor 试跑候选规则，默认最多 100 条、5 页、操作超时 5000 毫秒。检查提取异常、空结果、逐条缺失/空字段、数量不足和分页循环。
 5. 可恢复的问题把错误码、字段、原因和上一份规则反馈给同一个 Agent 工作流，再生成并重新验证。默认最多修复两次，即总共最多三份候选规则；不会重新提取或放宽原始需求。不支持的能力、预算不足、需求解析失败、验证页数预算不足直接停止。
@@ -42,7 +42,7 @@ uv run --extra agent autoscraper-agent "https://books.toscrape.com/" "抓取前2
 
 需求提取、探索及修复共享一个 LLM 实例和 `--max-steps` 调用总预算，修复不重置预算。`--timeout` 限制剩余探索时间；同步试跑和批量抓取使用各自的 Executor 限制，不由异步取消强行中断。浏览器清理保留原有的额外 20 秒上限。
 
-字段校验检查名称、必填性及非空数据，不验证任意字段的业务语义。未给出精确字段名的自然语言需求依赖一次模型解释，可以通过 `--fields` / `--count` 消除这部分歧义。不把所有名为 description 的字段一概判为详情页字段；由网页实际证据决定。
+字段校验检查名称、必填性及非空数据，不验证任意字段的业务语义。未给出精确字段名的自然语言需求依赖一次模型解释，可以通过 `--fields` / `--count` 消除这部分歧义。不把所有名为 description 的字段一概判为详情页字段；由网页实际证据决定。v2 支持一层详情提取，字段完整性检查使用列表与详情字段的并集。
 
 验证不通过时不会写规则或数据，因此不会用不完整数据覆盖已有成功文件。文件系统 I/O 错误下的多文件事务性不属于本次验证机制。
 
@@ -60,3 +60,12 @@ uv run --extra agent autoscraper-agent "https://books.toscrape.com/" "抓取前2
 - issue 原始 title + price + description：4 次 LLM 调用确认 description 只存在详情页，status=unsupported，退出码 3；attempts=1，没有修复重试，规则和数据文件均不存在。
 
 真实调用日志与结果位于 `output/validation-loop/`，该目录不纳入版本控制。Windows 实测中，unsupported 结束后出现了 asyncio 的 ignored closed-pipe 清理警告；最终状态与退出码仍为上述结果。
+
+## v2 详情提取
+
+详情预算与列表页预算独立。试跑通过 `--validation-detail-pages`（默认 100）限制详情导航次数，
+失败导航也消耗预算。`detail_limit` 生成不可恢复的 `validation_limit`，不会被当作正常结束或任务成功。
+详情选择器、缺失必填字段和导航错误通过既有反馈进入有限修复；失败时仍保留原有输出文件。
+CLI 新增 `detail_pages` 计数，CSV 和 JSON 都导出合并字段。
+
+上面的 2026-10-21/22 历史验证中的 description=unsupported 是 v1 行为；v2 可表达该请求。
