@@ -16,8 +16,8 @@ class AgentError(RuntimeError):
 
 
 class AgentSettings(BaseModel):
-    model: str = "deepseek-flash"
-    base_url: HttpUrl = "https://api.deepseek.com/v1"
+    model: str
+    base_url: HttpUrl
     api_key: SecretStr
     max_steps: int = Field(default=12, ge=1, le=50)
     timeout_seconds: int = Field(default=240, ge=1, le=900)
@@ -26,22 +26,6 @@ class AgentSettings(BaseModel):
     executable_path: str | None = None
     headless: bool = True
     structured_output: bool = False
-
-    @classmethod
-    def from_env(cls, **overrides):
-        # No implicit .env loading; secrets stay in environment and out of saved rules.
-        key = os.getenv("AUTOSCRAPER_API_KEY") or os.getenv("DEEPSEEK_API_KEY")
-        if not key:
-            raise AgentError("Set AUTOSCRAPER_API_KEY or DEEPSEEK_API_KEY")
-        data = {
-            "api_key": key,
-            "model": os.getenv("AUTOSCRAPER_MODEL", "deepseek-flash"),
-            "base_url": os.getenv("AUTOSCRAPER_BASE_URL", "https://api.deepseek.com/v1"),
-            "executable_path": os.getenv("AUTOSCRAPER_BROWSER_PATH"),
-        }
-        data.update({k: v for k, v in overrides.items() if v is not None})
-        return cls.model_validate(data)
-
 
 def parse_spec_output(output: str | None) -> ScraperSpec:
     """Accept a JSON object or a single fenced JSON block; never extract/execute code."""
@@ -119,6 +103,9 @@ async def generate_spec(url: str, task: str, settings: AgentSettings) -> Scraper
                 tools=build_tools(),
                 output_model_schema=ScraperSpec,
                 use_vision=False,
+                # Keep the browser-use prompt and output schema compact and deterministic.
+                use_thinking=False,
+                flash_mode=True,
                 use_judge=False,
                 enable_planning=False,
                 message_compaction=False,

@@ -14,6 +14,7 @@ browser-use Agent → ScraperSpec JSON → ScraperExecutor → records → CSV /
 - `export.py` 处理 UTF-8 CSV/JSON，空 CSV 也保留字段表头；`cli.py` 负责文件读取、调用与退出状态。
 - `examples/books.json` 是手写规则；`tests/test_scraper.py` 用 Playwright 路由提供离线 HTML，并提供可选线上测试。
 - `agent.py` 编排探索、超时、输出解析和规则保存；`agent_tools.py` 使用 browser-use 扩展接口提供 DOM 检查与选择器测试；`agent_cli.py` 提供独立入口。Agent 不导入 Executor，CLI 在探索结束后选择性调用现有执行器。
+- 应用内 `ChatOpenAIResponses` 与 browser-use `ChatOpenAI` 同级，通过 OpenAI-compatible Responses API 提交完整消息，并用 `text.format=json_schema` 校验每一步 `AgentOutput`。`LimitedChatOpenAI` 仅继承它并增加付费调用预算；DeepSeek 的模型、Base URL和非思考模式都由构造参数传入，不存在 DeepSeek 专属 provider 类。browser-use 同时使用精简的 flash prompt/schema，避免 `deepseek-flash` 输出内部 DSML 工具语法。
 
 
 ## 探索工具与限制

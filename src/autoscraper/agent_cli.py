@@ -3,12 +3,28 @@
 import argparse
 import asyncio
 import json
+import os
 import sys
 from pathlib import Path
 
-from .agent import AgentSettings, generate_spec, save_spec
+from .agent import AgentError, AgentSettings, generate_spec, save_spec
 from .executor import ScraperExecutor
 from .export import export_records
+
+
+def settings_from_env(**overrides) -> AgentSettings:
+    """Apply CLI provider defaults without coupling the agent runtime to them."""
+    key = os.getenv("AUTOSCRAPER_API_KEY") or os.getenv("DEEPSEEK_API_KEY")
+    if not key:
+        raise AgentError("Set AUTOSCRAPER_API_KEY or DEEPSEEK_API_KEY")
+    data = {
+        "api_key": key,
+        "model": os.getenv("AUTOSCRAPER_MODEL", "deepseek-flash"),
+        "base_url": os.getenv("AUTOSCRAPER_BASE_URL", "https://api.deepseek.com"),
+        "executable_path": os.getenv("AUTOSCRAPER_BROWSER_PATH"),
+    }
+    data.update({key: value for key, value in overrides.items() if value is not None})
+    return AgentSettings.model_validate(data)
 
 
 def main() -> int:
@@ -28,7 +44,7 @@ def main() -> int:
     parser.add_argument(
         "--structured-output",
         action="store_true",
-        help="Use provider json_schema mode (off for compatibility by default)",
+        help="Legacy compatibility flag; Responses output always uses json_schema",
     )
     args = parser.parse_args()
     try:
@@ -39,7 +55,7 @@ def main() -> int:
             raise ValueError("Rule output must be .json")
         if any(p.suffix.lower() not in {".json", ".csv"} for p in args.output):
             raise ValueError("Data output must be .json or .csv")
-        settings = AgentSettings.from_env(
+        settings = settings_from_env(
             **{
                 name: getattr(args, name)
                 for name in (
