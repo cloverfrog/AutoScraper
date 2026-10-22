@@ -1,15 +1,15 @@
 """Generate a reusable rule; optionally hand it to the existing executor."""
 
 import argparse
-import asyncio
 import json
 import os
 import sys
 from pathlib import Path
 
-from .agent import AgentError, AgentSettings, generate_spec, save_spec
-from .executor import ScraperExecutor
+from .agent import AgentError, AgentSettings, save_spec
 from .export import export_records
+from .validation import ValidationSettings
+from .workflow import run_task
 
 
 def settings_from_env(**overrides) -> AgentSettings:
@@ -41,6 +41,12 @@ def main() -> int:
     parser.add_argument("--max-output-tokens", type=int)
     parser.add_argument("--browser-path", dest="executable_path")
     parser.add_argument("--headed", action="store_true")
+    parser.add_argument("--fields", nargs="+", help="Authoritative required field names")
+    parser.add_argument("--count", type=int, help="Authoritative requested record count")
+    parser.add_argument("--max-repairs", type=int, default=2)
+    parser.add_argument("--validation-items", type=int, default=100)
+    parser.add_argument("--validation-pages", type=int, default=5)
+    parser.add_argument("--validation-timeout-ms", type=int, default=5000)
     parser.add_argument(
         "--structured-output",
         action="store_true",
@@ -71,26 +77,45 @@ def main() -> int:
             headless=not args.headed,
             structured_output=args.structured_output,
         )
-        # Finish the async explorer before calling the executor's synchronous Playwright API.
-        spec = asyncio.run(generate_spec(args.url, args.task, settings))
-        save_spec(spec, args.spec_output)
-        summary = {"spec": str(args.spec_output)}
-        if args.output:
-            result = ScraperExecutor().run(spec)
-            for output in args.output:
-                export_records(result.records, output, list(spec.fields))
-            summary.update(
-                items=len(result.records),
-                pages=result.pages_visited,
-                errors=result.errors,
-                stop_reason=result.stop_reason,
-            )
+        validation = ValidationSettings(
+            max_repairs=args.max_repairs,
+            max_items=args.validation_items,
+            max_pages=args.validation_pages,
+            timeout_ms=args.validation_timeout_ms,
+        )
+        outcome = run_task(
+            args.url,
+            args.task,
+            settings,
+            validation=validation,
+            fields=args.fields,
+            count=args.count,
+            execute=bool(args.output),
+        )
+        summary = outcome.summary()
+        if outcome.status not in {"success", "validated"}:
             print(json.dumps(summary, ensure_ascii=False))
-            return 2 if result.errors else 0
+            return 3 if outcome.status == "unsupported" else 1
+        # No rule/data writes until constraints and execution/data checks pass.
+        save_spec(outcome.spec, args.spec_output)
+        if args.output:
+            for output in args.output:
+                export_records(outcome.data.records, output, list(outcome.spec.fields))
+        summary["spec"] = str(args.spec_output)
         print(json.dumps(summary, ensure_ascii=False))
         return 0
     except Exception as exc:
-        print(f"Error: {exc}", file=sys.stderr)
+        print(
+            json.dumps(
+                {
+                    "status": "unfulfilled",
+                    "task_fulfilled": False,
+                    "feedback": [{"code": "workflow_failure", "message": str(exc)}],
+                },
+                ensure_ascii=False,
+            ),
+            file=sys.stderr,
+        )
         return 1
 
 

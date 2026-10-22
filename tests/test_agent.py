@@ -284,9 +284,7 @@ def test_custom_endpoint_uses_responses_adapter():
     pytest.importorskip("browser_use")
     from autoscraper.agent_tools import LimitedChatOpenAI, make_llm
 
-    settings = AgentSettings(
-        api_key="fake", model="compatible", base_url="https://llm.example/v1"
-    )
+    settings = AgentSettings(api_key="fake", model="compatible", base_url="https://llm.example/v1")
     llm = make_llm(settings)
     assert isinstance(llm, LimitedChatOpenAI)
     assert str(llm.base_url) == "https://llm.example/v1"
@@ -295,16 +293,19 @@ def test_custom_endpoint_uses_responses_adapter():
 def test_cli_save_and_execute(monkeypatch, rule, tmp_path):
     import autoscraper.agent_cli as cli
     from autoscraper.executor import ScrapeResult
-
-    async def fake_generate(url, task, settings):
-        return parse_spec_output(json.dumps(rule))
+    from autoscraper.validation import TaskRequirements
+    from autoscraper.workflow import TaskOutcome
 
     monkeypatch.setenv("AUTOSCRAPER_API_KEY", "fake")
-    monkeypatch.setattr(cli, "generate_spec", fake_generate)
     monkeypatch.setattr(
-        ScraperExecutor,
-        "run",
-        lambda self, spec: ScrapeResult(records=[{"title": "works"}], stop_reason="max_items"),
+        cli,
+        "run_task",
+        lambda *args, **kwargs: TaskOutcome(
+            status="success",
+            requirements=TaskRequirements(fields=["title"], count=1),
+            spec=parse_spec_output(json.dumps(rule)),
+            data=ScrapeResult(records=[{"title": "works"}], stop_reason="max_items"),
+        ),
     )
     path = tmp_path / "rule.json"
     output = tmp_path / "data.json"

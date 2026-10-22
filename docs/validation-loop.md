@@ -1,0 +1,62 @@
+# Validation + Feedback Repair Loop
+
+解决 [issue #1](https://github.com/cloverfrog/AutoScraper/issues/1)：规则可以通过 Pydantic、执行器也可以正常结束，但仍然遗漏用户要求的字段。现在候选规则不能作为用户需求的真值来源，执行成功和任务完成会分别报告。
+
+## 使用
+
+原 Agent 命令自动使用此工作流，不需要额外启用参数：
+
+```bash
+uv run --extra agent autoscraper-agent "https://books.toscrape.com/" "抓取前25本书，字段名为title、price，分别为完整书名、价格" --spec-output output/books-agent.json --output output/books.json
+```
+
+可以用 `--fields title price --count 25` 固定约束，用 `--max-repairs 0` 禁用修复。每次失败的具体反馈保存在最终 JSON 的 `feedback` 和 `validation_history` 中。
+
+## 流程
+
+1. 从原始任务建立 `TaskRequirements`：必需字段、显式请求数量和显式不支持的能力。命令行的 `--fields` / `--count` 优先；明确写出的字段标识符和常见数量表达直接解析，其他自然语言最多调用一次 LLM，且不向该步骤提供候选规则。
+2. 将约束交给单 browser-use Agent。成功时仍提交原有 ScraperSpec；发现必需字段只在详情页等协议不能表达的情况时，调用 `report_unsupported`，附带具体原因和字段，立即结束。
+3. 独立检查规则：所有必需字段必须存在并标记 required；显式数量必须等于 max_items。沿用 Pydantic 协议校验，不扩展 ScraperSpec，不允许脚本。
+4. 使用现有 Executor 试跑候选规则，默认最多 100 条、5 页、操作超时 5000 毫秒。检查提取异常、空结果、逐条缺失/空字段、数量不足和分页循环。
+5. 可恢复的问题把错误码、字段、原因和上一份规则反馈给同一个 Agent 工作流，再生成并重新验证。默认最多修复两次，即总共最多三份候选规则；不会重新提取或放宽原始需求。不支持的能力、预算不足、需求解析失败、验证页数预算不足直接停止。
+6. 如要求数据输出且试跑未覆盖完整任务，执行原规则并校验全量结果。试跑已覆盖时直接复用数据。所有检查通过后才保存规则和数据文件。
+
+规则文件仍是纯 ScraperSpec JSON，可以用原 `autoscraper` CLI 单独重跑。原 CLI 只执行规则，无法根据原始自然语言判断任务是否完成；这项判断属于 Agent 工作流。
+
+## 状态与退出码
+
+| status | 含义 | 退出码 |
+| --- | --- | --- |
+| `success` | 规则与完整输出数据通过检查 | 0 |
+| `validated` | 不导出数据，只生成已试跑验证的规则 | 0 |
+| `unsupported` | 当前协议无法满足必需字段/能力 | 3 |
+| `unfulfilled` | 验证不通过、修复耗尽或预算/模型错误 | 1 |
+
+`spec_valid` 仅表示存在通过 Pydantic 的规则；`execution_success` 表示执行器返回且无提取错误；`task_fulfilled` 还要求需求和数据检查通过，并且不是部分样本。三者可能不同。
+
+只生成规则时，若请求超过试跑范围，返回 `validated`、`sample_only: true`、`task_fulfilled: false`，明确表示只验证了样本。若试跑页数预算甚至不足以取得预期样本，返回 `validation_limit`，可提高 `--validation-pages` 后重跑。需要全量验证时提供 `--output`。
+
+## 反馈和边界
+
+可恢复反馈包括 `missing_required_field`、`count_mismatch`、`invalid_spec`、`selector_failure`、`empty_extraction`、`missing_data`、`insufficient_items`。不可恢复反馈包括 `unsupported_capability`、`validation_limit`、`invalid_requirements`、`agent_failure`、`budget_exhausted`。
+
+需求提取、探索及修复共享一个 LLM 实例和 `--max-steps` 调用总预算，修复不重置预算。`--timeout` 限制剩余探索时间；同步试跑和批量抓取使用各自的 Executor 限制，不由异步取消强行中断。浏览器清理保留原有的额外 20 秒上限。
+
+字段校验检查名称、必填性及非空数据，不验证任意字段的业务语义。未给出精确字段名的自然语言需求依赖一次模型解释，可以通过 `--fields` / `--count` 消除这部分歧义。不把所有名为 description 的字段一概判为详情页字段；由网页实际证据决定。
+
+验证不通过时不会写规则或数据，因此不会用不完整数据覆盖已有成功文件。文件系统 I/O 错误下的多文件事务性不属于本次验证机制。
+
+## 测试
+
+`tests/test_workflow.py` 使用固定模型候选和真实离线 Playwright 页面，覆盖支持任务、遗漏字段、选择器失败后的修复与重验、次数/调用预算、unsupported 立即停止、样本与全量结果区分、失败时保留文件。默认测试不调用真实 LLM。
+
+## 验证记录（2026-10-21）
+
+默认回归 71 项通过、2 项线上测试跳过，Ruff 检查及格式检查通过。`ScraperSpec`、Executor 和用户已修复的 Responses 适配器均未改动。
+
+使用真实 DeepSeek 分别运行两种任务，均未提供 CSS Selector：
+
+- title + price：6 次 LLM 调用，执行得到 25 条，status=success，退出码 0。
+- issue 原始 title + price + description：4 次 LLM 调用确认 description 只存在详情页，status=unsupported，退出码 3；attempts=1，没有修复重试，规则和数据文件均不存在。
+
+真实调用日志与结果位于 `output/validation-loop/`，该目录不纳入版本控制。Windows 实测中，unsupported 结束后出现了 asyncio 的 ignored closed-pipe 清理警告；最终状态与退出码仍为上述结果。
