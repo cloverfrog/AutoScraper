@@ -79,7 +79,15 @@ Protocol semantics:
 - Each field selector is CSS relative to a record and matches exactly one element.
 - extract=text or attribute; attribute must be provided ONLY for attribute extraction.
 - transform=absolute_url resolves URL attributes; otherwise transform=none.
-- No regex, custom scripts, numeric transforms, detail crawling or infinite scrolling.
+- Use version="2" for detail extraction; listing-only rules may use version="1" or "2".
+- detail.url_selector matches one href link relative to each listing record.
+- Navigate to an observed detail href, inspect_page, and test_selector with item_selector="html"
+  for every detail field before generating the rule. Never invent unobserved selectors.
+- detail.fields reuse FieldSpec, relative to the detail document, and cannot overlap listing names.
+- One detail page per record; no nested following or detail pagination.
+- detail.max_pages limits navigation attempts (including failures); set enough for requested items.
+- Top-level max_pages counts listing pages only; max_items counts merged unique records.
+- No regex, custom scripts, numeric transforms or infinite scrolling.
 - Next pagination requires one anchor with href, absent on the last page.
 - max_items counts unique records. Set the requested quantity, or 100 if unspecified.
 - Keep max_pages <= 100 and timeout_ms <= 30000. Use on_item_error=fail.
@@ -108,8 +116,8 @@ async def generate_spec(
         )
         prompt += (
             "\nIf any required field/capability is not "
-            "available under the current protocol (for example a field only on detail "
-            "pages), call report_unsupported with a concrete reason and the affected field names. "
+            "available under the current protocol (for example login or infinite "
+            "scroll), call report_unsupported with a concrete reason and the affected field names. "
             "Do not call done for unsupported tasks. Never substitute another field's value or silently "
             "drop a required field. Inspect the site before deciding where a field lives."
         )

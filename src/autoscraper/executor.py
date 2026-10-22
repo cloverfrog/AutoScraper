@@ -4,9 +4,10 @@ from dataclasses import dataclass, field
 from urllib.parse import urldefrag, urljoin, urlsplit
 
 from playwright.sync_api import Error as PlaywrightError
-from playwright.sync_api import Locator, Page, sync_playwright
+from playwright.sync_api import Locator, Page, TimeoutError as PlaywrightTimeout, sync_playwright
+from pydantic import HttpUrl, TypeAdapter
 
-from .spec import ScraperSpec
+from .spec import FieldSpec, ScraperSpec
 
 
 class ScrapeError(RuntimeError):
@@ -22,14 +23,21 @@ class ScrapeResult:
     records: list[dict[str, str | None]] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
     pages_visited: int = 0
+    detail_pages_visited: int = 0
     duplicates: int = 0
     stop_reason: str = ""
 
 
 def http_url(base: str, value: str) -> str:
-    url = urljoin(base, value)
-    if urlsplit(url).scheme not in {"http", "https"}:
-        raise ItemError(f"Unsupported URL scheme: {url!r}")
+    try:
+        if urlsplit(value).scheme in {"http", "https"}:
+            TypeAdapter(HttpUrl).validate_python(value)
+        url = urljoin(base, value)
+        if urlsplit(url).scheme not in {"http", "https"}:
+            raise ItemError(f"Unsupported URL scheme: {url!r}")
+        TypeAdapter(HttpUrl).validate_python(url)
+    except ValueError as exc:
+        raise ItemError(f"Invalid HTTP(S) URL: {value!r}") from exc
     return url
 
 
@@ -40,10 +48,18 @@ def css(root: Page | Locator, selector: str) -> Locator:
     return root.locator(f"css={selector}")
 
 
-def extract_item(item: Locator, spec: ScraperSpec, base_url: str) -> dict[str, str | None]:
+def extract_fields(
+    item: Page | Locator, fields: dict[str, FieldSpec], base_url: str, *, wait: bool = False
+) -> dict[str, str | None]:
     record = {}
-    for name, rule in spec.fields.items():
+    for name, rule in fields.items():
         matches = css(item, rule.selector)
+        count = matches.count()  # Invalid CSS is a fatal rule error, even for optional fields.
+        if wait and rule.required and count == 0:
+            try:
+                matches.first.wait_for(state="attached")
+            except PlaywrightTimeout as exc:
+                raise ItemError(f"Required field {name!r} is missing or timed out") from exc
         if matches.count() > 1:
             raise ItemError(f"Field {name!r} matched multiple elements")
         value = None
@@ -65,30 +81,56 @@ def extract_item(item: Locator, spec: ScraperSpec, base_url: str) -> dict[str, s
     return record
 
 
+def extract_item(item: Locator, spec: ScraperSpec, base_url: str) -> dict[str, str | None]:
+    return extract_fields(item, spec.fields, base_url)
+
+
+def extract_detail(page: Page, url: str, spec: ScraperSpec) -> dict[str, str | None]:
+    try:
+        response = page.goto(url, wait_until="domcontentloaded", timeout=spec.timeout_ms)
+        http_url(page.url, page.url)
+        if response is not None and response.status >= 400:
+            raise ItemError(f"HTTP {response.status} at {page.url}")
+    except PlaywrightError as exc:
+        raise ItemError(f"Detail navigation failed: {exc}") from exc
+    try:
+        return extract_fields(page, spec.detail.fields, page.url, wait=True)
+    except PlaywrightTimeout as exc:
+        raise ItemError(f"Detail field extraction timed out: {exc}") from exc
+
+
 class ScraperExecutor:
     def run(self, spec: ScraperSpec) -> ScrapeResult:
         with sync_playwright() as playwright:
             browser = playwright.chromium.launch(headless=False)
             try:
-                page = browser.new_page()
+                context = browser.new_context()
+                page = context.new_page()
                 return self.run_page(spec, page)
             finally:
                 browser.close()
 
     def run_page(self, spec: ScraperSpec, page: Page) -> ScrapeResult:
-        """Accept an owned page for fixture routing or embedding; caller closes it."""
+        """Accept a caller-owned page; detail rules need an explicit BrowserContext."""
         result = ScrapeResult()
         seen_records: set[tuple] = set()
         seen_pages: set[str] = set()
         page.set_default_timeout(spec.timeout_ms)
         next_url = str(spec.start_url)
+        detail_page = None
         try:
+            if spec.detail:
+                detail_page = page.context.new_page()
+                detail_page.set_default_timeout(spec.timeout_ms)
+
             while result.pages_visited < spec.max_pages:
                 identity = urldefrag(next_url).url
                 if identity in seen_pages:
                     result.stop_reason = "pagination_cycle"
                     break
-                response = page.goto(next_url, wait_until="domcontentloaded")
+                response = page.goto(
+                    next_url, wait_until="domcontentloaded", timeout=spec.timeout_ms
+                )
                 if response is not None and response.status >= 400:
                     raise ScrapeError(f"HTTP {response.status} at {page.url}")
                 final_identity = urldefrag(page.url).url
@@ -100,15 +142,35 @@ class ScraperExecutor:
                 items = css(page, spec.item_selector)
                 items.first.wait_for(state="attached")
                 for index in range(items.count()):
+                    detail_url = None
                     try:
-                        record = extract_item(items.nth(index), spec, page.url)
+                        item = items.nth(index)
+                        record = extract_item(item, spec, page.url)
+                        keys = spec.dedupe_by or list(spec.all_fields)
+                        if all(key in record for key in keys):
+                            if tuple(record[key] for key in keys) in seen_records:
+                                result.duplicates += 1
+                                continue
+                        if spec.detail:
+                            link = css(item, spec.detail.url_selector)
+                            if link.count() != 1:
+                                raise ItemError("Detail link must match exactly one element")
+                            href = link.get_attribute("href")
+                            if not href or not href.strip():
+                                raise ItemError("Detail link requires a nonempty href")
+                            detail_url = http_url(page.url, href.strip())
+                            if result.detail_pages_visited >= spec.detail.max_pages:
+                                result.stop_reason = "detail_limit"
+                                return result
+                            result.detail_pages_visited += 1
+                            record.update(extract_detail(detail_page, detail_url, spec))
                     except ItemError as exc:
-                        message = f"{page.url} item {index + 1}: {exc}"
+                        message = f"{page.url} item {index + 1} detail={detail_url!r}: {exc}"
                         if spec.on_item_error == "fail":
                             raise ScrapeError(message) from exc
                         result.errors.append(message)
                         continue
-                    keys = spec.dedupe_by or list(spec.fields)
+                    keys = spec.dedupe_by or list(spec.all_fields)
                     identity_record = tuple(record[key] for key in keys)
                     if identity_record in seen_records:
                         result.duplicates += 1
@@ -138,4 +200,7 @@ class ScraperExecutor:
                 result.stop_reason = "max_pages"
         except PlaywrightError as exc:
             raise ScrapeError(f"Browser failure at {page.url}: {exc}") from exc
+        finally:
+            if detail_page is not None:
+                detail_page.close()
         return result

@@ -31,7 +31,9 @@ class TaskOutcome:
         return {
             "status": self.status,
             "spec_valid": self.spec is not None,
-            "execution_success": self.data is not None and not self.data.errors,
+            "execution_success": self.data is not None
+            and not self.data.errors
+            and self.data.stop_reason != "detail_limit",
             "task_fulfilled": self.status in {"success", "validated"} and not self.sample_only,
             "sample_only": self.sample_only,
             "requirements": self.requirements.model_dump() if self.requirements else None,
@@ -39,6 +41,7 @@ class TaskOutcome:
             "llm_calls": self.llm_calls,
             "items": len(self.data.records) if self.data else 0,
             "pages": self.data.pages_visited if self.data else 0,
+            "detail_pages": self.data.detail_pages_visited if self.data else 0,
             "stop_reason": self.data.stop_reason if self.data else None,
             "feedback": [item.model_dump() for item in self.feedback],
             "validation_history": self.history,
@@ -83,9 +86,9 @@ async def extract_requirements(task: str, llm, fields=None, count=None) -> TaskR
                 "Do not see or use any generated scraping rule. Preserve exact field names "
                 "when given; otherwise choose short descriptive names. Count=null if absent. "
                 "All requested fields are mandatory. Only mark unsupported_capabilities when "
-                "the user EXPLICITLY requires detail-page crawling, JS-only pagination, "
-                "infinite scroll or login. Do not infer detail_pages just from a field called "
-                "description; it might be available on the list page."
+                "the user EXPLICITLY requires JS-only pagination, infinite scroll or login. "
+                "One level of detail-page extraction is supported. "
+                "Do not mark detail-page crawling as unsupported."
             ),
             UserMessage(content=json.dumps({"task": task}, ensure_ascii=False)),
         ],
@@ -191,6 +194,18 @@ def run_task(
                             "timeout_ms": min(candidate.timeout_ms, policy.timeout_ms),
                         }
                     )
+                    if candidate.detail:
+                        preview = preview.model_copy(
+                            update={
+                                "detail": candidate.detail.model_copy(
+                                    update={
+                                        "max_pages": min(
+                                            candidate.detail.max_pages, policy.max_detail_pages
+                                        )
+                                    }
+                                )
+                            }
+                        )
                     result = ScraperExecutor().run(preview)
                     target = (
                         min(requirements.count, policy.max_items) if requirements.count else None
@@ -216,7 +231,7 @@ def run_task(
                     if not issues and execute and not complete:
                         result = ScraperExecutor().run(candidate)
                         issues = validate_data(result, requirements)
-                        complete = result.stop_reason != "max_pages"
+                        complete = result.stop_reason not in {"max_pages", "detail_limit"}
                         if not complete and not issues:
                             issues.append(
                                 Feedback(

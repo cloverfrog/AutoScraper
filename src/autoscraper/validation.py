@@ -15,9 +15,9 @@ if TYPE_CHECKING:
 class TaskRequirements(ProtocolModel):
     fields: list[NonEmpty] = Field(min_length=1, max_length=50)
     count: int | None = Field(default=None, ge=1, le=1_000_000)
-    unsupported_capabilities: list[
-        Literal["detail_pages", "javascript_pagination", "infinite_scroll", "login"]
-    ] = Field(default_factory=list)
+    unsupported_capabilities: list[Literal["javascript_pagination", "infinite_scroll", "login"]] = (
+        Field(default_factory=list)
+    )
 
     @field_validator("fields")
     @classmethod
@@ -59,6 +59,7 @@ class ValidationSettings(ProtocolModel):
     max_repairs: int = Field(default=2, ge=0, le=3)
     max_items: int = Field(default=100, ge=1, le=1000)
     max_pages: int = Field(default=5, ge=1, le=20)
+    max_detail_pages: int = Field(default=100, ge=1, le=1000)
     timeout_ms: int = Field(default=5000, ge=1, le=15000)
 
 
@@ -67,7 +68,7 @@ def validate_spec(spec: ScraperSpec, requirements: TaskRequirements) -> list[Fee
     missing = [
         name
         for name in requirements.fields
-        if name not in spec.fields or not spec.fields[name].required
+        if name not in spec.all_fields or not spec.all_fields[name].required
     ]
     if missing:
         issues.append(
@@ -95,6 +96,15 @@ def validate_data(
     result: ScrapeResult, requirements: TaskRequirements, *, expected_count: int | None = None
 ) -> list[Feedback]:
     issues = []
+    if result.stop_reason == "detail_limit":
+        issues.append(
+            Feedback(
+                code="validation_limit",
+                recoverable=False,
+                message="Detail navigation budget exhausted; increase detail.max_pages "
+                "or --validation-detail-pages if the preview was capped",
+            )
+        )
     if result.errors:
         issues.append(Feedback(code="selector_failure", message="; ".join(result.errors)[:2000]))
     if not result.records:
