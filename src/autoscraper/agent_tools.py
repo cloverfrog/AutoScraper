@@ -2,7 +2,9 @@
 
 from dataclasses import dataclass, field
 
-from browser_use import ActionResult, BrowserSession, ChatOpenAI, Tools
+from browser_use import ActionResult, BrowserSession, Tools
+
+from .openai_responses import ChatOpenAIResponses
 
 
 # JavaScript below is authored by the application. Model inputs are JSON arguments,
@@ -70,8 +72,8 @@ def build_tools() -> Tools:
 
 
 @dataclass
-class LimitedChatOpenAI(ChatOpenAI):
-    """Hard call cap even if browser-use internally retries model-output parsing."""
+class LimitedChatOpenAI(ChatOpenAIResponses):
+    """OpenAI-compatible Responses provider with a hard paid-call budget."""
 
     max_calls: int = 12
     calls: int = field(default=0, init=False)
@@ -91,9 +93,7 @@ def make_llm(settings) -> LimitedChatOpenAI:
         timeout=settings.llm_timeout_seconds,
         max_retries=0,
         max_calls=settings.max_steps,
-        max_completion_tokens=settings.max_output_tokens,
+        max_output_tokens=settings.max_output_tokens,
         temperature=0,
-        frequency_penalty=None,
-        add_schema_to_system_prompt=True,
-        dont_force_structured_output=not settings.structured_output,
+        reasoning_effort="none",
     )
