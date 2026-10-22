@@ -14,6 +14,21 @@ uv sync --extra agent --locked
 uv run --extra agent playwright install chromium
 ```
 
+如果在 Ubuntu 运行，由于 AppArmor 安全策略阻止了 Playwright 自带的 Chromium 创建沙箱，需要给 Chromium 添加 AppArmor 规则
+
+```bash
+sudo tee /etc/apparmor.d/playwright-chromium > /dev/null <<'EOF'
+abi <abi/4.0>,
+include <tunables/global>
+
+profile playwright-chromium /home/cloverfrog/.cache/ms-playwright/chromium-1248/chrome-linux64/chrome flags=(unconfined) {
+  userns,
+}
+EOF
+
+sudo apparmor_parser -r /etc/apparmor.d/playwright-chromium
+```
+
 ### 2. 配置 DeepSeek 和浏览器（每个新终端执行）
 
 ```powershell
