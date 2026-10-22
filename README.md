@@ -140,6 +140,17 @@ uv run --extra agent pytest -m llm
 
 原 Executor 的线上测试用 `RUN_LIVE=1` 和 `pytest -m live` 单独启用。受限 Windows 环境可以追加 `--basetemp .pytest-tmp-local`。
 
+真实 DeepSeek 修复测试默认跳过，需单独启用（会产生 API 费用）：
+
+```bash
+RUN_LIVE_REPAIR=1 uv run --extra agent pytest tests/test_live_repair.py -v
+```
+
+PowerShell 先执行 `$env:RUN_LIVE_REPAIR = "1"`，再运行上述 pytest 命令。
+测试使用已配置的密钥和 DeepSeek 模型，固定访问真实 DeepSeek 接口；第一次生成规则后故意破坏 `price` 选择器，
+由原工作流的 Validator 产生反馈，再将失败规则和反馈传入真实生成器，仅允许一次修复。
+最终通过 Playwright 检查跨两页的 25 条书籍数据。候选规则、损坏规则和验证报告保存在 pytest 临时目录中。
+
 ## 项目结构与当前范围
 
 ```text
