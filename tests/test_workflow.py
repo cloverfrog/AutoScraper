@@ -738,6 +738,49 @@ def test_validation_keeps_user_content_timeout(candidate, settings, workflow, mo
     assert seen[0].content_timeout_ms == outcome.spec.content_timeout_ms == 30000
 
 
+def test_validation_inherits_rule_navigation_timeout(candidate, settings, workflow, monkeypatch):
+    candidate.timeout_ms = 30000
+    settings.content_timeout_ms = 30000
+    install_candidates(monkeypatch, workflow, [candidate])
+    seen = []
+
+    def run(self, spec):
+        seen.append(spec)
+        return ScrapeResult(
+            records=[{"title": "A", "price": "1"}, {"title": "B", "price": "2"}],
+            stop_reason="max_items",
+        )
+
+    monkeypatch.setattr(ScraperExecutor, "run", run)
+    outcome = run_task(URL, TASK, settings)
+    assert outcome.status == "validated"
+    assert seen[0].timeout_ms == 30000
+    assert seen[0].content_timeout_ms == 30000
+
+
+@pytest.mark.parametrize(
+    "flags, expected", [([], None), (["--validation-timeout-ms", "5000"], 5000)]
+)
+def test_agent_cli_navigation_timeout_is_optional(monkeypatch, tmp_path, flags, expected):
+    import autoscraper.agent_cli as cli
+    from autoscraper.workflow import TaskOutcome
+
+    seen = []
+    monkeypatch.setenv("AUTOSCRAPER_API_KEY", "fake")
+
+    def run(*args, **kwargs):
+        seen.append(kwargs["validation"].timeout_ms)
+        return TaskOutcome(status="unfulfilled")
+
+    monkeypatch.setattr(cli, "run_task", run)
+    monkeypatch.setattr(
+        "sys.argv",
+        ["autoscraper-agent", URL, TASK, "--spec-output", str(tmp_path / "spec.json"), *flags],
+    )
+    assert cli.main() == 1
+    assert seen == [expected]
+
+
 def test_wait_model_budget_shared_across_repairs(candidate, settings, workflow, monkeypatch):
     broken = candidate.model_copy(deep=True)
     broken.fields.pop("price")

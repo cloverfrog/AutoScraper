@@ -63,7 +63,7 @@ class ValidationSettings(ProtocolModel):
     max_items: int = Field(default=100, ge=1, le=1000)
     max_pages: int = Field(default=5, ge=1, le=20)
     max_detail_pages: int = Field(default=100, ge=1, le=1000)
-    timeout_ms: int = Field(default=5000, ge=1, le=15000)
+    timeout_ms: int | None = Field(default=None, ge=1, le=30000)
 
 
 def validate_spec(spec: ScraperSpec, requirements: TaskRequirements) -> list[Feedback]:

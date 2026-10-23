@@ -131,7 +131,7 @@ Agent 工作流判定为验证失败，不覆盖已有输出。只运行 Executo
 | `--validation-items` | 试抓取最多记录数 | 100 |
 | `--validation-pages` | 试抓取最多列表页数 | 5 |
 | `--validation-detail-pages` | 试抓取最多详情导航次数（含失败） | 100 |
-| `--validation-timeout-ms` | 试抓取导航及其他浏览器操作超时，毫秒；不截断独立内容等待 | 5000 |
+| `--validation-timeout-ms` | 可选：缩短试抓取导航及其他操作超时，毫秒（最高 30000）；不截断内容等待 | 沿用规则 `timeout_ms` |
 
 其他兼容 Responses API 的接口可设置 `AUTOSCRAPER_API_KEY`、`AUTOSCRAPER_BASE_URL` 和 `AUTOSCRAPER_MODEL`。密钥优先读取 `AUTOSCRAPER_API_KEY`，其次读取 `DEEPSEEK_API_KEY`；配置不自动加载 `.env`。
 
@@ -218,7 +218,7 @@ uv run --extra agent autoscraper-agent "https://quotes.toscrape.com/js-delayed/"
 最终 JSON 的 `wait_llm_calls`，所有修复轮次共用 `--max-wait-llm-calls`；
 主 Agent 的 `--max-steps` 预算保持独立。设为 0 可禁用语义判断调用。
 
-内容超时保存为规则中的 `content_timeout_ms`，验证不会将它压到默认 5 秒。
+内容超时保存为规则中的 `content_timeout_ms`。验证时，内容等待使用这一配置，导航默认使用规则的 `timeout_ms`，两者互不截断。
 重复抓取可用 `uv run autoscraper output/quotes.json --output output/quotes-data.json --content-timeout-ms 45000`
 覆盖此配置；旧规则未设置该字段时沿用原 `timeout_ms`。
 

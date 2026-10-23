@@ -198,7 +198,11 @@ def run_task(
                         update={
                             "max_items": min(candidate.max_items, policy.max_items),
                             "max_pages": min(candidate.max_pages, policy.max_pages),
-                            "timeout_ms": min(candidate.timeout_ms, policy.timeout_ms),
+                            "timeout_ms": (
+                                min(candidate.timeout_ms, policy.timeout_ms)
+                                if policy.timeout_ms is not None
+                                else candidate.timeout_ms
+                            ),
                         }
                     )
                     if candidate.detail:

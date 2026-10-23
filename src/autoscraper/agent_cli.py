@@ -49,7 +49,7 @@ def main() -> int:
     parser.add_argument("--validation-items", type=int, default=100)
     parser.add_argument("--validation-pages", type=int, default=5)
     parser.add_argument("--validation-detail-pages", type=int, default=100)
-    parser.add_argument("--validation-timeout-ms", type=int, default=5000)
+    parser.add_argument("--validation-timeout-ms", type=int)
     parser.add_argument(
         "--structured-output",
         action="store_true",

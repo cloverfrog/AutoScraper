@@ -17,7 +17,7 @@ uv run --extra agent autoscraper-agent "https://books.toscrape.com/" "抓取前2
 1. 从原始任务建立 `TaskRequirements`：必需字段、显式请求数量和显式不支持的能力。命令行的 `--fields` / `--count` 优先；明确写出的字段标识符和常见数量表达直接解析，其他自然语言最多调用一次 LLM，且不向该步骤提供候选规则。
 2. 将约束交给单 browser-use Agent。成功时仍提交原有 ScraperSpec；发现登录等当前协议不能表达的情况时，调用 `report_unsupported`，附带具体原因和字段，立即结束。
 3. 独立检查规则：所有必需字段必须存在并标记 required；显式数量必须等于 max_items。沿用 Pydantic 协议校验，不扩展 ScraperSpec，不允许脚本。
-4. 使用现有 Executor 试跑候选规则，默认最多 100 条、5 页、操作超时 5000 毫秒。检查提取异常、空结果、逐条缺失/空字段、数量不足和分页循环。
+4. 使用现有 Executor 试跑候选规则，默认最多 100 条、5 页；导航超时沿用规则设置。检查提取异常、空结果、逐条缺失/空字段、数量不足和分页循环。
 5. 可恢复的问题把错误码、字段、原因和上一份规则反馈给同一个 Agent 工作流，再生成并重新验证。默认最多修复两次，即总共最多三份候选规则；不会重新提取或放宽原始需求。不支持的能力、预算不足、需求解析失败、验证页数预算不足直接停止。
 6. 如要求数据输出且试跑未覆盖完整任务，执行原规则并校验全量结果。试跑已覆盖时直接复用数据。所有检查通过后才保存规则和数据文件。
 
@@ -46,10 +46,10 @@ uv run --extra agent autoscraper-agent "https://books.toscrape.com/" "抓取前2
 不自动重试。详情页 `on_item_error=skip` 仍保留类型，避免因缺少记录触发规则修复。
 CSS 语法错误、多匹配字段和未发生等待超时的必填字段缺失等规则问题仍可进入有限修复。
 
-验证的导航及其他操作超时取规则 `timeout_ms` 与 `--validation-timeout-ms` 较小值
-（后者默认 5000 毫秒）。内容等待独立使用 `--content-timeout-ms`（默认 30000 毫秒），
-保存到候选规则，不受验证默认 5 秒截断。旧规则不设置 `content_timeout_ms` 时沿用
-原 `timeout_ms`。不自动延长等待。
+验证的导航及其他操作超时默认沿用规则 `timeout_ms`。显式指定
+`--validation-timeout-ms` 时取两者较小值（上限 30000 毫秒）。内容等待独立使用
+`--content-timeout-ms`（默认 30000 毫秒），保存到候选规则，不受导航超时截断。
+旧规则不设置 `content_timeout_ms` 时沿用原 `timeout_ms`。不自动延长等待。
 
 语义等待通过独立的 LLM 实例判断就绪，默认整次任务最多 8 次（`--max-wait-llm-calls`），
 修复不重置，调用量单独报告为 `wait_llm_calls`。工具限制 DOM 检查次数和间隔，
