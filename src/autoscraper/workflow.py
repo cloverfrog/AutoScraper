@@ -26,11 +26,16 @@ class TaskOutcome:
     llm_calls: int = 0
     wait_llm_calls: int = 0
     sample_only: bool = False
+    failure_stage: str | None = None
     history: list[dict] = field(default_factory=list)
 
     def summary(self) -> dict:
         return {
             "status": self.status,
+            "agent_status": "completed"
+            if self.spec is not None or self.status == "unsupported"
+            else "not_completed",
+            "failure_stage": self.failure_stage,
             "spec_valid": self.spec is not None,
             "execution_success": self.data is not None
             and not self.data.errors
@@ -166,6 +171,8 @@ def run_task(
         previous_spec = None
         for attempt in range(policy.max_repairs + 1):
             seconds = remaining()
+            stage = "exploration"
+            outcome.failure_stage = None
             outcome.attempts = attempt + 1
             outcome.spec, outcome.data = None, None
             candidate = None
@@ -217,6 +224,7 @@ def run_task(
                                 )
                             }
                         )
+                    stage = "validation"
                     result = ScraperExecutor().run(preview)
                     target = (
                         min(requirements.count, policy.max_items) if requirements.count else None
@@ -240,6 +248,7 @@ def run_task(
                         "no_pagination",
                     }
                     if not issues and execute and not complete:
+                        stage = "execution"
                         result = ScraperExecutor().run(candidate)
                         issues = validate_data(result, requirements)
                         complete = result.stop_reason not in {"max_pages", "detail_limit"}
@@ -283,6 +292,11 @@ def run_task(
                     Feedback(code="agent_failure", message=str(exc)[:2000], recoverable=False)
                 ]
             outcome.feedback = issues
+            if candidate is not None and any(
+                item.code in {"navigation_timeout", "navigation_failure", "content_timeout"}
+                for item in issues
+            ):
+                outcome.failure_stage = stage
             outcome.history.append(
                 {"attempt": attempt + 1, "feedback": [item.model_dump() for item in issues]}
             )

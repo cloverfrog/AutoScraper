@@ -717,6 +717,59 @@ def test_wait_timeouts_stop_without_repair(
         "content_timeout" if error_name == "ContentTimeout" else "navigation_timeout"
     )
     assert not outcome.feedback[0].recoverable
+    assert outcome.failure_stage == ("validation" if stage == "preview" else "execution")
+    assert outcome.summary()["agent_status"] == "completed"
+
+
+@pytest.mark.parametrize("stage", ["validation", "execution"])
+def test_timeout_cli_keeps_candidate_without_overwriting_outputs(
+    candidate, monkeypatch, tmp_path, capsys, stage
+):
+    import autoscraper.agent_cli as cli
+    from autoscraper.validation import Feedback
+    from autoscraper.workflow import TaskOutcome
+
+    spec_path = tmp_path / "rule.json"
+    data_path = tmp_path / "data.json"
+    spec_path.write_text("previous verified rule")
+    data_path.write_text("previous data")
+    monkeypatch.setenv("AUTOSCRAPER_API_KEY", "fake")
+    monkeypatch.setattr(
+        cli,
+        "run_task",
+        lambda *args, **kwargs: TaskOutcome(
+            status="unfulfilled",
+            spec=candidate,
+            failure_stage=stage,
+            feedback=[
+                Feedback(
+                    code="navigation_timeout", message="Page.goto timed out", recoverable=False
+                )
+            ],
+        ),
+    )
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "autoscraper-agent",
+            URL,
+            TASK,
+            "--spec-output",
+            str(spec_path),
+            "--output",
+            str(data_path),
+        ],
+    )
+    for index in (1, 2):
+        assert cli.main() == 1
+        report = json.loads(capsys.readouterr().out)
+        expected = tmp_path / ("rule.unvalidated.json" if index == 1 else "rule.unvalidated-2.json")
+        assert report["agent_status"] == "completed"
+        assert report["failure_stage"] == stage
+        assert report["unvalidated_spec"] == str(expected)
+        assert ScraperSpec.model_validate_json(expected.read_text()) == candidate
+    assert spec_path.read_text() == "previous verified rule"
+    assert data_path.read_text() == "previous data"
 
 
 def test_validation_keeps_user_content_timeout(candidate, settings, workflow, monkeypatch):

@@ -360,13 +360,23 @@ def test_executor_cli_reports_error_code_and_preserves_output(
 
     def execute(self, spec):
         assert spec.content_timeout_ms == 45000
+        assert spec.timeout_ms == 70000
         raise error
 
     monkeypatch.setattr(ScraperExecutor, "run", execute)
     monkeypatch.setattr(
         sys,
         "argv",
-        ["autoscraper", str(spec_path), "--output", str(output), "--content-timeout-ms", "45000"],
+        [
+            "autoscraper",
+            str(spec_path),
+            "--output",
+            str(output),
+            "--content-timeout-ms",
+            "45000",
+            "--navigation-timeout-ms",
+            "70000",
+        ],
     )
     assert main() == 1
     assert json.loads(capsys.readouterr().err)["code"] == code

@@ -19,7 +19,7 @@ uv run --extra agent autoscraper-agent "https://books.toscrape.com/" "抓取前2
 3. 独立检查规则：所有必需字段必须存在并标记 required；显式数量必须等于 max_items。沿用 Pydantic 协议校验，不扩展 ScraperSpec，不允许脚本。
 4. 使用现有 Executor 试跑候选规则，默认最多 100 条、5 页；导航超时沿用规则设置。检查提取异常、空结果、逐条缺失/空字段、数量不足和分页循环。
 5. 可恢复的问题把错误码、字段、原因和上一份规则反馈给同一个 Agent 工作流，再生成并重新验证。默认最多修复两次，即总共最多三份候选规则；不会重新提取或放宽原始需求。不支持的能力、预算不足、需求解析失败、验证页数预算不足直接停止。
-6. 如要求数据输出且试跑未覆盖完整任务，执行原规则并校验全量结果。试跑已覆盖时直接复用数据。所有检查通过后才保存规则和数据文件。
+6. 如要求数据输出且试跑未覆盖完整任务，执行原规则并校验全量结果。试跑已覆盖时直接复用数据。所有检查通过后才保存正式规则和数据文件；运行时导航/内容错误会单独保存一份明确标记为未验证的候选规则。
 
 规则文件仍是纯 ScraperSpec JSON，可以用原 `autoscraper` CLI 单独重跑。原 CLI 只执行规则，无法根据原始自然语言判断任务是否完成；这项判断属于 Agent 工作流。
 
@@ -45,6 +45,12 @@ uv run --extra agent autoscraper-agent "https://books.toscrape.com/" "抓取前2
 `content_timeout`。均保留目标 URL 和原始错误，返回 `unfulfilled`，不交给 Agent Repair，
 不自动重试。详情页 `on_item_error=skip` 仍保留类型，避免因缺少记录触发规则修复。
 CSS 语法错误、多匹配字段和未发生等待超时的必填字段缺失等规则问题仍可进入有限修复。
+
+规则已生成但验证或全量执行遇到上述运行时错误时，最终 JSON 使用
+`agent_status: "completed"` 和 `failure_stage` 区分生成与失败阶段，并在
+`unvalidated_spec` 给出未验证规则副本。该文件使用独立文件名并避免覆盖已有文件；
+正式 `--spec-output` 和数据输出保持原样。独立 Executor 可使用
+`--navigation-timeout-ms` 覆盖规则导航超时后重试，仍不自动增加 Agent 调用。
 
 验证的导航及其他操作超时默认沿用规则 `timeout_ms`。显式指定
 `--validation-timeout-ms` 时取两者较小值（上限 30000 毫秒）。内容等待独立使用

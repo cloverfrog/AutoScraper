@@ -63,7 +63,7 @@ uv run --extra agent autoscraper-agent "https://books.toscrape.com/" "抓取前2
 
 换网站时，替换命令里的 URL 和自然语言需求即可。
 
-列表字段和一层详情页字段均可抓取；登录、无限滚动等超出当前协议的场景，会返回 `status: "unsupported"` 并以退出码 3 结束，不再静默省略字段。其他验证失败返回 `unfulfilled` / 退出码 1，保留已有规则和数据文件。具体反馈见终端最后一条 JSON。
+列表字段和一层详情页字段均可抓取；登录、无限滚动等超出当前协议的场景，会返回 `status: "unsupported"` 并以退出码 3 结束，不再静默省略字段。其他验证失败返回 `unfulfilled` / 退出码 1，保留已有规则和数据文件。运行时导航或内容超时时，还会另存未验证的候选规则。具体反馈见终端最后一条 JSON。
 
 需要精确固定字段和数量时，可在上述命令中加 `--fields title price --count 25`。否则会先独立解析自然语言需求，再生成和验证规则。
 
@@ -225,3 +225,17 @@ uv run --extra agent autoscraper-agent "https://quotes.toscrape.com/js-delayed/"
 导航等待超时为 `navigation_timeout`，等待内容出现超时为 `content_timeout`，均返回明确失败，
 不自动重试或触发 Agent Repair。代理、DNS、HTTP 等导航失败仍为 `navigation_failure`；
 明确的 CSS/字段规则问题继续使用 `selector_failure`。语义就绪判断只辅助探索，不能代替字段验证。
+
+如果 Agent 已生成规则，但验证或全量执行因导航/内容运行时错误失败，最终 JSON 会报告
+`agent_status: "completed"`、`failure_stage: "validation"` 或 `"execution"`，并在
+`unvalidated_spec` 给出单独保存的规则路径。例如请求 `--spec-output output/quotes.json`
+时，第一份候选规则保存为 `output/quotes.unvalidated.json`。它尚未通过数据验证，任务仍以
+退出码 1 结束；已有的 `output/quotes.json` 和数据文件不会被覆盖。再次失败会生成
+`quotes.unvalidated-2.json`，也不会覆盖前一份候选规则。
+
+网络恢复后，可直接重试候选规则，不必再次调用 Agent。若这次导航确实需要更久，
+可在独立 Executor 中临时覆盖导航超时（最高 120000 毫秒）：
+
+```bash
+uv run autoscraper output/quotes.unvalidated.json --output output/quotes-data.json --navigation-timeout-ms 60000
+```

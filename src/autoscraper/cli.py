@@ -16,6 +16,7 @@ def main() -> int:
     parser.add_argument("spec", type=Path)
     parser.add_argument("--output", type=Path, action="append", required=True)
     parser.add_argument("--content-timeout-ms", type=int)
+    parser.add_argument("--navigation-timeout-ms", type=int)
     args = parser.parse_args()
     try:
         for output in args.output:
@@ -24,10 +25,13 @@ def main() -> int:
             if output.resolve() == args.spec.resolve():
                 raise ValueError("Output must not overwrite the input spec")
         spec = ScraperSpec.model_validate_json(args.spec.read_text(encoding="utf-8"))
+        overrides = {}
         if args.content_timeout_ms is not None:
-            spec = ScraperSpec.model_validate(
-                {**spec.model_dump(), "content_timeout_ms": args.content_timeout_ms}
-            )
+            overrides["content_timeout_ms"] = args.content_timeout_ms
+        if args.navigation_timeout_ms is not None:
+            overrides["timeout_ms"] = args.navigation_timeout_ms
+        if overrides:
+            spec = ScraperSpec.model_validate({**spec.model_dump(), **overrides})
         result = ScraperExecutor().run(spec)
         for output in args.output:
             export_records(result.records, output, list(spec.all_fields))

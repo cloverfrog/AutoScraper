@@ -49,6 +49,9 @@ DOM 样本、历史窗口与输入任务长度也有限制。计费由接口提�
 可选的顶层 `content_timeout_ms`（1–120000 毫秒）限制每次等待内容出现的时间；
 未设置时沿用 `timeout_ms`，保持旧规则行为。Agent CLI 始终将用户的内容等待配置
 写入规则，并在试跑与全量执行时保留，不受验证导航超时截断。
+独立 Executor CLI 可用 `--navigation-timeout-ms`（1–120000 毫秒）临时覆盖规则的
+`timeout_ms`；`--content-timeout-ms` 只覆盖内容等待。运行时验证失败保留的
+`*.unvalidated.json` 可直接交给该 CLI 重试，但文件名表示它还没有通过数据验证。
 
 参考完整示例 `examples/books.json`：`item_selector` 匹配每条列表记录；`fields` 中每个 CSS Selector 相对于该记录解析，必须至多匹配一个元素。`extract` 支持 `text` 或 `attribute`，后者必须指定 `attribute`。文本和属性值会去除首尾并合并连续空白；价格保持字符串，不隐式转换数值。
 

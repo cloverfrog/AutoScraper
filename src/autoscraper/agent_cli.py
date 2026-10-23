@@ -27,6 +27,24 @@ def settings_from_env(**overrides) -> AgentSettings:
     return AgentSettings.model_validate(data)
 
 
+def save_unvalidated_spec(spec, output: Path, reserved: set[Path]) -> Path:
+    """Keep a reusable candidate without replacing verified rules or requested data paths."""
+    output.parent.mkdir(parents=True, exist_ok=True)
+    payload = spec.model_dump_json(indent=2) + "\n"
+    for index in range(1, 1001):
+        suffix = ".unvalidated" if index == 1 else f".unvalidated-{index}"
+        candidate = output.with_name(output.stem + suffix + ".json")
+        if candidate.resolve() in reserved:
+            continue
+        try:
+            with candidate.open("x", encoding="utf-8") as stream:
+                stream.write(payload)
+            return candidate
+        except FileExistsError:
+            continue
+    raise FileExistsError("No available unvalidated rule filename")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Explore a website and generate a ScraperSpec")
     parser.add_argument("url")
@@ -100,6 +118,14 @@ def main() -> int:
         )
         summary = outcome.summary()
         if outcome.status not in {"success", "validated"}:
+            if outcome.spec is not None and outcome.failure_stage in {"validation", "execution"}:
+                try:
+                    candidate_path = save_unvalidated_spec(
+                        outcome.spec, args.spec_output, set(paths)
+                    )
+                    summary["unvalidated_spec"] = str(candidate_path)
+                except OSError as exc:
+                    summary["unvalidated_spec_error"] = str(exc)
             print(json.dumps(summary, ensure_ascii=False))
             return 3 if outcome.status == "unsupported" else 1
         # No rule/data writes until constraints and execution/data checks pass.
