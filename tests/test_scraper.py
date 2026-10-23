@@ -109,7 +109,7 @@ def test_item_errors(page):
 @pytest.mark.parametrize(
     "body,match",
     [
-        ("<p>no list</p>", "Browser failure"),
+        ("<p>no list</p>", "Content did not appear"),
         (item("A", "/a") + '<a class="next">Next</a>', "requires a Next link"),
         (item("A", "javascript:alert(1)"), "Unsupported URL"),
     ],

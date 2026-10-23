@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from playwright.sync_api import Error as PlaywrightError
 
 from .agent import AgentError, AgentSettings, InvalidSpecError, UnsupportedTaskError, generate_spec
-from .executor import NavigationError, ScrapeError, ScrapeResult, ScraperExecutor
+from .executor import ContentTimeout, NavigationError, ScrapeError, ScrapeResult, ScraperExecutor
 from .spec import ScraperSpec
 from .validation import Feedback, TaskRequirements, ValidationSettings, validate_data, validate_spec
 
@@ -24,6 +24,7 @@ class TaskOutcome:
     feedback: list[Feedback] = field(default_factory=list)
     attempts: int = 0
     llm_calls: int = 0
+    wait_llm_calls: int = 0
     sample_only: bool = False
     history: list[dict] = field(default_factory=list)
 
@@ -39,6 +40,7 @@ class TaskOutcome:
             "requirements": self.requirements.model_dump() if self.requirements else None,
             "attempts": self.attempts,
             "llm_calls": self.llm_calls,
+            "wait_llm_calls": self.wait_llm_calls,
             "items": len(self.data.records) if self.data else 0,
             "pages": self.data.pages_visited if self.data else 0,
             "detail_pages": self.data.detail_pages_visited if self.data else 0,
@@ -120,11 +122,12 @@ def run_task(
 
     os.environ.setdefault("ANONYMIZED_TELEMETRY", "false")
     os.environ.setdefault("BROWSER_USE_CLOUD_SYNC", "false")
-    from .agent_tools import make_llm
+    from .agent_tools import make_llm, make_wait_llm
 
     build_task(url, task)  # Validate input before paying for requirement extraction.
     policy = validation or ValidationSettings()
     llm = make_llm(settings)  # One paid-call budget shared by extraction and every repair.
+    wait_llm = make_wait_llm(settings)
     deadline = time.monotonic() + settings.timeout_seconds
     outcome = TaskOutcome(status="unfulfilled")
 
@@ -183,7 +186,11 @@ def run_task(
                         feedback=outcome.feedback,
                         previous_spec=previous_spec,
                         llm=llm,
+                        wait_llm=wait_llm,
                     )
+                )
+                candidate = candidate.model_copy(
+                    update={"content_timeout_ms": settings.content_timeout_ms}
                 )
                 issues = validate_spec(candidate, requirements)
                 if not issues:
@@ -259,8 +266,8 @@ def run_task(
                     }
                 )
                 return outcome
-            except NavigationError as exc:
-                issues = [Feedback(code="navigation_failure", message=str(exc), recoverable=False)]
+            except (NavigationError, ContentTimeout) as exc:
+                issues = [Feedback(code=exc.code, message=str(exc), recoverable=False)]
                 outcome.spec, outcome.data = candidate, None
             except (ScrapeError, PlaywrightError) as exc:
                 issues = [Feedback(code="selector_failure", message=str(exc)[:2000])]
@@ -287,3 +294,4 @@ def run_task(
         return outcome
     finally:
         outcome.llm_calls = llm.calls
+        outcome.wait_llm_calls = wait_llm.calls

@@ -38,17 +38,22 @@ uv run --extra agent autoscraper-agent "https://books.toscrape.com/" "抓取前2
 
 ## 反馈和边界
 
-可恢复反馈包括 `missing_required_field`、`count_mismatch`、`invalid_spec`、`selector_failure`、`empty_extraction`、`missing_data`、`insufficient_items`。不可恢复反馈包括 `navigation_failure`、`unsupported_capability`、`validation_limit`、`invalid_requirements`、`agent_failure`、`budget_exhausted`。
+可恢复反馈包括 `missing_required_field`、`count_mismatch`、`invalid_spec`、`selector_failure`、`empty_extraction`、`missing_data`、`insufficient_items`。不可恢复反馈包括 `content_timeout`、`navigation_timeout`、`navigation_failure`、`unsupported_capability`、`validation_limit`、`invalid_requirements`、`agent_failure`、`budget_exhausted`。
 
-列表、分页和详情页导航中的超时、代理/DNS/连接故障及 HTTP 错误状态（>=400）报告
-`navigation_failure`，保留目标 URL 和原始错误。此处不可恢复表示不能交给 Agent 修复规则；
-工作流返回 `unfulfilled`，不增加 LLM 调用，也不自动重试导航。详情页使用 `on_item_error=skip`
-时仍保留错误类型，不能因跳过记录而误触发规则修复。选择器无效、未匹配和必填字段缺失
-继续进入原有有限修复流程。
+列表、分页和详情页导航超时报告 `navigation_timeout`；代理/DNS/连接故障及 HTTP
+错误状态（>=400）报告 `navigation_failure`。等待列表或详情必填元素出现超时报告
+`content_timeout`。均保留目标 URL 和原始错误，返回 `unfulfilled`，不交给 Agent Repair，
+不自动重试。详情页 `on_item_error=skip` 仍保留类型，避免因缺少记录触发规则修复。
+CSS 语法错误、多匹配字段和未发生等待超时的必填字段缺失等规则问题仍可进入有限修复。
 
-验证使用的操作超时是规则 `timeout_ms` 与 `--validation-timeout-ms` 的较小值（后者默认
-5000 毫秒）；仅增大规则超时无法突破验证限制。慢站点可调整验证参数，代理或网络配置
-问题需要修复运行环境后重跑。
+验证的导航及其他操作超时取规则 `timeout_ms` 与 `--validation-timeout-ms` 较小值
+（后者默认 5000 毫秒）。内容等待独立使用 `--content-timeout-ms`（默认 30000 毫秒），
+保存到候选规则，不受验证默认 5 秒截断。旧规则不设置 `content_timeout_ms` 时沿用
+原 `timeout_ms`。不自动延长等待。
+
+语义等待通过独立的 LLM 实例判断就绪，默认整次任务最多 8 次（`--max-wait-llm-calls`），
+修复不重置，调用量单独报告为 `wait_llm_calls`。工具限制 DOM 检查次数和间隔，
+DOM 摘要不变时跳过模型调用；LLM 失败报告 `llm_error`，不冒充内容超时。
 
 需求提取、探索及修复共享一个 LLM 实例和 `--max-steps` 调用总预算，修复不重置预算。`--timeout` 限制剩余探索时间；同步试跑和批量抓取使用各自的 Executor 限制，不由异步取消强行中断。浏览器清理保留原有的额外 20 秒上限。
 
@@ -75,7 +80,8 @@ uv run --extra agent autoscraper-agent "https://books.toscrape.com/" "抓取前2
 
 详情预算与列表页预算独立。试跑通过 `--validation-detail-pages`（默认 100）限制详情导航次数，
 失败导航也消耗预算。`detail_limit` 生成不可恢复的 `validation_limit`，不会被当作正常结束或任务成功。
-详情选择器和缺失必填字段通过既有反馈进入有限修复；导航错误报告不可恢复的
+详情明确的字段规则错误通过既有反馈进入有限修复；等待详情必填元素超时报告
+不可恢复的 `content_timeout`，导航超时为 `navigation_timeout`，其他导航错误为
 `navigation_failure`。失败时仍保留原有输出文件。
 CLI 新增 `detail_pages` 计数，CSV 和 JSON 都导出合并字段。
 

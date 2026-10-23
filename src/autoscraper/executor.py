@@ -22,16 +22,39 @@ class ItemError(ScrapeError):
 class NavigationError(ItemError):
     """A navigation failed, without evidence that extraction selectors are wrong."""
 
+    code = "navigation_failure"
+
     def __init__(self, url: str, message: str):
         self.url = url
         super().__init__(f"Navigation failed at {url}: {message}")
+
+
+class NavigationTimeout(NavigationError):
+    code = "navigation_timeout"
+
+
+class ContentTimeout(ItemError):
+    """Missing content within the deadline is not evidence of invalid CSS."""
+
+    code = "content_timeout"
+
+    def __init__(self, url: str, message: str):
+        self.url = url
+        super().__init__(message)
+
+
+def wait_for_content(locator: Locator, url: str, timeout_ms: int | None):
+    try:
+        locator.first.wait_for(state="attached", timeout=timeout_ms)
+    except PlaywrightTimeout as exc:
+        raise ContentTimeout(url, f"Content did not appear at {url}: {exc}") from exc
 
 
 @dataclass
 class ScrapeFailure:
     """Typed diagnostic accompanying a legacy string in ScrapeResult.errors."""
 
-    code: Literal["navigation_failure", "selector_failure"]
+    code: Literal["navigation_failure", "navigation_timeout", "content_timeout", "selector_failure"]
     message: str
     url: str
 
@@ -51,6 +74,8 @@ def navigate(page: Page, url: str, timeout_ms: int):
     """Classify errors at the operation boundary, not by matching error text."""
     try:
         response = page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
+    except PlaywrightTimeout as exc:
+        raise NavigationTimeout(url, str(exc)) from exc
     except PlaywrightError as exc:
         raise NavigationError(url, str(exc)) from exc
     if response is not None and response.status >= 400:
@@ -86,10 +111,7 @@ def extract_fields(
         matches = css(item, rule.selector)
         count = matches.count()  # Invalid CSS is a fatal rule error, even for optional fields.
         if wait and rule.required and count == 0:
-            try:
-                matches.first.wait_for(state="attached")
-            except PlaywrightTimeout as exc:
-                raise ItemError(f"Required field {name!r} is missing or timed out") from exc
+            wait_for_content(matches, base_url, None)
         if matches.count() > 1:
             raise ItemError(f"Field {name!r} matched multiple elements")
         value = None
@@ -121,7 +143,7 @@ def extract_detail(page: Page, url: str, spec: ScraperSpec) -> dict[str, str | N
     try:
         return extract_fields(page, spec.detail.fields, page.url, wait=True)
     except PlaywrightTimeout as exc:
-        raise ItemError(f"Detail field extraction timed out: {exc}") from exc
+        raise ContentTimeout(url, f"Detail field extraction timed out: {exc}") from exc
 
 
 class ScraperExecutor:
@@ -146,7 +168,7 @@ class ScraperExecutor:
         try:
             if spec.detail:
                 detail_page = page.context.new_page()
-                detail_page.set_default_timeout(spec.timeout_ms)
+                detail_page.set_default_timeout(spec.content_timeout_ms or spec.timeout_ms)
 
             while result.pages_visited < spec.max_pages:
                 identity = urldefrag(next_url).url
@@ -161,7 +183,7 @@ class ScraperExecutor:
                 seen_pages.update((identity, final_identity))
                 result.pages_visited += 1
                 items = css(page, spec.item_selector)
-                items.first.wait_for(state="attached")
+                wait_for_content(items, page.url, spec.content_timeout_ms or spec.timeout_ms)
                 for index in range(items.count()):
                     detail_url = None
                     try:
@@ -188,19 +210,21 @@ class ScraperExecutor:
                     except ItemError as exc:
                         message = f"{page.url} item {index + 1} detail={detail_url!r}: {exc}"
                         if spec.on_item_error == "fail":
-                            if isinstance(exc, NavigationError):
-                                raise NavigationError(exc.url, message) from exc
+                            if isinstance(exc, (NavigationError, ContentTimeout)):
+                                raise type(exc)(exc.url, message) from exc
                             raise ScrapeError(message) from exc
                         result.errors.append(message)
                         result.error_details.append(
                             ScrapeFailure(
                                 code=(
-                                    "navigation_failure"
-                                    if isinstance(exc, NavigationError)
+                                    exc.code
+                                    if isinstance(exc, (NavigationError, ContentTimeout))
                                     else "selector_failure"
                                 ),
                                 message=message,
-                                url=exc.url if isinstance(exc, NavigationError) else page.url,
+                                url=exc.url
+                                if isinstance(exc, (NavigationError, ContentTimeout))
+                                else page.url,
                             )
                         )
                         continue
@@ -232,6 +256,10 @@ class ScraperExecutor:
                 next_url = http_url(page.url, href)
             else:
                 result.stop_reason = "max_pages"
+        except PlaywrightTimeout as exc:
+            raise ContentTimeout(
+                page.url, f"Content operation timed out at {page.url}: {exc}"
+            ) from exc
         except PlaywrightError as exc:
             raise ScrapeError(f"Browser failure at {page.url}: {exc}") from exc
         finally:

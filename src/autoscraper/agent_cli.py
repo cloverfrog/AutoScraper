@@ -39,6 +39,8 @@ def main() -> int:
     parser.add_argument("--timeout", type=int, dest="timeout_seconds")
     parser.add_argument("--llm-timeout", type=int, dest="llm_timeout_seconds")
     parser.add_argument("--max-output-tokens", type=int)
+    parser.add_argument("--content-timeout-ms", type=int, default=30000)
+    parser.add_argument("--max-wait-llm-calls", type=int, default=8)
     parser.add_argument("--browser-path", dest="executable_path")
     parser.add_argument("--headed", action="store_true")
     parser.add_argument("--fields", nargs="+", help="Authoritative required field names")
@@ -72,6 +74,8 @@ def main() -> int:
                     "timeout_seconds",
                     "llm_timeout_seconds",
                     "max_output_tokens",
+                    "content_timeout_ms",
+                    "max_wait_llm_calls",
                     "executable_path",
                 )
             },

@@ -196,6 +196,8 @@ def test_tools_and_llm_budget(monkeypatch):
         "done",
         "inspect_page",
         "test_selector",
+        "wait_for_selector",
+        "wait_for_content",
     }
     settings = AgentSettings(
         api_key="fake",
