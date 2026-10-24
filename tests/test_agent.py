@@ -124,7 +124,11 @@ def test_dom_helpers_use_relative_css_and_literal_attributes():
                 f"(args) => ({SELECTOR_SCRIPT})(...args)", ["article.entry", "a", "title"]
             )
             assert result["count"] == 2
-            assert result["samples"][0] == {"matches": 1, "values": ["Full title"]}
+            assert result["samples"][0] == {
+                "status": "single_match",
+                "matches": 1,
+                "values": ["Full title"],
+            }
             assert result["samples"][1]["values"] == [None]
             # Attribute input is data, including when it looks like source code.
             injection = page.evaluate(
@@ -134,6 +138,229 @@ def test_dom_helpers_use_relative_css_and_literal_attributes():
             assert injection["samples"][0]["values"] == [None]
         finally:
             browser.close()
+
+
+@pytest.fixture
+def selector_page():
+    pytest.importorskip("browser_use")
+    from playwright.sync_api import sync_playwright
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        try:
+            page = browser.new_page()
+            page.set_content(
+                '<article class="entry"><p class="card-text">One</p>'
+                '<p class="card-text">Two</p></article>'
+                '<article class="entry"><p class="card-text">Three</p></article>'
+            )
+            yield page
+        finally:
+            browser.close()
+
+
+def evaluate_selector(page, item, field="", attribute=""):
+    from autoscraper.agent_tools import SELECTOR_SCRIPT
+
+    return page.evaluate(f"(args) => ({SELECTOR_SCRIPT})(...args)", [item, field, attribute])
+
+
+@pytest.mark.parametrize(
+    "item,field,parameter,count",
+    [
+        ("article:nth-of--type(2)", "p", "item_selector", None),
+        ("article", "p.card-text:nth-of--type(2)", "field_selector", 2),
+        ("article", "p.card-text:nth-of-type((3)", "field_selector", 2),
+        (".missing", "p:nth-of-type((3)", "field_selector", 0),
+        ("", "p", "item_selector", None),
+        ("   ", "p", "item_selector", None),
+    ],
+)
+def test_selector_invalid_css(selector_page, item, field, parameter, count):
+    result = evaluate_selector(selector_page, item, field, "title")
+    assert result["status"] == "invalid_css"
+    assert result["error_parameter"] == parameter
+    assert result["message"]
+    assert result["count"] == count
+    assert result["item_selector"] == item
+    assert result["field_selector"] == field
+    assert result["attribute"] == "title"
+    assert result["samples"] == []
+    assert result["tested_count"] == 0
+    assert result["all_items_tested"] is False
+
+
+@pytest.mark.parametrize(
+    "field,status,matches,sample_statuses",
+    [
+        ("p.cardd-text:nth-of-type(1)", "sample_failed", [0, 0], ["no_match", "no_match"]),
+        ("p.card-text", "sample_failed", [2, 1], ["multiple_matches", "single_match"]),
+        ("p.card-text:nth-of-type(1)", "sample_passed", [1, 1], ["single_match"] * 2),
+        ("", "sample_passed", [1, 1], ["single_match"] * 2),
+        ("p.card-text:nth-of-type(2)", "sample_failed", [1, 0], ["single_match", "no_match"]),
+    ],
+)
+def test_selector_field_cardinality(selector_page, field, status, matches, sample_statuses):
+    result = evaluate_selector(selector_page, "article.entry", field)
+    assert result["status"] == status
+    assert result["count"] == 2
+    assert result["item_selector"] == "article.entry"
+    assert result["field_selector"] == field
+    assert result["attribute"] == ""
+    assert result["tested_count"] == 2
+    assert result["all_items_tested"] is True
+    assert [sample["matches"] for sample in result["samples"]] == matches
+    assert [sample["status"] for sample in result["samples"]] == sample_statuses
+    if field == "p.card-text:nth-of-type(1)":
+        assert [sample["values"] for sample in result["samples"]] == [["One"], ["Three"]]
+
+
+def test_selector_no_items(selector_page):
+    result = evaluate_selector(selector_page, ".missing", "p")
+    assert result["status"] == "no_items"
+    assert result["count"] == result["tested_count"] == 0
+    assert result["samples"] == []
+
+
+def test_selector_sample_scope_and_value_limits(selector_page):
+    selector_page.set_content(
+        '<article><p title="'
+        + "a" * 350
+        + '">One</p><p>Two</p><p>Three</p></article>'
+        + "<article><p>Text</p></article>" * 4
+        + "<article><span>Unsampled missing field</span></article>"
+    )
+    multiple = evaluate_selector(selector_page, "article", "p", "title")
+    assert multiple["samples"][0]["matches"] == 3
+    assert multiple["samples"][0]["values"] == ["a" * 300, None]
+    result = evaluate_selector(selector_page, "article", "p:first-child", "title")
+    assert result["status"] == "sample_passed"  # Cardinality only, including missing attributes.
+    assert result["count"] == 6
+    assert result["tested_count"] == len(result["samples"]) == 5
+    assert result["all_items_tested"] is False
+    assert result["samples"][1]["values"] == [None]
+
+
+def test_selector_tool_passes_exact_inputs_and_keeps_runtime_errors():
+    pytest.importorskip("browser_use")
+    from autoscraper.agent_tools import SELECTOR_SCRIPT, build_tools
+
+    action = build_tools().registry.registry.actions["test_selector"].function
+    raw = '{"status":"invalid_css","item_selector":"article"}'
+
+    class Page:
+        async def evaluate(self, *args):
+            assert args == (SELECTOR_SCRIPT, "article", "p:nth-of--type(2)", "href")
+            return raw
+
+    class Session:
+        async def must_get_current_page(self):
+            return Page()
+
+    result = asyncio.run(
+        action(
+            browser_session=Session(),
+            item_selector="article",
+            field_selector="p:nth-of--type(2)",
+            attribute="href",
+        )
+    )
+    assert result.extracted_content == raw
+
+    class BrokenSession:
+        async def must_get_current_page(self):
+            raise RuntimeError("Browser disconnected")
+
+    with pytest.raises(RuntimeError, match="Browser disconnected"):
+        asyncio.run(action(browser_session=BrokenSession(), item_selector="article"))
+
+
+def test_prompt_requires_exact_selector_tests():
+    task = build_task("https://fixture.test/", "Get titles")
+    assert "Retest changed selectors verbatim" in task
+    assert "Never claim failed or untested rules are verified" in task
+
+
+def test_browser_use_supplies_schema_without_manual_duplicate():
+    bu = pytest.importorskip("browser_use")
+    from autoscraper.agent_tools import build_tools
+    from autoscraper.spec import ScraperSpec
+
+    task = build_task("https://fixture.test/", "Get titles")
+    # Contract with pinned browser-use: removing our copy must not remove the
+    # schema from the model's task or from the structured done action.
+    assert '"$defs"' not in task
+    enhanced = bu.Agent._enhance_task_with_schema(SimpleNamespace(), task, ScraperSpec)
+    prefix, schema = enhanced.split("\nExpected output format: ScraperSpec\n")
+    assert prefix == task
+    assert json.loads(schema) == ScraperSpec.model_json_schema()
+    tools = build_tools()
+    tools.use_structured_output_action(ScraperSpec)
+    done_schema = tools.registry.registry.actions["done"].param_model.model_json_schema()
+    assert done_schema["properties"]["data"]["$ref"] == "#/$defs/ScraperSpec"
+    assert "detail" in done_schema["$defs"]["ScraperSpec"]["properties"]
+
+
+@pytest.mark.parametrize("repair", [False, True])
+def test_exploration_prompt_preserves_task_context(monkeypatch, rule, repair):
+    bu = pytest.importorskip("browser_use")
+    from autoscraper.spec import ScraperSpec
+    from autoscraper.validation import Feedback, TaskRequirements
+
+    captured = {}
+
+    class Browser:
+        def __init__(self, **kwargs):
+            pass
+
+        async def kill(self):
+            captured["killed"] = True
+
+    class Agent:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+        async def run(self, **kwargs):
+            return SimpleNamespace(
+                is_successful=lambda: True, final_result=lambda: json.dumps(rule)
+            )
+
+    requirements = TaskRequirements(fields=["title"], count=1)
+    previous = ScraperSpec.model_validate(rule) if repair else None
+    feedback = [Feedback(code="selector_failure", message="wrong title CSS", fields=["title"])]
+    task = 'Get title; preserve literal input "example"'
+    settings = AgentSettings(
+        api_key="fake",
+        model="test-model",
+        base_url="https://fixture.test/",
+        content_timeout_ms=4000,
+    )
+    monkeypatch.setattr(bu, "BrowserSession", Browser)
+    monkeypatch.setattr(bu, "Agent", Agent)
+    asyncio.run(
+        generate_spec(
+            rule["start_url"],
+            task,
+            settings,
+            requirements=requirements,
+            previous_spec=previous,
+            feedback=feedback if repair else None,
+            llm=object(),
+            wait_llm=SimpleNamespace(max_calls=8, calls=3),
+        )
+    )
+    prompt = captured["task"]
+    assert json.dumps(task, ensure_ascii=False) in prompt
+    assert requirements.model_dump_json() in prompt
+    assert ("Previous failed candidate:" in prompt) is repair
+    assert ("Repair these validation failures and retest:" in prompt) is repair
+    if repair:
+        assert previous.model_dump_json() in prompt
+        assert json.dumps([item.model_dump() for item in feedback], ensure_ascii=False) in prompt
+    assert "4000 ms per tool call; 5 semantic LLM calls remaining task-wide" in prompt
+    assert captured["output_model_schema"] is ScraperSpec
+    assert "report_unsupported" in captured["tools"].registry.registry.actions
+    assert captured["killed"]
 
 
 @pytest.mark.parametrize("outcome", ["success", "invalid", "unfinished", "timeout"])

@@ -32,6 +32,31 @@ browser-use Agent → ScraperSpec JSON → ScraperExecutor → records → CSV /
 
 DOM 工具使用应用内固定、只读 JavaScript；模型只能传入经 JSON 序列化的选择器和属性参数，不能提供可执行源码。browser-use 的 evaluate、文件操作、表单输入等其余工具不对模型开放。探索提示要求检查实际 DOM、测试字段和 Next，分页时到下一页验证后提交规则。程序不包含 Books 专用选择器，也不会读取手写示例作为 Agent 输入。
 
+`test_selector` 原样回显 `item_selector`、`field_selector` 和 `attribute`，保留
+`url/count/samples` 及每条样本的 `matches/values`。`count` 始终表示记录总数；记录 CSS
+非法时无法计数，返回 `null`。字段 CSS 在记录零匹配时也会检查语法。
+
+| 状态 | 含义 |
+| --- | --- |
+| `invalid_css` | 非法 CSS；`error_parameter` 指明 `item_selector` 或 `field_selector`，`message` 提供浏览器错误 |
+| `no_items` | CSS 合法，但没有匹配记录 |
+| `sample_passed` | 已检查的每条样本均唯一匹配字段元素 |
+| `sample_failed` | 至少一条样本字段零匹配或多匹配 |
+
+每条样本的 `status` 为 `no_match`、`single_match` 或 `multiple_matches`，其 `matches`
+是该记录内的字段匹配数，与顶层记录数无关。未传字段选择器时直接提取记录本身。
+最多检查前 5 条记录，每条最多返回 2 个值，每个值最多 300 字符；`tested_count` 和
+`all_items_tested` 说明覆盖范围。`sample_passed` 只检查匹配数量，不保证属性存在、值非空
+或完整规则通过验证；仍须查看 `values`（缺失属性为 `null`）并执行确定性验证。
+浏览器连接、页面执行等其他异常继续沿用工具运行时错误流程，不误报为非法 CSS。
+Agent 修改选择器后须原样重测，不能将失败或未经测试的选择器称为已验证。
+
+提示词按职责维护：`build_task` 集中描述探索流程、协议语义与完成条件；工具描述解释
+各自参数和返回值；`generate_spec` 仅追加本轮需求、失败候选、修复反馈与等待预算。
+完整 JSON Schema 由 browser-use 的 `output_model_schema=ScraperSpec` 自动附加，同时用于
+结构化 `done`，不在主提示词重复序列化。升级 browser-use 时应验证这一契约，避免 Schema
+遗漏或重复。需求解析和语义就绪判断各有独立职责，不混入探索提示词。
+
 | 控制 | 默认值 |
 | --- | --- |
 | 最大探索步数 `--max-steps` | 12，允许 1–50；主流程 LLM 调用数同样不超过该值，语义等待单独限额 |

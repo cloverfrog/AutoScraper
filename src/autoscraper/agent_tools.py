@@ -28,14 +28,38 @@ INSPECT_SCRIPT = """(selector) => {
 }"""
 
 SELECTOR_SCRIPT = """(itemSelector, fieldSelector, attribute) => {
-    const items = [...document.querySelectorAll(itemSelector)];
-    return {url: location.href, count: items.length,
-        samples: items.slice(0, 5).map(item => {
-            const matches = fieldSelector ? [...item.querySelectorAll(fieldSelector)] : [item];
-            return {matches: matches.length, values: matches.slice(0, 2).map(el =>
-                attribute ? el.getAttribute(attribute)?.slice(0, 300) ?? null
-                          : (el.innerText || '').trim().slice(0, 300))};
-        })};
+    const result = {url: location.href, item_selector: itemSelector,
+        field_selector: fieldSelector, attribute, count: null, samples: [],
+        tested_count: 0, all_items_tested: false};
+    const invalid = (parameter, error) => {
+        if (error.name !== 'SyntaxError') throw error;
+        return {...result, status: 'invalid_css', error_parameter: parameter,
+            message: error.message.slice(0, 1000)};
+    };
+    let items;
+    try { items = [...document.querySelectorAll(itemSelector)]; }
+    catch (error) { return invalid('item_selector', error); }
+    result.count = items.length;
+    // Parse field CSS even when no records matched. Never use its document-level
+    // match count: fields are evaluated relative to each sampled record below.
+    if (fieldSelector) {
+        try { document.createElement('div').querySelectorAll(fieldSelector); }
+        catch (error) { return invalid('field_selector', error); }
+    }
+    result.samples = items.slice(0, 5).map(item => {
+        const matches = fieldSelector ? [...item.querySelectorAll(fieldSelector)] : [item];
+        const status = matches.length === 0 ? 'no_match'
+            : matches.length === 1 ? 'single_match' : 'multiple_matches';
+        return {status, matches: matches.length, values: matches.slice(0, 2).map(el =>
+            attribute ? el.getAttribute(attribute)?.slice(0, 300) ?? null
+                      : (el.innerText || '').trim().slice(0, 300))};
+    });
+    result.tested_count = result.samples.length;
+    result.all_items_tested = result.tested_count === result.count;
+    result.status = !items.length ? 'no_items'
+        : result.samples.every(sample => sample.matches === 1)
+            ? 'sample_passed' : 'sample_failed';
+    return result;
 }"""
 
 
@@ -211,7 +235,11 @@ def build_tools(
 
     @tools.action(
         description="Test CSS item selector and optional field selector relative to each item. "
-        "Return counts and 5 samples; attribute is optional. Also test Next href this way."
+        "Echo inputs; return invalid_css (error_parameter), no_items, sample_passed or sample_failed. "
+        "count counts records; each sample's matches/status reports zero/one/multiple field matches. "
+        "Test up to 5 records (tested_count/all_items_tested); sample_passed checks uniqueness only. "
+        "Inspect values too: attributes may be null or text empty. attribute optionally selects "
+        "an attribute; empty field_selector selects the record itself."
     )
     async def test_selector(
         browser_session: BrowserSession,
@@ -230,7 +258,7 @@ def build_tools(
 
     @tools.action(
         description="Wait for a known CSS selector to attach, then return DOM. "
-        "Bounded by content timeout; returns ready/timeout. Never poll inspect_page."
+        "Bounded by content timeout; returns ready/timeout/error."
     )
     async def wait_for_selector(
         browser_session: BrowserSession, selector: str, timeout_ms: int | None = None
@@ -265,8 +293,8 @@ def build_tools(
     if allow_unsupported:
 
         @tools.action(
-            description="Stop immediately when required fields/capabilities cannot be "
-            "represented by ScraperSpec. Explain observed evidence; never omit fields."
+            description="Finish instead of done when required fields/capabilities cannot fit "
+            "ScraperSpec. Give observed evidence in reason and affected field names in fields."
         )
         async def report_unsupported(reason: str, fields: list[str]) -> ActionResult:
             from .validation import UnsupportedResult
