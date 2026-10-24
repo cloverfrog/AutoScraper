@@ -28,14 +28,38 @@ INSPECT_SCRIPT = """(selector) => {
 }"""
 
 SELECTOR_SCRIPT = """(itemSelector, fieldSelector, attribute) => {
-    const items = [...document.querySelectorAll(itemSelector)];
-    return {url: location.href, count: items.length,
-        samples: items.slice(0, 5).map(item => {
-            const matches = fieldSelector ? [...item.querySelectorAll(fieldSelector)] : [item];
-            return {matches: matches.length, values: matches.slice(0, 2).map(el =>
-                attribute ? el.getAttribute(attribute)?.slice(0, 300) ?? null
-                          : (el.innerText || '').trim().slice(0, 300))};
-        })};
+    const result = {url: location.href, item_selector: itemSelector,
+        field_selector: fieldSelector, attribute, count: null, samples: [],
+        tested_count: 0, all_items_tested: false};
+    const invalid = (parameter, error) => {
+        if (error.name !== 'SyntaxError') throw error;
+        return {...result, status: 'invalid_css', error_parameter: parameter,
+            message: error.message.slice(0, 1000)};
+    };
+    let items;
+    try { items = [...document.querySelectorAll(itemSelector)]; }
+    catch (error) { return invalid('item_selector', error); }
+    result.count = items.length;
+    // Parse field CSS even when no records matched. Never use its document-level
+    // match count: fields are evaluated relative to each sampled record below.
+    if (fieldSelector) {
+        try { document.createElement('div').querySelectorAll(fieldSelector); }
+        catch (error) { return invalid('field_selector', error); }
+    }
+    result.samples = items.slice(0, 5).map(item => {
+        const matches = fieldSelector ? [...item.querySelectorAll(fieldSelector)] : [item];
+        const status = matches.length === 0 ? 'no_match'
+            : matches.length === 1 ? 'single_match' : 'multiple_matches';
+        return {status, matches: matches.length, values: matches.slice(0, 2).map(el =>
+            attribute ? el.getAttribute(attribute)?.slice(0, 300) ?? null
+                      : (el.innerText || '').trim().slice(0, 300))};
+    });
+    result.tested_count = result.samples.length;
+    result.all_items_tested = result.tested_count === result.count;
+    result.status = !items.length ? 'no_items'
+        : result.samples.every(sample => sample.matches === 1)
+            ? 'sample_passed' : 'sample_failed';
+    return result;
 }"""
 
 
@@ -211,7 +235,10 @@ def build_tools(
 
     @tools.action(
         description="Test CSS item selector and optional field selector relative to each item. "
-        "Return counts and 5 samples; attribute is optional. Also test Next href this way."
+        "Return exact inputs, invalid_css/no_items/sample_passed/sample_failed status and up to "
+        "5 samples with no_match/single_match/multiple_matches status. count is record count; "
+        "matches is each sample's field count. sample_passed checks cardinality only, not values "
+        "or the full rule; check values too. attribute is optional. Also test Next href this way."
     )
     async def test_selector(
         browser_session: BrowserSession,

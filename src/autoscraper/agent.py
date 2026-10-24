@@ -74,6 +74,14 @@ These bounded tools return ready/timeout and DOM evidence. Semantic readiness is
 continue testing every selector and field; it is not proof of complete or correct data.
 Infer all CSS selectors from observed DOM, never guess from prior knowledge of the site.
 Use test_selector on the item selector and each field relative to an item, and on Next.
+Check the exact item_selector/field_selector/attribute echoed by the tool. On invalid_css,
+no_items or sample_failed, compare those inputs with the observed DOM before correcting them;
+do not repeat an unchanged failed test without new DOM evidence. count is the number of records,
+not field matches; inspect each sample's matches, status and values. sample_passed means only
+unique matches in the tested sample, not valid values or a validated rule. Check required values
+and attributes too. Never describe a failed or untested selector as verified in memory or output.
+Retest every changed selector verbatim before submitting it; final selectors must match the
+successfully tested strings. The deterministic validation workflow verifies the complete rule.
 If pagination is needed, navigate to the observed Next href and verify the same selectors.
 Return to the starting listing URL in the spec, not the last page you visited.
 Submit done with ONLY the ScraperSpec object. Do not generate Python or JavaScript.
