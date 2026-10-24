@@ -277,9 +277,90 @@ def test_selector_tool_passes_exact_inputs_and_keeps_runtime_errors():
 
 def test_prompt_requires_exact_selector_tests():
     task = build_task("https://fixture.test/", "Get titles")
-    assert "Retest every changed selector verbatim" in task
-    assert "Never describe a failed or untested selector as verified" in task
-    assert "sample_passed means only" in task
+    assert "Retest changed selectors verbatim" in task
+    assert "Never claim failed or untested rules are verified" in task
+
+
+def test_browser_use_supplies_schema_without_manual_duplicate():
+    bu = pytest.importorskip("browser_use")
+    from autoscraper.agent_tools import build_tools
+    from autoscraper.spec import ScraperSpec
+
+    task = build_task("https://fixture.test/", "Get titles")
+    # Contract with pinned browser-use: removing our copy must not remove the
+    # schema from the model's task or from the structured done action.
+    assert '"$defs"' not in task
+    enhanced = bu.Agent._enhance_task_with_schema(SimpleNamespace(), task, ScraperSpec)
+    prefix, schema = enhanced.split("\nExpected output format: ScraperSpec\n")
+    assert prefix == task
+    assert json.loads(schema) == ScraperSpec.model_json_schema()
+    tools = build_tools()
+    tools.use_structured_output_action(ScraperSpec)
+    done_schema = tools.registry.registry.actions["done"].param_model.model_json_schema()
+    assert done_schema["properties"]["data"]["$ref"] == "#/$defs/ScraperSpec"
+    assert "detail" in done_schema["$defs"]["ScraperSpec"]["properties"]
+
+
+@pytest.mark.parametrize("repair", [False, True])
+def test_exploration_prompt_preserves_task_context(monkeypatch, rule, repair):
+    bu = pytest.importorskip("browser_use")
+    from autoscraper.spec import ScraperSpec
+    from autoscraper.validation import Feedback, TaskRequirements
+
+    captured = {}
+
+    class Browser:
+        def __init__(self, **kwargs):
+            pass
+
+        async def kill(self):
+            captured["killed"] = True
+
+    class Agent:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+        async def run(self, **kwargs):
+            return SimpleNamespace(
+                is_successful=lambda: True, final_result=lambda: json.dumps(rule)
+            )
+
+    requirements = TaskRequirements(fields=["title"], count=1)
+    previous = ScraperSpec.model_validate(rule) if repair else None
+    feedback = [Feedback(code="selector_failure", message="wrong title CSS", fields=["title"])]
+    task = 'Get title; preserve literal input "example"'
+    settings = AgentSettings(
+        api_key="fake",
+        model="test-model",
+        base_url="https://fixture.test/",
+        content_timeout_ms=4000,
+    )
+    monkeypatch.setattr(bu, "BrowserSession", Browser)
+    monkeypatch.setattr(bu, "Agent", Agent)
+    asyncio.run(
+        generate_spec(
+            rule["start_url"],
+            task,
+            settings,
+            requirements=requirements,
+            previous_spec=previous,
+            feedback=feedback if repair else None,
+            llm=object(),
+            wait_llm=SimpleNamespace(max_calls=8, calls=3),
+        )
+    )
+    prompt = captured["task"]
+    assert json.dumps(task, ensure_ascii=False) in prompt
+    assert requirements.model_dump_json() in prompt
+    assert ("Previous failed candidate:" in prompt) is repair
+    assert ("Repair these validation failures and retest:" in prompt) is repair
+    if repair:
+        assert previous.model_dump_json() in prompt
+        assert json.dumps([item.model_dump() for item in feedback], ensure_ascii=False) in prompt
+    assert "4000 ms per tool call; 5 semantic LLM calls remaining task-wide" in prompt
+    assert captured["output_model_schema"] is ScraperSpec
+    assert "report_unsupported" in captured["tools"].registry.registry.actions
+    assert captured["killed"]
 
 
 @pytest.mark.parametrize("outcome", ["success", "invalid", "unfinished", "timeout"])

@@ -235,10 +235,11 @@ def build_tools(
 
     @tools.action(
         description="Test CSS item selector and optional field selector relative to each item. "
-        "Return exact inputs, invalid_css/no_items/sample_passed/sample_failed status and up to "
-        "5 samples with no_match/single_match/multiple_matches status. count is record count; "
-        "matches is each sample's field count. sample_passed checks cardinality only, not values "
-        "or the full rule; check values too. attribute is optional. Also test Next href this way."
+        "Echo inputs; return invalid_css (error_parameter), no_items, sample_passed or sample_failed. "
+        "count counts records; each sample's matches/status reports zero/one/multiple field matches. "
+        "Test up to 5 records (tested_count/all_items_tested); sample_passed checks uniqueness only. "
+        "Inspect values too: attributes may be null or text empty. attribute optionally selects "
+        "an attribute; empty field_selector selects the record itself."
     )
     async def test_selector(
         browser_session: BrowserSession,
@@ -257,7 +258,7 @@ def build_tools(
 
     @tools.action(
         description="Wait for a known CSS selector to attach, then return DOM. "
-        "Bounded by content timeout; returns ready/timeout. Never poll inspect_page."
+        "Bounded by content timeout; returns ready/timeout/error."
     )
     async def wait_for_selector(
         browser_session: BrowserSession, selector: str, timeout_ms: int | None = None
@@ -292,8 +293,8 @@ def build_tools(
     if allow_unsupported:
 
         @tools.action(
-            description="Stop immediately when required fields/capabilities cannot be "
-            "represented by ScraperSpec. Explain observed evidence; never omit fields."
+            description="Finish instead of done when required fields/capabilities cannot fit "
+            "ScraperSpec. Give observed evidence in reason and affected field names in fields."
         )
         async def report_unsupported(reason: str, fields: list[str]) -> ActionResult:
             from .validation import UnsupportedResult
