@@ -29,6 +29,7 @@ def candidate():
             "item_selector": "article",
             "max_items": 2,
             "timeout_ms": 500,
+            "content_timeout_ms": 500,
             "fields": {"title": {"selector": "h2"}, "price": {"selector": ".price"}},
             "on_item_error": "fail",
         }
@@ -38,7 +39,12 @@ def candidate():
 @pytest.fixture
 def settings():
     return AgentSettings(
-        api_key="fake", model="test", base_url="https://llm.test", max_steps=6, timeout_seconds=30
+        api_key="fake",
+        model="test",
+        base_url="https://llm.test",
+        max_steps=6,
+        timeout_seconds=30,
+        content_timeout_ms=500,
     )
 
 
@@ -493,7 +499,7 @@ def test_detail_selector_repair_and_full_workflow(candidate, settings, workflow,
     spec = detail_candidate(candidate)
     broken = spec.model_copy(deep=True)
     broken.on_item_error = mode
-    broken.detail.fields["description"].selector = ".not-there"
+    broken.detail.fields["description"].selector = "p, body"
     received = install_candidates(monkeypatch, workflow, [broken, spec])
 
     def execute(self, rule):
@@ -639,7 +645,7 @@ def test_navigation_failure_does_not_repair(
     assert not outcome.summary()["execution_success"]
     assert len(outcome.feedback) == 1
     feedback = outcome.feedback[0]
-    assert feedback.code == "navigation_failure"
+    assert feedback.code == ("navigation_timeout" if failure == "timeout" else "navigation_failure")
     assert not feedback.recoverable
     assert message in feedback.message
     assert target in feedback.message
@@ -684,3 +690,164 @@ def test_navigation_feedback_preserves_full_diagnostic():
     assert issues[0].code == "navigation_failure"
     assert issues[0].message == message
     assert not issues[0].recoverable
+
+
+@pytest.mark.parametrize("stage", ["preview", "full"])
+@pytest.mark.parametrize("error_name", ["ContentTimeout", "NavigationTimeout"])
+def test_wait_timeouts_stop_without_repair(
+    candidate, settings, workflow, monkeypatch, stage, error_name
+):
+    import autoscraper.executor as executor
+
+    received = install_candidates(monkeypatch, workflow, [candidate])
+    calls = []
+
+    def run(self, spec):
+        calls.append(spec)
+        if stage == "preview" or len(calls) == 2:
+            raise getattr(executor, error_name)(URL, "deadline reached")
+        return ScrapeResult(records=[{"title": "A", "price": "1"}], stop_reason="max_items")
+
+    monkeypatch.setattr(ScraperExecutor, "run", run)
+    outcome = run_task(
+        URL, TASK, settings, execute=True, validation=ValidationSettings(max_items=1)
+    )
+    assert len(received) == outcome.attempts == 1
+    assert outcome.feedback[0].code == (
+        "content_timeout" if error_name == "ContentTimeout" else "navigation_timeout"
+    )
+    assert not outcome.feedback[0].recoverable
+    assert outcome.failure_stage == ("validation" if stage == "preview" else "execution")
+    assert outcome.summary()["agent_status"] == "completed"
+
+
+@pytest.mark.parametrize("stage", ["validation", "execution"])
+def test_timeout_cli_keeps_candidate_without_overwriting_outputs(
+    candidate, monkeypatch, tmp_path, capsys, stage
+):
+    import autoscraper.agent_cli as cli
+    from autoscraper.validation import Feedback
+    from autoscraper.workflow import TaskOutcome
+
+    spec_path = tmp_path / "rule.json"
+    data_path = tmp_path / "data.json"
+    spec_path.write_text("previous verified rule")
+    data_path.write_text("previous data")
+    monkeypatch.setenv("AUTOSCRAPER_API_KEY", "fake")
+    monkeypatch.setattr(
+        cli,
+        "run_task",
+        lambda *args, **kwargs: TaskOutcome(
+            status="unfulfilled",
+            spec=candidate,
+            failure_stage=stage,
+            feedback=[
+                Feedback(
+                    code="navigation_timeout", message="Page.goto timed out", recoverable=False
+                )
+            ],
+        ),
+    )
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "autoscraper-agent",
+            URL,
+            TASK,
+            "--spec-output",
+            str(spec_path),
+            "--output",
+            str(data_path),
+        ],
+    )
+    for index in (1, 2):
+        assert cli.main() == 1
+        report = json.loads(capsys.readouterr().out)
+        expected = tmp_path / ("rule.unvalidated.json" if index == 1 else "rule.unvalidated-2.json")
+        assert report["agent_status"] == "completed"
+        assert report["failure_stage"] == stage
+        assert report["unvalidated_spec"] == str(expected)
+        assert ScraperSpec.model_validate_json(expected.read_text()) == candidate
+    assert spec_path.read_text() == "previous verified rule"
+    assert data_path.read_text() == "previous data"
+
+
+def test_validation_keeps_user_content_timeout(candidate, settings, workflow, monkeypatch):
+    settings.content_timeout_ms = 30000
+    install_candidates(monkeypatch, workflow, [candidate])
+    seen = []
+
+    def run(self, spec):
+        seen.append(spec)
+        return ScrapeResult(
+            records=[{"title": "A", "price": "1"}, {"title": "B", "price": "2"}],
+            stop_reason="max_items",
+        )
+
+    monkeypatch.setattr(ScraperExecutor, "run", run)
+    outcome = run_task(URL, TASK, settings, validation=ValidationSettings(timeout_ms=50))
+    assert outcome.status == "validated"
+    assert seen[0].timeout_ms == 50
+    assert seen[0].content_timeout_ms == outcome.spec.content_timeout_ms == 30000
+
+
+def test_validation_inherits_rule_navigation_timeout(candidate, settings, workflow, monkeypatch):
+    candidate.timeout_ms = 30000
+    settings.content_timeout_ms = 30000
+    install_candidates(monkeypatch, workflow, [candidate])
+    seen = []
+
+    def run(self, spec):
+        seen.append(spec)
+        return ScrapeResult(
+            records=[{"title": "A", "price": "1"}, {"title": "B", "price": "2"}],
+            stop_reason="max_items",
+        )
+
+    monkeypatch.setattr(ScraperExecutor, "run", run)
+    outcome = run_task(URL, TASK, settings)
+    assert outcome.status == "validated"
+    assert seen[0].timeout_ms == 30000
+    assert seen[0].content_timeout_ms == 30000
+
+
+@pytest.mark.parametrize(
+    "flags, expected", [([], None), (["--validation-timeout-ms", "5000"], 5000)]
+)
+def test_agent_cli_navigation_timeout_is_optional(monkeypatch, tmp_path, flags, expected):
+    import autoscraper.agent_cli as cli
+    from autoscraper.workflow import TaskOutcome
+
+    seen = []
+    monkeypatch.setenv("AUTOSCRAPER_API_KEY", "fake")
+
+    def run(*args, **kwargs):
+        seen.append(kwargs["validation"].timeout_ms)
+        return TaskOutcome(status="unfulfilled")
+
+    monkeypatch.setattr(cli, "run_task", run)
+    monkeypatch.setattr(
+        "sys.argv",
+        ["autoscraper-agent", URL, TASK, "--spec-output", str(tmp_path / "spec.json"), *flags],
+    )
+    assert cli.main() == 1
+    assert seen == [expected]
+
+
+def test_wait_model_budget_shared_across_repairs(candidate, settings, workflow, monkeypatch):
+    broken = candidate.model_copy(deep=True)
+    broken.fields.pop("price")
+    received = install_candidates(monkeypatch, workflow, [broken, candidate])
+    monkeypatch.setattr(
+        ScraperExecutor,
+        "run",
+        lambda *args: ScrapeResult(
+            records=[{"title": "A", "price": "1"}, {"title": "B", "price": "2"}],
+            stop_reason="max_items",
+        ),
+    )
+    outcome = run_task(URL, TASK, settings)
+    assert outcome.status == "validated"
+    assert received[0]["wait_llm"] is received[1]["wait_llm"]
+    assert received[0]["wait_llm"] is not workflow[1]
+    assert outcome.summary()["wait_llm_calls"] == 0

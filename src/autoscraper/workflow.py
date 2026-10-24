@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from playwright.sync_api import Error as PlaywrightError
 
 from .agent import AgentError, AgentSettings, InvalidSpecError, UnsupportedTaskError, generate_spec
-from .executor import NavigationError, ScrapeError, ScrapeResult, ScraperExecutor
+from .executor import ContentTimeout, NavigationError, ScrapeError, ScrapeResult, ScraperExecutor
 from .spec import ScraperSpec
 from .validation import Feedback, TaskRequirements, ValidationSettings, validate_data, validate_spec
 
@@ -24,12 +24,18 @@ class TaskOutcome:
     feedback: list[Feedback] = field(default_factory=list)
     attempts: int = 0
     llm_calls: int = 0
+    wait_llm_calls: int = 0
     sample_only: bool = False
+    failure_stage: str | None = None
     history: list[dict] = field(default_factory=list)
 
     def summary(self) -> dict:
         return {
             "status": self.status,
+            "agent_status": "completed"
+            if self.spec is not None or self.status == "unsupported"
+            else "not_completed",
+            "failure_stage": self.failure_stage,
             "spec_valid": self.spec is not None,
             "execution_success": self.data is not None
             and not self.data.errors
@@ -39,6 +45,7 @@ class TaskOutcome:
             "requirements": self.requirements.model_dump() if self.requirements else None,
             "attempts": self.attempts,
             "llm_calls": self.llm_calls,
+            "wait_llm_calls": self.wait_llm_calls,
             "items": len(self.data.records) if self.data else 0,
             "pages": self.data.pages_visited if self.data else 0,
             "detail_pages": self.data.detail_pages_visited if self.data else 0,
@@ -120,11 +127,12 @@ def run_task(
 
     os.environ.setdefault("ANONYMIZED_TELEMETRY", "false")
     os.environ.setdefault("BROWSER_USE_CLOUD_SYNC", "false")
-    from .agent_tools import make_llm
+    from .agent_tools import make_llm, make_wait_llm
 
     build_task(url, task)  # Validate input before paying for requirement extraction.
     policy = validation or ValidationSettings()
     llm = make_llm(settings)  # One paid-call budget shared by extraction and every repair.
+    wait_llm = make_wait_llm(settings)
     deadline = time.monotonic() + settings.timeout_seconds
     outcome = TaskOutcome(status="unfulfilled")
 
@@ -163,6 +171,8 @@ def run_task(
         previous_spec = None
         for attempt in range(policy.max_repairs + 1):
             seconds = remaining()
+            stage = "exploration"
+            outcome.failure_stage = None
             outcome.attempts = attempt + 1
             outcome.spec, outcome.data = None, None
             candidate = None
@@ -183,7 +193,11 @@ def run_task(
                         feedback=outcome.feedback,
                         previous_spec=previous_spec,
                         llm=llm,
+                        wait_llm=wait_llm,
                     )
+                )
+                candidate = candidate.model_copy(
+                    update={"content_timeout_ms": settings.content_timeout_ms}
                 )
                 issues = validate_spec(candidate, requirements)
                 if not issues:
@@ -191,7 +205,11 @@ def run_task(
                         update={
                             "max_items": min(candidate.max_items, policy.max_items),
                             "max_pages": min(candidate.max_pages, policy.max_pages),
-                            "timeout_ms": min(candidate.timeout_ms, policy.timeout_ms),
+                            "timeout_ms": (
+                                min(candidate.timeout_ms, policy.timeout_ms)
+                                if policy.timeout_ms is not None
+                                else candidate.timeout_ms
+                            ),
                         }
                     )
                     if candidate.detail:
@@ -206,6 +224,7 @@ def run_task(
                                 )
                             }
                         )
+                    stage = "validation"
                     result = ScraperExecutor().run(preview)
                     target = (
                         min(requirements.count, policy.max_items) if requirements.count else None
@@ -229,6 +248,7 @@ def run_task(
                         "no_pagination",
                     }
                     if not issues and execute and not complete:
+                        stage = "execution"
                         result = ScraperExecutor().run(candidate)
                         issues = validate_data(result, requirements)
                         complete = result.stop_reason not in {"max_pages", "detail_limit"}
@@ -259,8 +279,8 @@ def run_task(
                     }
                 )
                 return outcome
-            except NavigationError as exc:
-                issues = [Feedback(code="navigation_failure", message=str(exc), recoverable=False)]
+            except (NavigationError, ContentTimeout) as exc:
+                issues = [Feedback(code=exc.code, message=str(exc), recoverable=False)]
                 outcome.spec, outcome.data = candidate, None
             except (ScrapeError, PlaywrightError) as exc:
                 issues = [Feedback(code="selector_failure", message=str(exc)[:2000])]
@@ -272,6 +292,11 @@ def run_task(
                     Feedback(code="agent_failure", message=str(exc)[:2000], recoverable=False)
                 ]
             outcome.feedback = issues
+            if candidate is not None and any(
+                item.code in {"navigation_timeout", "navigation_failure", "content_timeout"}
+                for item in issues
+            ):
+                outcome.failure_stage = stage
             outcome.history.append(
                 {"attempt": attempt + 1, "feedback": [item.model_dump() for item in issues]}
             )
@@ -287,3 +312,4 @@ def run_task(
         return outcome
     finally:
         outcome.llm_calls = llm.calls
+        outcome.wait_llm_calls = wait_llm.calls

@@ -63,7 +63,7 @@ uv run --extra agent autoscraper-agent "https://books.toscrape.com/" "抓取前2
 
 换网站时，替换命令里的 URL 和自然语言需求即可。
 
-列表字段和一层详情页字段均可抓取；登录、无限滚动等超出当前协议的场景，会返回 `status: "unsupported"` 并以退出码 3 结束，不再静默省略字段。其他验证失败返回 `unfulfilled` / 退出码 1，保留已有规则和数据文件。具体反馈见终端最后一条 JSON。
+列表字段和一层详情页字段均可抓取；登录、无限滚动等超出当前协议的场景，会返回 `status: "unsupported"` 并以退出码 3 结束，不再静默省略字段。其他验证失败返回 `unfulfilled` / 退出码 1，保留已有规则和数据文件。运行时导航或内容超时时，还会另存未验证的候选规则。具体反馈见终端最后一条 JSON。
 
 需要精确固定字段和数量时，可在上述命令中加 `--fields title price --count 25`。否则会先独立解析自然语言需求，再生成和验证规则。
 
@@ -120,6 +120,8 @@ Agent 工作流判定为验证失败，不覆盖已有输出。只运行 Executo
 | `--max-steps` | 需求解析、探索、修复共享的 LLM 调用上限 | 12 |
 | `--timeout` | 探索总超时，秒 | 240 |
 | `--llm-timeout` | 单次 LLM 超时，秒 | 45 |
+| `--content-timeout-ms` | 探索、验证和执行的内容等待上限（毫秒，1–120000） | 30000 |
+| `--max-wait-llm-calls` | 整次任务语义等待的独立 LLM 调用上限（0–30） | 8 |
 | `--max-output-tokens` | 单次 LLM 输出 token 上限 | 3000 |
 | `--browser-path` | Chromium / Chrome 可执行文件路径 | 读取环境配置或自动查找 |
 | `--structured-output` | 保留的兼容参数 | Responses 适配器始终使用 JSON Schema |
@@ -129,7 +131,7 @@ Agent 工作流判定为验证失败，不覆盖已有输出。只运行 Executo
 | `--validation-items` | 试抓取最多记录数 | 100 |
 | `--validation-pages` | 试抓取最多列表页数 | 5 |
 | `--validation-detail-pages` | 试抓取最多详情导航次数（含失败） | 100 |
-| `--validation-timeout-ms` | 试抓取的单次浏览器操作超时，毫秒 | 5000 |
+| `--validation-timeout-ms` | 可选：缩短试抓取导航及其他操作超时，毫秒（最高 30000）；不截断内容等待 | 沿用规则 `timeout_ms` |
 
 其他兼容 Responses API 的接口可设置 `AUTOSCRAPER_API_KEY`、`AUTOSCRAPER_BASE_URL` 和 `AUTOSCRAPER_MODEL`。密钥优先读取 `AUTOSCRAPER_API_KEY`，其次读取 `DEEPSEEK_API_KEY`；配置不自动加载 `.env`。
 
@@ -200,3 +202,40 @@ Agent 负责探索和生成规则，Executor 只负责执行。当前支持列�
 模块边界、协议语义、工具限制和验证记录见 [协议与实现参考](docs/reference.md)。
 
 字段遗漏防护、结果状态和修复策略见 [Validation + Feedback Repair Loop](docs/validation-loop.md)。
+
+## 动态内容等待
+
+延迟渲染页面可以显式配置内容等待时间：
+
+```bash
+uv run --extra agent autoscraper-agent "https://quotes.toscrape.com/js-delayed/" "抓取前25句语录，字段名为quote、author" --spec-output output/quotes.json --content-timeout-ms 30000 --max-wait-llm-calls 8
+```
+
+探索时，已知 CSS 使用 `wait_for_selector`，未知结构使用 `wait_for_content`，由 Agent 指定
+`success_criteria`、`interval_seconds` 和 `max_checks`。工具一次调用内完成有界等待，
+返回 `ready` / `timeout` 和当前 DOM。语义判断在 DOM 摘要变化后才调用模型；
+检查次数包含跳过判断的检查，仍受时间上限约束。语义等待额外产生 API 费用，独立计入
+最终 JSON 的 `wait_llm_calls`，所有修复轮次共用 `--max-wait-llm-calls`；
+主 Agent 的 `--max-steps` 预算保持独立。设为 0 可禁用语义判断调用。
+
+内容超时保存为规则中的 `content_timeout_ms`。验证时，内容等待使用这一配置，导航默认使用规则的 `timeout_ms`，两者互不截断。
+重复抓取可用 `uv run autoscraper output/quotes.json --output output/quotes-data.json --content-timeout-ms 45000`
+覆盖此配置；旧规则未设置该字段时沿用原 `timeout_ms`。
+
+导航等待超时为 `navigation_timeout`，等待内容出现超时为 `content_timeout`，均返回明确失败，
+不自动重试或触发 Agent Repair。代理、DNS、HTTP 等导航失败仍为 `navigation_failure`；
+明确的 CSS/字段规则问题继续使用 `selector_failure`。语义就绪判断只辅助探索，不能代替字段验证。
+
+如果 Agent 已生成规则，但验证或全量执行因导航/内容运行时错误失败，最终 JSON 会报告
+`agent_status: "completed"`、`failure_stage: "validation"` 或 `"execution"`，并在
+`unvalidated_spec` 给出单独保存的规则路径。例如请求 `--spec-output output/quotes.json`
+时，第一份候选规则保存为 `output/quotes.unvalidated.json`。它尚未通过数据验证，任务仍以
+退出码 1 结束；已有的 `output/quotes.json` 和数据文件不会被覆盖。再次失败会生成
+`quotes.unvalidated-2.json`，也不会覆盖前一份候选规则。
+
+网络恢复后，可直接重试候选规则，不必再次调用 Agent。若这次导航确实需要更久，
+可在独立 Executor 中临时覆盖导航超时（最高 120000 毫秒）：
+
+```bash
+uv run autoscraper output/quotes.unvalidated.json --output output/quotes-data.json --navigation-timeout-ms 60000
+```

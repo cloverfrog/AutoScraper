@@ -20,13 +20,21 @@ browser-use Agent → ScraperSpec JSON → ScraperExecutor → records → CSV /
 
 ## 探索工具与限制
 
-基础工具包含 `navigate`、结构化 `done`、`inspect_page`、`test_selector`。验证工作流额外提供 `report_unsupported`，将能力限制作为失败终态提交，不生成部分规则。前两者使用 browser-use 内置实现；DOM 工具使用当前 `BrowserSession` 的页面接口。`inspect_page` 输出 DOM 标签、class/id、链接属性与有限文本，支持 CSS 根节点缩小范围；`test_selector` 返回匹配数量和前 5 项样本，支持相对字段选择器与属性提取。
+基础工具包含 `navigate`、结构化 `done`、`inspect_page`、`test_selector`、`wait_for_selector`、`wait_for_content`。验证工作流额外提供 `report_unsupported`，将能力限制作为失败终态提交，不生成部分规则。前两者使用 browser-use 内置实现；DOM 工具使用当前 `BrowserSession` 的页面接口。`inspect_page` 输出 DOM 标签、class/id、链接属性与有限文本，支持 CSS 根节点缩小范围；`test_selector` 返回匹配数量和前 5 项样本，支持相对字段选择器与属性提取。
+
+`wait_for_selector` 通过 Playwright CDP 连接定位当前 target，等待 CSS 元素 attached，
+已有元素立即返回；结束仅断开自己的连接，不关闭 Agent 浏览器。`wait_for_content` 接受
+语义条件（最多 2000 字符）、间隔（0.1–10 秒）、检查次数（1–30），立即检查并在 DOM
+摘要变化时独立调用 LLM。所有等待受 `--content-timeout-ms`（默认 30000，最高 120000）
+及探索剩余时间限制。检查次数包含未变化的 DOM；语义调用整次任务最多 8 次，可用
+`--max-wait-llm-calls` 设置 0–30。返回 ready/timeout、DOM、耗时；语义工具还报告
+检查和调用次数，预算不足和模型错误分别返回 budget_exhausted / llm_error。
 
 DOM 工具使用应用内固定、只读 JavaScript；模型只能传入经 JSON 序列化的选择器和属性参数，不能提供可执行源码。browser-use 的 evaluate、文件操作、表单输入等其余工具不对模型开放。探索提示要求检查实际 DOM、测试字段和 Next，分页时到下一页验证后提交规则。程序不包含 Books 专用选择器，也不会读取手写示例作为 Agent 输入。
 
 | 控制 | 默认值 |
 | --- | --- |
-| 最大探索步数 `--max-steps` | 12，允许 1–50；LLM 总调用数同样不超过该值 |
+| 最大探索步数 `--max-steps` | 12，允许 1–50；主流程 LLM 调用数同样不超过该值，语义等待单独限额 |
 | 探索总超时 `--timeout` | 240 秒，浏览器清理额外最多 20 秒 |
 | 单次 LLM 超时 `--llm-timeout` | 45 秒 |
 | 单次输出上限 `--max-output-tokens` | 3000 token |
@@ -37,6 +45,13 @@ DOM 样本、历史窗口与输入任务长度也有限制。计费由接口提�
 
 
 ## 规则语义
+
+可选的顶层 `content_timeout_ms`（1–120000 毫秒）限制每次等待内容出现的时间；
+未设置时沿用 `timeout_ms`，保持旧规则行为。Agent CLI 始终将用户的内容等待配置
+写入规则，并在试跑与全量执行时保留，不受验证导航超时截断。
+独立 Executor CLI 可用 `--navigation-timeout-ms`（1–120000 毫秒）临时覆盖规则的
+`timeout_ms`；`--content-timeout-ms` 只覆盖内容等待。运行时验证失败保留的
+`*.unvalidated.json` 可直接交给该 CLI 重试，但文件名表示它还没有通过数据验证。
 
 参考完整示例 `examples/books.json`：`item_selector` 匹配每条列表记录；`fields` 中每个 CSS Selector 相对于该记录解析，必须至多匹配一个元素。`extract` 支持 `text` 或 `attribute`，后者必须指定 `attribute`。文本和属性值会去除首尾并合并连续空白；价格保持字符串，不隐式转换数值。
 
@@ -75,7 +90,7 @@ v2 也支持纯列表规则。旧执行器会拒绝 v2，避免忽略详情规�
 调用 `run_page` 执行详情规则时，须通过 `browser.new_context().new_page()` 创建列表页；
 Playwright 的 `browser.new_page()` 便捷接口不允许在其隐式 Context 中新增 Page。
 离线路由需注册在 Context 上，以覆盖列表和详情 Page。
-详情导航及必填元素等待遵守 `timeout_ms`。缺链接、歧义链接、HTTP 错误、导航失败、超时、
+详情导航遵守 `timeout_ms`；必填元素等待遵守独立 `content_timeout_ms`（未设置则沿用 `timeout_ms`）。缺链接、歧义链接、HTTP 错误、导航失败、超时、
 缺失/空/多匹配字段按 `on_item_error` 跳过整条记录或立即失败。无效 CSS 是致命规则错误。
 错误包含列表 URL、记录序号、已解析的详情 URL（若有）及字段错误。
 

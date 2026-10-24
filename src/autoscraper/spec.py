@@ -52,6 +52,7 @@ class ScraperSpec(ProtocolModel):
     max_items: int = Field(default=100, ge=1, le=1_000_000)
     max_pages: int = Field(default=100, ge=1, le=100_000)
     timeout_ms: int = Field(default=15_000, ge=1, le=120_000)
+    content_timeout_ms: int | None = Field(default=None, ge=1, le=120_000)
     dedupe_by: list[NonEmpty] = Field(default_factory=list)
     on_item_error: Literal["skip", "fail"] = "skip"
 

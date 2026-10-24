@@ -34,6 +34,8 @@ class AgentSettings(BaseModel):
     timeout_seconds: int = Field(default=240, ge=1, le=900)
     llm_timeout_seconds: int = Field(default=45, ge=1, le=120)
     max_output_tokens: int = Field(default=3000, ge=256, le=8192)
+    content_timeout_ms: int = Field(default=30_000, ge=1, le=120_000)
+    max_wait_llm_calls: int = Field(default=8, ge=0, le=30)
     executable_path: str | None = None
     headless: bool = True
     structured_output: bool = False
@@ -66,6 +68,10 @@ def build_task(url: str, task: str) -> str:
 User request: {json.dumps(task, ensure_ascii=False)}
 
 Use inspect_page to see actual HTML tags, classes, attributes and repeated structures.
+Do not repeatedly inspect_page to poll loading content. Use wait_for_selector for a known CSS
+selector, or wait_for_content with explicit success_criteria when the selector is unknown.
+These bounded tools return ready/timeout and DOM evidence. Semantic readiness is only a hint:
+continue testing every selector and field; it is not proof of complete or correct data.
 Infer all CSS selectors from observed DOM, never guess from prior knowledge of the site.
 Use test_selector on the item selector and each field relative to an item, and on Next.
 If pagination is needed, navigate to the observed Next href and verify the same selectors.
@@ -106,6 +112,7 @@ async def generate_spec(
     feedback: list[Feedback] | None = None,
     previous_spec: ScraperSpec | None = None,
     llm=None,
+    wait_llm=None,
 ) -> ScraperSpec:
     """Generate a candidate. The workflow separately validates it before publication."""
     prompt = build_task(url, task)
@@ -135,10 +142,19 @@ async def generate_spec(
     os.environ.setdefault("BROWSER_USE_CLOUD_SYNC", "false")
     try:
         from browser_use import Agent, BrowserSession
-        from .agent_tools import build_tools, make_llm
+        from .agent_tools import build_tools, make_llm, make_wait_llm
     except ImportError as exc:
         raise AgentError("Install agent dependencies: uv sync --extra agent --locked") from exc
 
+    if wait_llm is None:
+        wait_llm = make_wait_llm(settings)
+    prompt += (
+        f"\nContent waiting limit: {settings.content_timeout_ms} ms per tool call. "
+        f"Semantic waiting calls remaining across this task: "
+        f"{max(0, wait_llm.max_calls - wait_llm.calls)}. "
+        "Use a suitable check interval and count within this limit. "
+        "Do not replace a timed-out wait with repeated inspect_page polling."
+    )
     browser = BrowserSession(
         headless=settings.headless,
         executable_path=settings.executable_path,
@@ -151,7 +167,11 @@ async def generate_spec(
                 task=prompt,
                 llm=llm if llm is not None else make_llm(settings),
                 browser_session=browser,
-                tools=build_tools(allow_unsupported=requirements is not None),
+                tools=build_tools(
+                    allow_unsupported=requirements is not None,
+                    content_timeout_ms=settings.content_timeout_ms,
+                    wait_llm=wait_llm,
+                ),
                 output_model_schema=ScraperSpec,
                 use_vision=False,
                 # Keep the browser-use prompt and output schema compact and deterministic.
@@ -166,7 +186,9 @@ async def generate_spec(
                 max_history_items=8,
                 max_clickable_elements_length=12000,
                 llm_timeout=settings.llm_timeout_seconds,
-                step_timeout=settings.llm_timeout_seconds + 30,
+                step_timeout=settings.llm_timeout_seconds
+                + 3 * settings.content_timeout_ms / 1000
+                + 30,
                 calculate_cost=False,
                 generate_gif=False,
                 enable_signal_handler=False,
@@ -185,7 +207,9 @@ async def generate_spec(
                     pass  # The usual ScraperSpec parser below reports invalid output.
             if history.is_successful() is not True:
                 raise AgentError("Agent did not finish successfully within its limits")
-            return parse_spec_output(final)
+            return parse_spec_output(final).model_copy(
+                update={"content_timeout_ms": settings.content_timeout_ms}
+            )
     except TimeoutError as exc:
         raise AgentError(f"Agent timed out after {settings.timeout_seconds}s") from exc
     finally:

@@ -41,7 +41,8 @@ def detail_spec(**updates):
         "pagination": {"next_selector": ".next"},
         "max_items": 25,
         "max_pages": 2,
-        "timeout_ms": 200,
+        # Leave room for Chromium scheduling; deliberate short waits have dedicated tests.
+        "timeout_ms": 1000,
         "dedupe_by": ["url"],
         "on_item_error": "fail",
     }

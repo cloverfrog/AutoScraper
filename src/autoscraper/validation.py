@@ -34,6 +34,8 @@ class Feedback(ProtocolModel):
         "invalid_spec",
         "selector_failure",
         "navigation_failure",
+        "navigation_timeout",
+        "content_timeout",
         "empty_extraction",
         "missing_data",
         "insufficient_items",
@@ -61,7 +63,7 @@ class ValidationSettings(ProtocolModel):
     max_items: int = Field(default=100, ge=1, le=1000)
     max_pages: int = Field(default=5, ge=1, le=20)
     max_detail_pages: int = Field(default=100, ge=1, le=1000)
-    timeout_ms: int = Field(default=5000, ge=1, le=15000)
+    timeout_ms: int | None = Field(default=None, ge=1, le=30000)
 
 
 def validate_spec(spec: ScraperSpec, requirements: TaskRequirements) -> list[Feedback]:
@@ -111,7 +113,7 @@ def validate_data(
             Feedback(
                 code=error.code,
                 message=error.message,
-                recoverable=error.code != "navigation_failure",
+                recoverable=error.code == "selector_failure",
             )
         )
     # Keep compatibility with callers that only supply the original string errors.
@@ -119,8 +121,8 @@ def validate_data(
     remaining_errors = [message for message in result.errors if message not in described]
     if remaining_errors:
         issues.append(Feedback(code="selector_failure", message="; ".join(remaining_errors)[:2000]))
-    if any(item.code == "navigation_failure" for item in issues):
-        # Missing rows are a consequence of failed navigation, not evidence for rule repair.
+    if any(not item.recoverable for item in issues):
+        # Missing rows after a timeout, navigation failure or budget limit do not justify repair.
         return issues
     if not result.records:
         issues.append(Feedback(code="empty_extraction", message="No records were extracted"))
