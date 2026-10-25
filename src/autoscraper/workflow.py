@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from playwright.sync_api import Error as PlaywrightError
 
 from .agent import AgentError, AgentSettings, InvalidSpecError, UnsupportedTaskError, generate_spec
+from .clarification import ClarificationHandler, ClarificationRequired, ClarificationSession
 from .executor import ContentTimeout, NavigationError, ScrapeError, ScrapeResult, ScraperExecutor
 from .spec import ScraperSpec
 from .validation import Feedback, TaskRequirements, ValidationSettings, validate_data, validate_spec
@@ -28,6 +29,9 @@ class TaskOutcome:
     sample_only: bool = False
     failure_stage: str | None = None
     history: list[dict] = field(default_factory=list)
+    original_url: str | None = None
+    clarifications: list[dict] = field(default_factory=list)
+    pending_clarification: dict | None = None
 
     def summary(self) -> dict:
         return {
@@ -41,6 +45,7 @@ class TaskOutcome:
             and not self.data.errors
             and self.data.stop_reason != "detail_limit",
             "task_fulfilled": self.status in {"success", "validated"} and not self.sample_only,
+            "fulfillment_basis": "clarified_task" if self.clarifications else "original_task",
             "sample_only": self.sample_only,
             "requirements": self.requirements.model_dump() if self.requirements else None,
             "attempts": self.attempts,
@@ -52,6 +57,12 @@ class TaskOutcome:
             "stop_reason": self.data.stop_reason if self.data else None,
             "feedback": [item.model_dump() for item in self.feedback],
             "validation_history": self.history,
+            "original_url": self.original_url,
+            "actual_start_url": str(self.spec.start_url) if self.spec else None,
+            "clarifications": self.clarifications,
+            "pending_clarification": self.pending_clarification,
+            "validation_scope": "protocol, required fields, count and extraction; "
+            "source equivalence and semantic constraints are not independently verified",
         }
 
 
@@ -122,6 +133,7 @@ def run_task(
     fields: list[str] | None = None,
     count: int | None = None,
     execute: bool = False,
+    ask_user: ClarificationHandler | None = None,
 ) -> TaskOutcome:
     from .agent import build_task
 
@@ -134,10 +146,13 @@ def run_task(
     llm = make_llm(settings)  # One paid-call budget shared by extraction and every repair.
     wait_llm = make_wait_llm(settings)
     deadline = time.monotonic() + settings.timeout_seconds
-    outcome = TaskOutcome(status="unfulfilled")
+    clarification = ClarificationSession(handler=ask_user)
+    outcome = TaskOutcome(
+        status="unfulfilled", original_url=url, clarifications=clarification.history
+    )
 
     def remaining():
-        seconds = deadline - time.monotonic()
+        seconds = deadline + clarification.waiting_seconds - time.monotonic()
         if seconds <= 0 or llm.calls >= settings.max_steps:
             raise AgentError("Shared time or LLM call budget exhausted")
         return seconds
@@ -194,6 +209,7 @@ def run_task(
                         previous_spec=previous_spec,
                         llm=llm,
                         wait_llm=wait_llm,
+                        clarification=clarification,
                     )
                 )
                 candidate = candidate.model_copy(
@@ -262,6 +278,10 @@ def run_task(
                             )
                     outcome.sample_only = not complete
                 outcome.spec, outcome.data = candidate, result
+            except ClarificationRequired as exc:
+                outcome.status = "needs_clarification"
+                outcome.pending_clarification = exc.request.model_dump()
+                return outcome
             except UnsupportedTaskError as exc:
                 outcome.status = "unsupported"
                 outcome.feedback = [
