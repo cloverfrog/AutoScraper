@@ -371,6 +371,7 @@ def test_real_agent_continues_with_browser_and_history(monkeypatch):
     import threading
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+    from browser_use import Agent
     from browser_use.llm.views import ChatInvokeCompletion
     from playwright.sync_api import sync_playwright
 
@@ -398,6 +399,30 @@ def test_real_agent_continues_with_browser_and_history(monkeypatch):
     url = f"http://127.0.0.1:{server.server_port}/scroll"
     rule = {**RULE, "start_url": url.removesuffix("scroll")}
     calls = []
+    trace = []
+    runs = []
+    original_run = Agent.run
+
+    async def traced_run(agent, *args, **kwargs):
+        # Exercise the public callbacks across both real run() invocations.
+        runs.append((agent.task_id, agent.state.n_steps, len(agent.history.history)))
+
+        async def start(current):
+            trace.append(("start", current.state.n_steps))
+
+        def plan(state, output, step):
+            trace.append(("plan", step))
+
+        async def end(current):
+            item = current.history.history[-1]
+            trace.append(("end", item.metadata.step_number))
+            assert item.metadata.duration_seconds >= 0
+            assert item.result
+
+        agent.register_new_step_callback = plan
+        return await original_run(agent, *args, on_step_start=start, on_step_end=end, **kwargs)
+
+    monkeypatch.setattr(Agent, "run", traced_run)
 
     async def scripted(self, messages, output_format=None, **kwargs):
         calls.append(messages)
@@ -456,6 +481,13 @@ def test_real_agent_continues_with_browser_and_history(monkeypatch):
         assert str(spec.start_url) == rule["start_url"]
         assert model.calls == 4
         assert session.history[0]["answer"] == "允许传统分页入口"
+        assert len(runs) == 2
+        assert runs[0][0] == runs[1][0]
+        assert runs[0][1:] == (1, 0)
+        assert runs[1][1:] == (4, 3)
+        assert trace == [
+            (kind, step) for step in range(1, 5) for kind in ("start", "plan", "end")
+        ]
     finally:
         server.shutdown()
         server.server_close()
