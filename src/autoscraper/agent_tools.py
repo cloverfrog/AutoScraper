@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from browser_use import ActionResult, BrowserSession, Tools
 from pydantic import BaseModel, ConfigDict
 
+from .clarification import ClarificationRequest, ClarificationSession
 from .openai_responses import ChatOpenAIResponses
 
 
@@ -216,12 +217,42 @@ class ContentWaiter:
 
 
 def build_tools(
-    *, allow_unsupported: bool = False, content_timeout_ms: int = 30000, wait_llm=None
+    *,
+    allow_unsupported: bool = False,
+    content_timeout_ms: int = 30000,
+    wait_llm=None,
+    clarification: ClarificationSession | None = None,
 ) -> Tools:
     tools = Tools()
     for name in list(tools.registry.registry.actions):
         if name not in {"navigate", "done"}:
             tools.registry.exclude_action(name)
+
+    if clarification is not None:
+
+        @tools.action(
+            description="Ask the user to clarify a material ambiguity in task intent. "
+            "Explain observed evidence, alternative plans and uncertainties in explanation. "
+            "Use optional suggestions, never assume a default. Stops this action batch; "
+            "wait for the user's answer before executing a dependent plan."
+        )
+        async def ask_user(
+            question: str, explanation: str, options: list[str] | None = None
+        ) -> ActionResult:
+            clarification.pending = ClarificationRequest(
+                question=question, explanation=explanation, options=options or []
+            )
+            return ActionResult(
+                is_done=True,
+                success=False,
+                extracted_content=json.dumps(
+                    {
+                        "status": "needs_clarification",
+                        "request": clarification.pending.model_dump(),
+                    },
+                    ensure_ascii=False,
+                ),
+            )
 
     @tools.action(
         description="Inspect DOM tags, classes and attributes. Optional CSS root narrows output."

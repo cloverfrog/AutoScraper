@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 from .agent import AgentError, AgentSettings, save_spec
+from .clarification import ClarificationRequest
 from .export import export_records
 from .validation import ValidationSettings
 from .workflow import run_task
@@ -45,6 +46,30 @@ def save_unvalidated_spec(spec, output: Path, reserved: set[Path]) -> Path:
     raise FileExistsError("No available unvalidated rule filename")
 
 
+def ask_user(request: ClarificationRequest) -> str | None:
+    """No default selection; prompts stay separate from the final stdout JSON."""
+    if not sys.stdin.isatty():
+        return None
+    print(f"\n需要澄清任务：{request.question}\n{request.explanation}", file=sys.stderr)
+    for index, option in enumerate(request.options, 1):
+        print(f"  {index}. {option}", file=sys.stderr)
+    print("请输入回答或选项编号（留空结束并返回待澄清状态）：", file=sys.stderr, flush=True)
+    try:
+        answer = sys.stdin.readline()
+    except (EOFError, KeyboardInterrupt):
+        return None
+    answer = answer.strip()
+    if not answer:
+        return None
+    if answer.isascii() and answer.isdigit() and request.options:
+        index = int(answer)
+        if 1 <= index <= len(request.options):
+            return request.options[index - 1]
+        # An invalid selection is not a user decision.
+        return None
+    return answer
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Explore a website and generate a ScraperSpec")
     parser.add_argument("url")
@@ -61,6 +86,11 @@ def main() -> int:
     parser.add_argument("--max-wait-llm-calls", type=int, default=8)
     parser.add_argument("--browser-path", dest="executable_path")
     parser.add_argument("--headed", action="store_true")
+    parser.add_argument(
+        "--non-interactive",
+        action="store_true",
+        help="Return needs_clarification instead of prompting for task ambiguities",
+    )
     parser.add_argument("--fields", nargs="+", help="Authoritative required field names")
     parser.add_argument("--count", type=int, help="Authoritative requested record count")
     parser.add_argument("--max-repairs", type=int, default=2)
@@ -115,6 +145,7 @@ def main() -> int:
             fields=args.fields,
             count=args.count,
             execute=bool(args.output),
+            ask_user=None if args.non_interactive else ask_user,
         )
         summary = outcome.summary()
         if outcome.status not in {"success", "validated"}:
@@ -127,6 +158,8 @@ def main() -> int:
                 except OSError as exc:
                     summary["unvalidated_spec_error"] = str(exc)
             print(json.dumps(summary, ensure_ascii=False))
+            if outcome.status == "needs_clarification":
+                return 4
             return 3 if outcome.status == "unsupported" else 1
         # No rule/data writes until constraints and execution/data checks pass.
         save_spec(outcome.spec, args.spec_output)
