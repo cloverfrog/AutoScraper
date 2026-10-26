@@ -6,6 +6,7 @@ import os
 import re
 import time
 from dataclasses import dataclass, field
+from contextlib import nullcontext
 
 from playwright.sync_api import Error as PlaywrightError
 
@@ -14,6 +15,7 @@ from .clarification import ClarificationHandler, ClarificationRequired, Clarific
 from .executor import ContentTimeout, NavigationError, ScrapeError, ScrapeResult, ScraperExecutor
 from .spec import ScraperSpec
 from .validation import Feedback, TaskRequirements, ValidationSettings, validate_data, validate_spec
+from .tracing import Trace, emit, labels, operation, traced_task
 
 
 @dataclass
@@ -124,6 +126,7 @@ async def extract_requirements(task: str, llm, fields=None, count=None) -> TaskR
     return result
 
 
+@traced_task
 def run_task(
     url: str,
     task: str,
@@ -134,6 +137,7 @@ def run_task(
     count: int | None = None,
     execute: bool = False,
     ask_user: ClarificationHandler | None = None,
+    trace: Trace | None = None,
 ) -> TaskOutcome:
     from .agent import build_task
 
@@ -158,8 +162,11 @@ def run_task(
         return seconds
 
     async def requirements_call():
-        async with asyncio.timeout(remaining()):
-            return await extract_requirements(task, llm, fields, count)
+        with labels(source="requirements"), operation("requirements") as details:
+            async with asyncio.timeout(remaining()):
+                result = await extract_requirements(task, llm, fields, count)
+                details.update(result.model_dump())
+                return result
 
     try:
         try:
@@ -185,147 +192,156 @@ def run_task(
             return outcome
         previous_spec = None
         for attempt in range(policy.max_repairs + 1):
-            seconds = remaining()
-            stage = "exploration"
-            outcome.failure_stage = None
-            outcome.attempts = attempt + 1
-            outcome.spec, outcome.data = None, None
-            candidate = None
-            result = None
-            try:
-                run_settings = settings.model_copy(
-                    update={
-                        "max_steps": settings.max_steps - llm.calls,
-                        "timeout_seconds": max(1, min(settings.timeout_seconds, int(seconds))),
-                    }
-                )
-                candidate = asyncio.run(
-                    generate_spec(
-                        url,
-                        task,
-                        run_settings,
-                        requirements=requirements,
-                        feedback=outcome.feedback,
-                        previous_spec=previous_spec,
-                        llm=llm,
-                        wait_llm=wait_llm,
-                        clarification=clarification,
-                    )
-                )
-                candidate = candidate.model_copy(
-                    update={"content_timeout_ms": settings.content_timeout_ms}
-                )
-                issues = validate_spec(candidate, requirements)
-                if not issues:
-                    preview = candidate.model_copy(
+            with (labels(attempt=attempt + 1), operation("attempt"),
+                  operation("repair") if attempt else nullcontext()):
+                seconds = remaining()
+                stage = "exploration"
+                outcome.failure_stage = None
+                outcome.attempts = attempt + 1
+                outcome.spec, outcome.data = None, None
+                candidate = None
+                result = None
+                try:
+                    run_settings = settings.model_copy(
                         update={
-                            "max_items": min(candidate.max_items, policy.max_items),
-                            "max_pages": min(candidate.max_pages, policy.max_pages),
-                            "timeout_ms": (
-                                min(candidate.timeout_ms, policy.timeout_ms)
-                                if policy.timeout_ms is not None
-                                else candidate.timeout_ms
-                            ),
+                            "max_steps": settings.max_steps - llm.calls,
+                            "timeout_seconds": max(1, min(settings.timeout_seconds, int(seconds))),
                         }
                     )
-                    if candidate.detail:
-                        preview = preview.model_copy(
+                    candidate = asyncio.run(
+                        generate_spec(
+                            url,
+                            task,
+                            run_settings,
+                            requirements=requirements,
+                            feedback=outcome.feedback,
+                            previous_spec=previous_spec,
+                            llm=llm,
+                            wait_llm=wait_llm,
+                            clarification=clarification,
+                        )
+                    )
+                    candidate = candidate.model_copy(
+                        update={"content_timeout_ms": settings.content_timeout_ms}
+                    )
+                    emit("spec.candidate", spec=candidate.model_dump(mode="json"))
+                    with operation("validation") as validation_details:
+                        issues = validate_spec(candidate, requirements)
+                        validation_details["feedback"] = [item.model_dump() for item in issues]
+                    if not issues:
+                        preview = candidate.model_copy(
                             update={
-                                "detail": candidate.detail.model_copy(
-                                    update={
-                                        "max_pages": min(
-                                            candidate.detail.max_pages, policy.max_detail_pages
-                                        )
-                                    }
-                                )
+                                "max_items": min(candidate.max_items, policy.max_items),
+                                "max_pages": min(candidate.max_pages, policy.max_pages),
+                                "timeout_ms": (
+                                    min(candidate.timeout_ms, policy.timeout_ms)
+                                    if policy.timeout_ms is not None
+                                    else candidate.timeout_ms
+                                ),
                             }
                         )
-                    stage = "validation"
-                    result = ScraperExecutor().run(preview)
-                    target = (
-                        min(requirements.count, policy.max_items) if requirements.count else None
-                    )
-                    issues = validate_data(result, requirements, expected_count=target)
-                    if (
-                        result.stop_reason == "max_pages"
-                        and preview.max_pages < candidate.max_pages
-                    ):
-                        issues = [item for item in issues if item.code != "insufficient_items"]
-                        if not execute and (target is None or len(result.records) < target):
-                            issues.append(
-                                Feedback(
-                                    code="validation_limit",
-                                    recoverable=False,
-                                    message="Validation page limit reached; increase --validation-pages",
-                                )
+                        if candidate.detail:
+                            preview = preview.model_copy(
+                                update={
+                                    "detail": candidate.detail.model_copy(
+                                        update={
+                                            "max_pages": min(
+                                                candidate.detail.max_pages, policy.max_detail_pages
+                                            )
+                                        }
+                                    )
+                                }
                             )
-                    complete = len(result.records) >= candidate.max_items or result.stop_reason in {
-                        "no_next",
-                        "no_pagination",
-                    }
-                    if not issues and execute and not complete:
-                        stage = "execution"
-                        result = ScraperExecutor().run(candidate)
-                        issues = validate_data(result, requirements)
-                        complete = result.stop_reason not in {"max_pages", "detail_limit"}
-                        if not complete and not issues:
-                            issues.append(
-                                Feedback(
-                                    code="validation_limit",
-                                    recoverable=False,
-                                    message="Full execution reached max_pages before completion",
+                        stage = "validation"
+                        with operation("validation_extraction"):
+                            result = ScraperExecutor().run(preview)
+                        target = (
+                            min(requirements.count, policy.max_items) if requirements.count else None
+                        )
+                        issues = validate_data(result, requirements, expected_count=target)
+                        if (
+                            result.stop_reason == "max_pages"
+                            and preview.max_pages < candidate.max_pages
+                        ):
+                            issues = [item for item in issues if item.code != "insufficient_items"]
+                            if not execute and (target is None or len(result.records) < target):
+                                issues.append(
+                                    Feedback(
+                                        code="validation_limit",
+                                        recoverable=False,
+                                        message="Validation page limit reached; increase --validation-pages",
+                                    )
                                 )
-                            )
-                    outcome.sample_only = not complete
-                outcome.spec, outcome.data = candidate, result
-            except ClarificationRequired as exc:
-                outcome.status = "needs_clarification"
-                outcome.pending_clarification = exc.request.model_dump()
-                return outcome
-            except UnsupportedTaskError as exc:
-                outcome.status = "unsupported"
-                outcome.feedback = [
-                    Feedback(
-                        code="unsupported_capability",
-                        message=str(exc),
-                        fields=exc.fields,
-                        recoverable=False,
+                        complete = len(result.records) >= candidate.max_items or result.stop_reason in {
+                            "no_next",
+                            "no_pagination",
+                        }
+                        if not issues and execute and not complete:
+                            stage = "execution"
+                            with operation("execution"):
+                                result = ScraperExecutor().run(candidate)
+                            issues = validate_data(result, requirements)
+                            complete = result.stop_reason not in {"max_pages", "detail_limit"}
+                            if not complete and not issues:
+                                issues.append(
+                                    Feedback(
+                                        code="validation_limit",
+                                        recoverable=False,
+                                        message="Full execution reached max_pages before completion",
+                                    )
+                                )
+                        outcome.sample_only = not complete
+                    outcome.spec, outcome.data = candidate, result
+                except ClarificationRequired as exc:
+                    outcome.status = "needs_clarification"
+                    outcome.pending_clarification = exc.request.model_dump()
+                    return outcome
+                except UnsupportedTaskError as exc:
+                    outcome.status = "unsupported"
+                    outcome.feedback = [
+                        Feedback(
+                            code="unsupported_capability",
+                            message=str(exc),
+                            fields=exc.fields,
+                            recoverable=False,
+                        )
+                    ]
+                    outcome.history.append(
+                        {
+                            "attempt": attempt + 1,
+                            "feedback": [item.model_dump() for item in outcome.feedback],
+                        }
                     )
-                ]
+                    return outcome
+                except (NavigationError, ContentTimeout) as exc:
+                    issues = [Feedback(code=exc.code, message=str(exc), recoverable=False)]
+                    outcome.spec, outcome.data = candidate, None
+                except (ScrapeError, PlaywrightError) as exc:
+                    issues = [Feedback(code="selector_failure", message=str(exc)[:2000])]
+                    outcome.spec, outcome.data = candidate, None
+                except InvalidSpecError as exc:
+                    issues = [Feedback(code="invalid_spec", message=str(exc)[:2000])]
+                except AgentError as exc:
+                    issues = [
+                        Feedback(code="agent_failure", message=str(exc)[:2000], recoverable=False)
+                    ]
+                outcome.feedback = issues
+                emit("validation.feedback", feedback=[item.model_dump() for item in issues],
+                     failure_stage=stage)
+                if candidate is not None and any(
+                    item.code in {"navigation_timeout", "navigation_failure", "content_timeout"}
+                    for item in issues
+                ):
+                    outcome.failure_stage = stage
                 outcome.history.append(
-                    {
-                        "attempt": attempt + 1,
-                        "feedback": [item.model_dump() for item in outcome.feedback],
-                    }
+                    {"attempt": attempt + 1, "feedback": [item.model_dump() for item in issues]}
                 )
-                return outcome
-            except (NavigationError, ContentTimeout) as exc:
-                issues = [Feedback(code=exc.code, message=str(exc), recoverable=False)]
-                outcome.spec, outcome.data = candidate, None
-            except (ScrapeError, PlaywrightError) as exc:
-                issues = [Feedback(code="selector_failure", message=str(exc)[:2000])]
-                outcome.spec, outcome.data = candidate, None
-            except InvalidSpecError as exc:
-                issues = [Feedback(code="invalid_spec", message=str(exc)[:2000])]
-            except AgentError as exc:
-                issues = [
-                    Feedback(code="agent_failure", message=str(exc)[:2000], recoverable=False)
-                ]
-            outcome.feedback = issues
-            if candidate is not None and any(
-                item.code in {"navigation_timeout", "navigation_failure", "content_timeout"}
-                for item in issues
-            ):
-                outcome.failure_stage = stage
-            outcome.history.append(
-                {"attempt": attempt + 1, "feedback": [item.model_dump() for item in issues]}
-            )
-            if not issues:
-                outcome.status = "success" if execute else "validated"
-                return outcome
-            if any(not item.recoverable for item in issues):
-                break
-            previous_spec = candidate
+                if not issues:
+                    outcome.status = "success" if execute else "validated"
+                    return outcome
+                if any(not item.recoverable for item in issues):
+                    break
+                previous_spec = candidate
         return outcome
     except (AgentError, TimeoutError) as exc:
         outcome.feedback = [Feedback(code="budget_exhausted", message=str(exc), recoverable=False)]

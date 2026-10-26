@@ -130,6 +130,9 @@ async def generate_spec(
     clarification: ClarificationSession | None = None,
 ) -> ScraperSpec:
     """Generate a candidate. The workflow separately validates it before publication."""
+    from .tracing import StepObserver, current_trace
+
+    observer = StepObserver() if current_trace() is not None else None
     prompt = build_task(url, task)
     clarification = clarification if clarification is not None else ClarificationSession()
     prompt += clarification.prompt()
@@ -195,6 +198,7 @@ async def generate_spec(
             calculate_cost=False,
             generate_gif=False,
             enable_signal_handler=False,
+            **({"register_new_step_callback": observer.planned} if observer else {}),
         )
         started = time.monotonic()
         initial_waiting = clarification.waiting_seconds
@@ -203,7 +207,15 @@ async def generate_spec(
                 time.monotonic() - started - clarification.waiting_seconds + initial_waiting
             )
             async with asyncio.timeout(max(0, settings.timeout_seconds - active_seconds)):
-                history = await agent.run(max_steps=settings.max_steps)
+                try:
+                    history = await agent.run(
+                        max_steps=settings.max_steps,
+                        **({"on_step_start": observer.start, "on_step_end": observer.end}
+                           if observer else {}),
+                    )
+                finally:
+                    if observer:
+                        observer.finish(agent, interrupted=True)
             if clarification.pending is not None:
                 clarification.answer_pending()
                 agent.add_new_task(

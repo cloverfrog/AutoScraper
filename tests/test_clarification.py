@@ -365,7 +365,7 @@ def test_cli_pending_preserves_existing_outputs(monkeypatch, capsys, tmp_path, n
     assert sorted(p.name for p in tmp_path.iterdir()) == ["data.json", "rule.json"]
 
 
-def test_real_agent_continues_with_browser_and_history(monkeypatch):
+def test_real_agent_continues_with_browser_and_history(monkeypatch, tmp_path):
     """Exercise pinned browser-use run/add_new_task with real local Chromium, no paid LLM."""
     pytest.importorskip("browser_use")
     import threading
@@ -377,6 +377,7 @@ def test_real_agent_continues_with_browser_and_history(monkeypatch):
 
     from autoscraper.agent_tools import make_llm
     from autoscraper.openai_responses import ChatOpenAIResponses
+    from autoscraper.tracing import FileSink, Trace, labels
 
     visits = []
 
@@ -406,21 +407,33 @@ def test_real_agent_continues_with_browser_and_history(monkeypatch):
     async def traced_run(agent, *args, **kwargs):
         # Exercise the public callbacks across both real run() invocations.
         runs.append((agent.task_id, agent.state.n_steps, len(agent.history.history)))
+        original_start = kwargs.pop("on_step_start", None)
+        original_end = kwargs.pop("on_step_end", None)
+        original_plan = agent.register_new_step_callback
 
         async def start(current):
             trace.append(("start", current.state.n_steps))
+            if original_start:
+                await original_start(current)
 
         def plan(state, output, step):
             trace.append(("plan", step))
+            if original_plan:
+                original_plan(state, output, step)
 
         async def end(current):
             item = current.history.history[-1]
             trace.append(("end", item.metadata.step_number))
             assert item.metadata.duration_seconds >= 0
             assert item.result
+            if original_end:
+                await original_end(current)
 
         agent.register_new_step_callback = plan
-        return await original_run(agent, *args, on_step_start=start, on_step_end=end, **kwargs)
+        try:
+            return await original_run(agent, *args, on_step_start=start, on_step_end=end, **kwargs)
+        finally:
+            agent.register_new_step_callback = original_plan
 
     monkeypatch.setattr(Agent, "run", traced_run)
 
@@ -467,17 +480,19 @@ def test_real_agent_continues_with_browser_and_history(monkeypatch):
         return "允许传统分页入口"
 
     session = ClarificationSession(handler=answer)
+    sink = FileSink(tmp_path / "runs")
     try:
-        spec = asyncio.run(
-            generate_spec(
-                url,
-                "前1条，字段名为quote",
-                settings,
-                llm=model,
-                wait_llm=SimpleNamespace(max_calls=0, calls=0),
-                clarification=session,
+        with Trace(sink).run(), labels(attempt=1):
+            spec = asyncio.run(
+                generate_spec(
+                    url,
+                    "前1条，字段名为quote",
+                    settings,
+                    llm=model,
+                    wait_llm=SimpleNamespace(max_calls=0, calls=0),
+                    clarification=session,
+                )
             )
-        )
         assert str(spec.start_url) == rule["start_url"]
         assert model.calls == 4
         assert session.history[0]["answer"] == "允许传统分页入口"
@@ -488,6 +503,19 @@ def test_real_agent_continues_with_browser_and_history(monkeypatch):
         assert trace == [
             (kind, step) for step in range(1, 5) for kind in ("start", "plan", "end")
         ]
+        events = [json.loads(line) for line in
+                  (sink.directory / "events.jsonl").read_text().splitlines()]
+        steps = [event for event in events if event["event_type"] == "step.started"]
+        assert [event["step"] for event in steps] == [1, 2, 3, 4]
+        tools = [event for event in events if event["event_type"] == "tool.started"]
+        assert [event["payload"]["tool"] for event in tools] == [
+            "navigate", "inspect_page", "ask_user", "done",
+        ]
+        assert all(event["attempt"] == 1 for event in steps + tools)
+        histories = (sink.directory / "history/attempt-1.jsonl").read_text().splitlines()
+        assert len(histories) == 4
+        assert "retain-observation" not in "\n".join(histories)
+        assert "允许传统分页入口" not in (sink.directory / "events.jsonl").read_text()
     finally:
         server.shutdown()
         server.server_close()

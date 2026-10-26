@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict
 
 from .clarification import ClarificationRequest, ClarificationSession
 from .openai_responses import ChatOpenAIResponses
+from .tracing import current_trace, operation
 
 
 # JavaScript below is authored by the application. Model inputs are JSON arguments,
@@ -216,6 +217,33 @@ class ContentWaiter:
             return result("wait_error", str(exc))
 
 
+class TracedTools(Tools):
+    async def act(self, action, **kwargs):
+        if current_trace() is None:
+            return await super().act(action, **kwargs)
+        params = action.model_dump(exclude_unset=True)
+        with operation("tool", tool=next(iter(params), "unknown"), inputs=params) as details:
+            result = await super().act(action, **kwargs)
+            details.update(
+                outcome="error" if result.error else "returned",
+                error=result.error, is_done=result.is_done, success=result.success,
+                output_chars=len(result.extracted_content or ""),
+            )
+            # Custom wait/selector tools return small JSON diagnostics alongside DOM.
+            # Extract only known diagnostic keys, never the DOM or sampled values.
+            if result.extracted_content and len(result.extracted_content) <= 100000:
+                try:
+                    data = json.loads(result.extracted_content)
+                    if isinstance(data, dict):
+                        details["diagnostics"] = {key: data[key] for key in (
+                            "status", "count", "tested_count", "all_items_tested", "checks",
+                            "llm_calls", "elapsed_ms", "error_parameter",
+                        ) if key in data}
+                except (ValueError, TypeError):
+                    pass
+            return result
+
+
 def build_tools(
     *,
     allow_unsupported: bool = False,
@@ -223,7 +251,7 @@ def build_tools(
     wait_llm=None,
     clarification: ClarificationSession | None = None,
 ) -> Tools:
-    tools = Tools()
+    tools = TracedTools()
     for name in list(tools.registry.registry.actions):
         if name not in {"navigate", "done"}:
             tools.registry.exclude_action(name)
@@ -344,6 +372,7 @@ class LimitedChatOpenAI(ChatOpenAIResponses):
 
     max_calls: int = 12
     calls: int = field(default=0, init=False)
+    trace_source: str | None = None
 
     async def ainvoke(self, messages, output_format=None, **kwargs):
         if self.calls >= self.max_calls:
@@ -371,4 +400,6 @@ def make_llm(settings) -> LimitedChatOpenAI:
 
 
 def make_wait_llm(settings) -> LimitedChatOpenAI:
-    return _make_llm(settings, settings.max_wait_llm_calls, 256)
+    llm = _make_llm(settings, settings.max_wait_llm_calls, 256)
+    llm.trace_source = "wait"
+    return llm

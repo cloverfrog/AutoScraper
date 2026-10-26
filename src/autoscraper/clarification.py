@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from pydantic import Field
 
 from .spec import NonEmpty, ProtocolModel
+from .tracing import emit, operation
 
 
 class ClarificationRequest(ProtocolModel):
@@ -38,7 +39,10 @@ class ClarificationSession:
         assert request is not None
         started = time.monotonic()
         try:
-            answer = self.handler(request) if self.handler else None
+            with operation("clarification", request=request.model_dump()) as details:
+                answer = self.handler(request) if self.handler else None
+                details["answered"] = bool(answer and answer.strip())
+                emit("clarification.answer", answer=answer)
         except (EOFError, KeyboardInterrupt):
             answer = None
         finally:
