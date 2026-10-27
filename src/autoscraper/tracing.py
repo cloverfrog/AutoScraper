@@ -8,6 +8,7 @@ import re
 import sys
 import threading
 import time
+import traceback
 import uuid
 from collections import Counter
 from contextlib import contextmanager
@@ -15,7 +16,6 @@ from contextvars import ContextVar
 from datetime import datetime, timezone
 from pathlib import Path
 from itertools import islice
-from urllib.parse import urlsplit
 
 
 _current = ContextVar("autoscraper_trace", default=None)
@@ -46,35 +46,94 @@ def utc_now():
     return datetime.now(timezone.utc).isoformat()
 
 
-class Sanitizer:
-    """Default-deny strings, plus explicit rules for diagnostic parameters.
+def agent_assessment(output):
+    """Reported model summaries, not independently verified observations."""
+    return {
+        key: value
+        for key in ("memory", "next_goal", "evaluation_previous_goal")
+        if (value := getattr(output, key, None)) is not None
+    }
 
-    Free text and arbitrary webpage/LLM output are represented by size, never
-    content. URLs retain origin only; CSS quoted literals are removed. Known
-    credentials are also removed from allowed strings, including dictionary keys.
+
+def summarize_tool_output(content):
+    """Keep structured feedback and bounded DOM evidence, not the entire DOM."""
+    if not content:
+        return None
+    if len(content) > 100000:
+        return {"excerpt": content[:4096], "truncated": True, "chars": len(content)}
+    try:
+        data = json.loads(content)
+    except (ValueError, TypeError, RecursionError):
+        return {"excerpt": content[:4096], "truncated": len(content) > 4096}
+    if not isinstance(data, dict):
+        return data
+    data = dict(data)
+    if isinstance(data.get("nodes"), list):
+        nodes = [node for node in data["nodes"] if isinstance(node, dict)]
+        controls = [
+            node
+            for node in nodes
+            if str(node.get("tag", "")).lower() in {"a", "button", "input", "select"}
+        ]
+        data = {key: data[key] for key in ("url", "title", "error", "total_nodes") if key in data}
+        data.update(
+            observed_nodes=len(nodes),
+            observed_controls=len(controls),
+            nodes_sample=nodes[:8],
+            controls_sample=controls[:12],
+            scope="sampled inspection root; absence in samples does not prove page-wide absence",
+        )
+    if isinstance(data.get("dom"), str):
+        data["dom_evidence"] = summarize_tool_output(data.pop("dom"))
+    return data
+
+
+def bounded_payload(data):
+    """Retain diagnostic keys when limiting a large event instead of discarding it."""
+
+    def shrink(value, text_limit, list_limit):
+        if isinstance(value, str) and len(value) > text_limit:
+            return value[:text_limit] + "…[truncated]"
+        if isinstance(value, dict):
+            return {k: shrink(v, text_limit, list_limit) for k, v in value.items()}
+        if isinstance(value, list):
+            result = [shrink(v, text_limit, list_limit) for v in value[:list_limit]]
+            if len(value) > list_limit:
+                result.append({"truncated_items": len(value) - list_limit})
+            return result
+        return value
+
+    for text_limit, list_limit in ((4096, 50), (1024, 10), (256, 3)):
+        if len(json.dumps(data, ensure_ascii=False).encode()) <= 12000:
+            return data
+        data = {**shrink(data, text_limit, list_limit), "truncated": True}
+    encoded = json.dumps(data, ensure_ascii=False)
+    return (
+        data if len(encoded.encode()) <= 12000 else {"truncated": True, "excerpt": encoded[:2000]}
+    )
+
+
+class Sanitizer:
+    """Preserve diagnostics; replace only known keys and explicit credentials.
+
+    This is deliberately not a general sensitive-content detector. Paths, query
+    parameters, CSS literals and ordinary text remain useful diagnostic records.
     """
 
-    SAFE = {
-        "status",
-        "code",
-        "type",
-        "source",
-        "model",
-        "failure_stage",
-        "stop_reason",
-        "agent_status",
-        "fulfillment_basis",
-        "name",
-        "tool",
-        "attribute",
-        "exception",
-        "reason",
-        "event_type",
-        "level",
-        "logger",
-        "outcome",
-        "termination",
-        "error_codes",
+    CREDENTIAL_KEYS = {
+        "apikey",
+        "authorization",
+        "proxyauthorization",
+        "cookie",
+        "setcookie",
+        "password",
+        "passwd",
+        "secret",
+        "clientsecret",
+        "accesstoken",
+        "refreshtoken",
+        "idtoken",
+        "token",
     }
     NUMERIC = {"prompt_tokens", "completion_tokens", "total_tokens", "prompt_cached_tokens"}
 
@@ -84,24 +143,28 @@ class Sanitizer:
     def text(self, value):
         for secret in self.secrets:
             value = value.replace(secret, "[redacted]")
-        value = re.sub(r"[\x00-\x1f\x7f\ud800-\udfff]", " ", value)
-        return value[:256]
+        value = re.sub(r"(?i)(https?://)[^/\s?#]*@", r"\1", value)
+        value = re.sub(
+            r"(?i)([?&](?:api[_-]?key|access_token|refresh_token|id_token|token|password|client_secret)=)[^&#\s\"'<>]*",
+            r"\1[redacted]",
+            value,
+        )
+        value = re.sub(
+            r"(?i)(\b(?:Proxy-)?Authorization\s*[:=]\s*(?:Bearer|Basic)\s+)[^\s,'\";}]+",
+            r"\1[redacted]",
+            value,
+        )
+        value = re.sub(r"(?im)(\b(?:set-cookie|cookie)\s*:\s*)[^\r\n]+", r"\1[redacted]", value)
+        value = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f\ud800-\udfff]", " ", value)
+        return value if len(value) <= 4096 else value[:4096] + "…[truncated]"
 
     def clean(self, value, key="", depth=0, budget=None):
         budget = [500] if budget is None else budget
         budget[0] -= 1
         if depth > 8 or budget[0] < 0:
             return "[depth limit]"
-        if any(
-            part in key.lower()
-            for part in (
-                "api_key",
-                "authorization",
-                "cookie",
-                "password",
-                "secret",
-                "header",
-            )
+        if key.lower().replace("_", "").replace("-", "") in self.CREDENTIAL_KEYS and isinstance(
+            value, str
         ):
             return "[redacted]"
         if isinstance(value, float) and not math.isfinite(value):
@@ -109,28 +172,21 @@ class Sanitizer:
         if value is None or isinstance(value, (bool, int, float)):
             return value
         if isinstance(value, str):
-            if key.endswith("url") or key == "url":
-                try:
-                    parsed = urlsplit(value)
-                    if parsed.scheme in {"https", "http"} and parsed.hostname:
-                        return self.text(f"{parsed.scheme}://{parsed.hostname}")
-                except ValueError:
-                    pass
-                return "[redacted URL]"
-            if "selector" in key:
-                # Attribute values and :contains-like literals can contain page data.
-                return self.text(re.sub(r"(['\"]).*?\1", "'[redacted]'", value))
-            if key in self.SAFE:
-                return self.text(value)
-            return {"redacted": True, "chars": len(value)}
+            return self.text(value)
         if isinstance(value, dict):
-            return {
+            result = {
                 self.text(str(k)): self.clean(v, str(k), depth + 1, budget)
                 for k, v in islice(value.items(), 50)
                 if budget[0] > 0
             }
+            if len(result) < len(value):
+                result["_trace_truncated_items"] = len(value) - len(result)
+            return result
         if isinstance(value, (list, tuple)):
-            return [self.clean(v, key, depth + 1, budget) for v in value[:50] if budget[0] > 0]
+            result = [self.clean(v, key, depth + 1, budget) for v in value[:50] if budget[0] > 0]
+            if len(result) < len(value):
+                result.append({"_trace_truncated_items": len(value) - len(result)})
+            return result
         return {"type": type(value).__name__}
 
 
@@ -150,7 +206,7 @@ class FileSink:
 
     def _write(self, path, data, *, append=False, reserve=False):
         raw = data.encode("utf-8")
-        # Reserve space for the final summary after event/console quota exhaustion.
+        # Reserve space for the final summary after event/history quota exhaustion.
         limit = self.max_bytes if reserve else max(0, self.max_bytes - 65536)
         if self.written + len(raw) > limit:
             raise OSError("Trace size limit reached")
@@ -167,14 +223,6 @@ class FileSink:
     def event(self, event):
         line = json.dumps(event, ensure_ascii=False, allow_nan=False) + "\n"
         self._write(self.directory / "events.jsonl", line, append=True)
-        self._write(self.directory / "console.log", line, append=True)
-
-    def console(self, entry):
-        self._write(
-            self.directory / "console.log",
-            json.dumps(entry, ensure_ascii=False) + "\n",
-            append=True,
-        )
 
     def history(self, attempt, entry):
         # JSONL snapshots during execution, without a growing in-memory array.
@@ -196,18 +244,21 @@ class FileSink:
 
 class _LogHandler(logging.Handler):
     def __init__(self, trace):
-        super().__init__()
+        super().__init__(level=logging.WARNING)
         self.trace = trace
 
     def emit(self, record):
         if current_trace() is self.trace:
-            # Do not format arbitrary messages, exception text or traceback locals.
-            self.trace.console(
+            self.trace.emit(
+                "framework.log",
                 {
                     "level": record.levelname,
                     "logger": record.name,
-                    "message": "[framework log content omitted]",
-                }
+                    "message": record.getMessage(),
+                    "traceback": "".join(traceback.format_exception(*record.exc_info))
+                    if record.exc_info and record.exc_info[0]
+                    else None,
+                },
             )
 
 
@@ -265,8 +316,7 @@ class Trace:
             self.seq += 1
             self.counts[event_type] += 1
             data = self.sanitizer.clean(payload or {})
-            if len(json.dumps(data, ensure_ascii=False).encode()) > 12000:
-                data = {"truncated": True}
+            data = bounded_payload(data)
             event = {
                 "schema_version": 1,
                 "run_id": self.run_id,
@@ -278,15 +328,10 @@ class Trace:
             }
             self._send("event", event)
 
-    def console(self, entry):
-        with self.lock:
-            self._send("console", self.sanitizer.clean(entry))
-
     def history(self, entry):
         with self.lock:
             entry = self.sanitizer.clean(entry)
-            if len(json.dumps(entry, ensure_ascii=False).encode()) > 12000:
-                entry = {"metadata": entry.get("metadata"), "truncated": True}
+            entry = bounded_payload(entry)
             self._send(
                 "history",
                 _labels.get().get("attempt", 1),
@@ -325,7 +370,14 @@ class Trace:
                 or type(exc).__name__ == "CancelledError"
                 else "exception"
             )
-            self.emit("run.failed", {"exception": type(exc).__name__, "message": str(exc)})
+            self.emit(
+                "run.failed",
+                {
+                    "exception": type(exc).__name__,
+                    "message": str(exc),
+                    "traceback": "".join(traceback.format_exception(exc)),
+                },
+            )
             raise
         finally:
             try:
@@ -382,7 +434,12 @@ def operation(name, **payload):
         try:
             yield details
         except BaseException as exc:
-            details.update(exception=type(exc).__name__, message=str(exc), outcome="raised")
+            details.update(
+                exception=type(exc).__name__,
+                message=str(exc),
+                outcome="raised",
+                traceback="".join(traceback.format_exception(exc)),
+            )
             if getattr(exc, "code", None) is not None:
                 details["code"] = exc.code
             if getattr(exc, "status_code", None) is not None:
@@ -466,6 +523,7 @@ class StepObserver:
     def planned(self, state, output, step):
         emit(
             "step.planned",
+            assessment=agent_assessment(output),
             actions=[
                 {"tool": next(iter(action.model_dump(exclude_unset=True)), "unknown")}
                 for action in output.action
@@ -481,8 +539,9 @@ class StepObserver:
             entry = {
                 "metadata": item.metadata.model_dump() if item.metadata else None,
                 "url": item.state.url,
+                "assessment": agent_assessment(item.model_output),
                 "actions": [
-                    action.model_dump(exclude_unset=True)
+                    action.model_dump(exclude_unset=True, mode="json")
                     for action in item.model_output.action[:10]
                 ]
                 if item.model_output
@@ -493,6 +552,7 @@ class StepObserver:
                         "success": result.success,
                         "is_done": result.is_done,
                         "output_chars": len(result.extracted_content or ""),
+                        "feedback": summarize_tool_output(result.extracted_content),
                     }
                     for result in item.result
                 ],

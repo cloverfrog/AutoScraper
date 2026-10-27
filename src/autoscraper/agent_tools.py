@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict
 
 from .clarification import ClarificationRequest, ClarificationSession
 from .openai_responses import ChatOpenAIResponses
-from .tracing import current_trace, operation
+from .tracing import current_trace, operation, summarize_tool_output
 
 
 # JavaScript below is authored by the application. Model inputs are JSON arguments,
@@ -221,26 +221,17 @@ class TracedTools(Tools):
     async def act(self, action, **kwargs):
         if current_trace() is None:
             return await super().act(action, **kwargs)
-        params = action.model_dump(exclude_unset=True)
+        params = action.model_dump(exclude_unset=True, mode="json")
         with operation("tool", tool=next(iter(params), "unknown"), inputs=params) as details:
             result = await super().act(action, **kwargs)
             details.update(
                 outcome="error" if result.error else "returned",
-                error=result.error, is_done=result.is_done, success=result.success,
+                error=result.error,
+                is_done=result.is_done,
+                success=result.success,
                 output_chars=len(result.extracted_content or ""),
+                feedback=summarize_tool_output(result.extracted_content),
             )
-            # Custom wait/selector tools return small JSON diagnostics alongside DOM.
-            # Extract only known diagnostic keys, never the DOM or sampled values.
-            if result.extracted_content and len(result.extracted_content) <= 100000:
-                try:
-                    data = json.loads(result.extracted_content)
-                    if isinstance(data, dict):
-                        details["diagnostics"] = {key: data[key] for key in (
-                            "status", "count", "tested_count", "all_items_tested", "checks",
-                            "llm_calls", "elapsed_ms", "error_parameter",
-                        ) if key in data}
-                except (ValueError, TypeError):
-                    pass
             return result
 
 

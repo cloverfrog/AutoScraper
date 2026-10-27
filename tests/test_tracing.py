@@ -20,7 +20,6 @@ class MemorySink:
     def __init__(self):
         self.events = []
         self.histories = []
-        self.consoles = []
         self.summary_data = None
 
     def event(self, event):
@@ -31,9 +30,6 @@ class MemorySink:
 
     def summary(self, data):
         self.summary_data = data
-
-    def console(self, data):
-        self.consoles.append(data)
 
 
 @pytest.fixture
@@ -86,7 +82,17 @@ def test_streaming_privacy_and_summary(tmp_path):
             assert (sink.directory / "history/attempt-2.jsonl").read_text()
         trace.outcome = TaskOutcome(status="validated").summary()
     contents = "\n".join(path.read_text() for path in sink.directory.rglob("*") if path.is_file())
-    assert "PRIVATE_" not in contents
+    assert "PRIVATE_API_KEY" not in contents
+    for value in (
+        "PRIVATE_TASK",
+        "PRIVATE_ERROR",
+        "PRIVATE_HISTORY",
+        "PRIVATE_LOG",
+        "PRIVATE_PATH",
+        "PRIVATE_PAGE",
+    ):
+        assert value in contents
+    assert not (sink.directory / "console.log").exists()
     assert "HIDDEN_QUERY" not in contents
     assert "user:pw" not in contents
     events = [
@@ -103,7 +109,7 @@ def test_streaming_privacy_and_summary(tmp_path):
     assert current_trace() is None
 
 
-@pytest.mark.parametrize("failure", ["start", "event", "console", "history", "summary"])
+@pytest.mark.parametrize("failure", ["start", "event", "history", "summary"])
 def test_consumer_failure_does_not_change_task_or_other_consumers(failure, capsys):
     class Broken:
         def __getattr__(self, name):
@@ -117,7 +123,6 @@ def test_consumer_failure_does_not_change_task_or_other_consumers(failure, capsy
     trace = Trace(Broken(), memory)
     with trace.run():
         emit("test.event")
-        trace.console({"message": "text"})
         trace.history({"step_number": 1})
         emit("test.another")
         trace.outcome = TaskOutcome(status="success").summary()
@@ -156,7 +161,14 @@ def test_exception_and_interruption_preserve_events_and_original_error(error, tm
     assert summary["outcome"] is None
     events = (sink.directory / "events.jsonl").read_text()
     assert "checkpoint" in events and "attempt.finished" in events
-    assert "PRIVATE_ERROR" not in events
+    if isinstance(error, RuntimeError):
+        finished = next(
+            json.loads(line)
+            for line in events.splitlines()
+            if json.loads(line)["event_type"] == "attempt.finished"
+        )
+        assert finished["payload"]["message"] == "PRIVATE_ERROR"
+        assert "test_exception_and_interruption" in finished["payload"]["traceback"]
 
 
 def test_concurrent_runs_and_logging_are_isolated():
@@ -178,7 +190,8 @@ def test_concurrent_runs_and_logging_are_isolated():
         assert event["attempt"] == index + 1
         assert event["payload"]["count"] == index
         assert len({e["run_id"] for e in memory.events}) == 1
-        assert len(memory.consoles) == 1
+        logs = [e for e in memory.events if e["event_type"] == "framework.log"]
+        assert len(logs) == 1 and logs[0]["payload"]["message"] == "PRIVATE_LOG"
     assert memories[0].events[0]["run_id"] != memories[1].events[0]["run_id"]
 
 
@@ -223,7 +236,9 @@ def test_llm_usage_sources_and_parse_failure(monkeypatch, source, invalid):
     assert metrics["llm_calls_by_source"] == {source: 1}
     assert metrics["tokens"]["total_tokens"] == 14
     assert metrics["usage_missing_calls"] == 0
-    assert "INVALID_PRIVATE_RESPONSE" not in json.dumps(memory.events)
+    finished = next(e for e in memory.events if e["event_type"] == "llm.finished")
+    if invalid:
+        assert "INVALID_PRIVATE_RESPONSE" in finished["payload"]["message"]
     assert memory.events[-2]["event_type"] == "llm.finished"
 
 
@@ -257,9 +272,17 @@ def test_workflow_repair_and_feedback_share_run(monkeypatch, settings, spec):
     candidate_events = [e for e in memory.events if e["event_type"] == "spec.candidate"]
     assert [e["attempt"] for e in candidate_events] == [1, 2]
     assert len({e["run_id"] for e in memory.events}) == 1
+    failed = next(e for e in memory.events if e["event_type"] == "validation.feedback")
+    assert failed["attempt"] == 1
+    assert failed["payload"]["feedback"][0]["fields"] == ["title"]
+    assert (
+        failed["payload"]["feedback"][0]["message"]
+        == "Include every requested field and mark it required"
+    )
+    assert memory.summary_data["outcome"]["requirements"]["fields"] == ["title"]
 
 
-def test_clarification_keeps_attempt_and_omits_answer():
+def test_clarification_keeps_attempt_and_readable_answer():
     memory = MemorySink()
     session = ClarificationSession(handler=lambda request: "PRIVATE_ANSWER")
     session.pending = ClarificationRequest(question="PRIVATE_QUESTION", explanation="reason")
@@ -268,7 +291,7 @@ def test_clarification_keeps_attempt_and_omits_answer():
     assert session.history[0]["answer"] == "PRIVATE_ANSWER"
     event = next(e for e in memory.events if e["event_type"] == "clarification.answer")
     assert event["attempt"] == 2
-    assert "PRIVATE_" not in json.dumps(memory.events)
+    assert event["payload"]["answer"] == "PRIVATE_ANSWER"
 
 
 @pytest.mark.parametrize(
@@ -304,7 +327,8 @@ def test_cli_json_exit_codes_and_trace_summary(monkeypatch, tmp_path, capsys, sp
     assert summary["status"] == status
     persisted = json.loads(next((tmp_path / "runs").glob("*/summary.json")).read_text())
     assert persisted["outcome"]["status"] == status
-    assert "PRIVATE_" not in json.dumps(persisted)
+    assert persisted["metadata"]["task"] == "PRIVATE_TASK"
+    assert "PRIVATE_API_KEY" not in json.dumps(persisted)
 
 
 def test_cli_artifact_error_preserves_workflow_result(monkeypatch, tmp_path, spec, capsys):
@@ -399,7 +423,8 @@ def test_actual_traced_tools_record_result_errors_and_cancellation(mode):
     assert end["step"] == 2 and end["attempt"] == 1
     assert end["payload"]["duration_seconds"] >= 0
     assert end["payload"]["outcome"] == ("raised" if mode == "cancel" else "error")
-    assert "PRIVATE_ERROR" not in json.dumps(memory.events)
+    if mode in {"return_error", "raise"}:
+        assert "PRIVATE_ERROR" in end["payload"]["error"]
 
 
 @pytest.mark.parametrize("usage", [None, "request_failure"])
@@ -428,7 +453,9 @@ def test_missing_usage_is_explicit(monkeypatch, usage):
     assert metrics["tokens"] is None
     assert metrics["usage_missing_calls"] == 1
     assert metrics["llm_calls_by_source"] == {"main": 1}
-    assert "PRIVATE_PROVIDER_ERROR" not in json.dumps(memory.events)
+    if usage == "request_failure":
+        end = next(e for e in memory.events if e["event_type"] == "llm.finished")
+        assert "PRIVATE_PROVIDER_ERROR" in end["payload"]["message"]
 
 
 def test_step_without_end_callback_is_closed_by_outer_cleanup():
@@ -530,7 +557,9 @@ def test_workflow_terminal_paths_preserve_original_semantics(
         assert outcome.feedback[0].code == code
     assert memory.summary_data["outcome"]["status"] == status
     assert memory.summary_data["metrics"]["attempts"] == 1
-    assert "PRIVATE_" not in json.dumps(memory.summary_data)
+    assert memory.summary_data["outcome"]["requirements"]["fields"] == ["title"]
+    if code:
+        assert "PRIVATE_" in memory.summary_data["outcome"]["feedback"][0]["message"]
     assert any(event["event_type"] == "attempt.finished" for event in memory.events)
 
 
@@ -560,6 +589,7 @@ with Trace(sink).run():
     assert root.handlers == original_handlers
     import browser_use
     logging.getLogger("browser_use.agent").info("TERMINAL_MARKER")
+    logging.getLogger("browser_use.agent").warning("FRAMEWORK_WARNING")
 assert root.handlers
 assert all(handler.__class__.__name__ != "_LogHandler"
            for name in ("browser_use", "bubus", "autoscraper")
@@ -585,6 +615,112 @@ print(json.dumps({"status": "validated"}))
     assert result.returncode == 0, result.stderr
     assert result.stderr.count("TERMINAL_MARKER") == 1
     assert json.loads(result.stdout) == {"status": "validated"}
-    console = next(tmp_path.glob("*/console.log")).read_text()
-    assert "TERMINAL_MARKER" not in console
-    assert any(json.loads(line).get("level") == "INFO" for line in console.splitlines())
+    assert not list(tmp_path.glob("*/console.log"))
+    events = [
+        json.loads(line) for line in next(tmp_path.glob("*/events.jsonl")).read_text().splitlines()
+    ]
+    logs = [e for e in events if e["event_type"] == "framework.log"]
+    assert len(logs) == 1
+    assert logs[0]["payload"]["message"] == "FRAMEWORK_WARNING"
+    assert result.stderr.count("FRAMEWORK_WARNING") == 1
+
+
+def test_default_policy_preserves_url_selectors_text_and_noncredential_headers():
+    from autoscraper.tracing import Sanitizer
+
+    sanitizer = Sanitizer(secrets=("KNOWN_KEY",))
+    original = "https://user:pw@example.test:8443/cars?page=2&sort=year&token=abc#details"
+    result = sanitizer.clean(
+        {
+            "url": original,
+            "selector": "a[aria-label='Next']",
+            "task": "抓取前25条，保留原始字段",
+            "reason": "Basic inspection found a Load More button without href",
+            "headers": {"Content-Type": "application/json", "Authorization": "Bearer OTHER_KEY"},
+            "cookie_count": 3,
+            "authorization_status": "missing",
+            "api_key": "KNOWN_KEY",
+            "message": "Request to /cars?page=2 failed; Authorization: Bearer OTHER_KEY\nCookie: session=abc",
+        }
+    )
+    assert (
+        result["url"] == "https://example.test:8443/cars?page=2&sort=year&token=[redacted]#details"
+    )
+    assert result["selector"] == "a[aria-label='Next']"
+    assert result["task"] == "抓取前25条，保留原始字段"
+    assert result["reason"] == "Basic inspection found a Load More button without href"
+    assert result["headers"] == {"Content-Type": "application/json", "Authorization": "[redacted]"}
+    assert result["cookie_count"] == 3 and result["authorization_status"] == "missing"
+    assert "OTHER_KEY" not in result["message"] and "session=abc" not in result["message"]
+    assert "Request to /cars?page=2 failed" in result["message"]
+    assert result["api_key"] == "[redacted]"
+
+
+def test_tool_feedback_keeps_evidence_without_persisting_entire_dom():
+    from autoscraper.tracing import summarize_tool_output
+
+    nodes = [{"tag": "div", "attrs": {"class": f"card-{i}"}, "text": f"Car {i}"} for i in range(30)]
+    nodes.append({"tag": "button", "attrs": {"id": "load-more"}, "text": "Load More"})
+    feedback = summarize_tool_output(
+        json.dumps(
+            {
+                "url": "https://example.test/load-more?page=1",
+                "title": "Cars",
+                "total_nodes": 100,
+                "nodes": nodes,
+            }
+        )
+    )
+    assert "nodes" not in feedback
+    assert len(feedback["nodes_sample"]) == 8
+    assert feedback["controls_sample"][0]["text"] == "Load More"
+    assert feedback["observed_nodes"] == 31 and feedback["total_nodes"] == 100
+    assert feedback["url"].endswith("/load-more?page=1")
+    assert "absence" in feedback["scope"]
+    selector = {
+        "status": "sample_failed",
+        "count": 6,
+        "samples": [
+            {"status": "no_match", "matches": 0, "values": []},
+        ],
+    }
+    assert summarize_tool_output(json.dumps(selector)) == selector
+
+
+def test_model_assessments_remain_readable_and_optional():
+    from autoscraper.tracing import StepObserver
+
+    memory = MemorySink()
+    with Trace(memory).run():
+        StepObserver().planned(
+            None,
+            SimpleNamespace(
+                action=[],
+                memory="6 records, need 25",
+                next_goal="Inspect pagination",
+                evaluation_previous_goal="Name selector passed",
+            ),
+            1,
+        )
+        StepObserver().planned(None, SimpleNamespace(action=[]), 2)
+    planned = [e["payload"] for e in memory.events if e["event_type"] == "step.planned"]
+    assert planned[0]["assessment"] == {
+        "memory": "6 records, need 25",
+        "next_goal": "Inspect pagination",
+        "evaluation_previous_goal": "Name selector passed",
+    }
+    assert planned[1]["assessment"] == {}
+
+
+def test_framework_exception_keeps_message_and_stack_without_known_key():
+    memory = MemorySink()
+    with Trace(memory, secrets=("KNOWN_KEY",)).run():
+        try:
+            raise ValueError("Navigation /cars?page=2 failed using KNOWN_KEY")
+        except ValueError:
+            logging.getLogger("browser_use.fixture").exception("Cannot open /cars?page=2")
+    event = next(e for e in memory.events if e["event_type"] == "framework.log")
+    assert event["payload"]["message"] == "Cannot open /cars?page=2"
+    assert "ValueError" in event["payload"]["traceback"]
+    assert "/cars?page=2" in event["payload"]["traceback"]
+    assert "KNOWN_KEY" not in json.dumps(event)
