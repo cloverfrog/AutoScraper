@@ -553,7 +553,7 @@ def test_cli_save_and_execute(monkeypatch, rule, tmp_path):
     import autoscraper.cli.agent as cli
     from autoscraper.scraping.executor import ScrapeResult
     from autoscraper.workflow.validation import TaskRequirements
-    from autoscraper.workflow.runner import TaskOutcome
+    from autoscraper.workflow.outcome import TaskOutcome
 
     monkeypatch.setenv("AUTOSCRAPER_API_KEY", "fake")
     monkeypatch.setattr(

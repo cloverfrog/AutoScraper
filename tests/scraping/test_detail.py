@@ -301,7 +301,7 @@ def test_protocol_constraints(change):
 def test_both_cli_exports_include_detail_fields(monkeypatch, tmp_path, capsys):
     from autoscraper.cli import scraper as cli, agent as agent_cli
     from autoscraper.scraping.executor import ScrapeResult
-    from autoscraper.workflow.runner import TaskOutcome
+    from autoscraper.workflow.outcome import TaskOutcome
 
     spec = detail_spec(max_items=1)
     record = {"title": "A", "price": "£1", "url": "https://fixture.test/a", "description": "正文"}
@@ -429,7 +429,7 @@ def test_detail_url_resolution(value, expected):
 def test_detail_limit_cli_reports_partial_result(monkeypatch, tmp_path, capsys):
     from autoscraper.cli import scraper as cli
     from autoscraper.scraping.executor import ScrapeResult
-    from autoscraper.workflow.runner import TaskOutcome
+    from autoscraper.workflow.outcome import TaskOutcome
 
     spec = detail_spec()
     result = ScrapeResult(stop_reason="detail_limit", detail_pages_visited=25)

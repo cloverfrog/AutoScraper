@@ -16,7 +16,8 @@ from autoscraper.workflow.validation import (
     validate_data,
     validate_spec,
 )
-from autoscraper.workflow.runner import explicit_requirements, extract_requirements, run_task
+from autoscraper.workflow.requirements import explicit_requirements, extract_requirements
+from autoscraper.workflow.runner import run_task
 
 
 URL = "https://fixture.test/"
@@ -511,7 +512,7 @@ def test_issue_regression_cli_does_not_save_partial_spec(
 def test_failed_cli_preserves_existing_files(monkeypatch, tmp_path, status, exit_code):
     import autoscraper.cli.agent as cli
     from autoscraper.workflow.validation import Feedback
-    from autoscraper.workflow.runner import TaskOutcome
+    from autoscraper.workflow.outcome import TaskOutcome
 
     paths = [tmp_path / "rule.json", tmp_path / "data.json", tmp_path / "data.csv"]
     for path in paths:
@@ -826,7 +827,7 @@ def test_timeout_cli_keeps_candidate_without_overwriting_outputs(
 ):
     import autoscraper.cli.agent as cli
     from autoscraper.workflow.validation import Feedback
-    from autoscraper.workflow.runner import TaskOutcome
+    from autoscraper.workflow.outcome import TaskOutcome
 
     spec_path = tmp_path / "rule.json"
     data_path = tmp_path / "data.json"
@@ -918,7 +919,7 @@ def test_validation_inherits_rule_navigation_timeout(candidate, settings, workfl
 )
 def test_agent_cli_navigation_timeout_is_optional(monkeypatch, tmp_path, flags, expected):
     import autoscraper.cli.agent as cli
-    from autoscraper.workflow.runner import TaskOutcome
+    from autoscraper.workflow.outcome import TaskOutcome
 
     seen = []
     monkeypatch.setenv("AUTOSCRAPER_API_KEY", "fake")

@@ -240,6 +240,8 @@ src/autoscraper/
 │   └── export.py
 ├── workflow/       # 任务编排与独立验证
 │   ├── runner.py
+│   ├── requirements.py
+│   ├── outcome.py
 │   └── validation.py
 ├── cli/            # 两个命令行入口
 │   ├── scraper.py

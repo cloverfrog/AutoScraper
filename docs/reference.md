@@ -14,7 +14,7 @@ agent/explorer.py → scraping/spec.py → scraping/executor.py → records → 
 - `examples/books.json` 是手写规则；`tests/scraping/test_scraper.py` 用 Playwright 路由提供离线 HTML，并提供可选线上测试。
 - `agent/explorer.py` 编排探索、超时、输出解析和规则保存；`agent/tools.py` 使用 browser-use 扩展接口提供 DOM 检查与选择器测试；`cli/agent.py` 提供独立入口。Agent 不导入 Executor，CLI 通过工作流协调探索与执行。
 - `agent/dom.py` 保存工具与等待器共用的固定页面脚本；`agent/waiting.py` 负责 CSS 等待和语义就绪判断；`agent/llm.py` 创建模型并维护调用预算。工具注册不负责创建模型，等待器也不重置任务级预算。
-- `workflow/validation.py` 定义独立需求约束、反馈及确定性规则/数据检查；`workflow/runner.py` 负责需求解析、试跑现有 Executor、反馈修复和最终任务状态。只有工作流验证通过，CLI 才写规则和数据。`generate_spec` 是候选规则生成接口，本身不承诺任务已完成。
+- `workflow/requirements.py` 独立解析用户的字段和数量约束；`workflow/validation.py` 定义约束模型、反馈及确定性规则/数据检查；`workflow/outcome.py` 保存任务结果并生成 CLI/追踪共用的摘要；`workflow/runner.py` 负责预算、阶段编排和反馈修复。只有工作流验证通过，CLI 才写规则和数据。`generate_spec` 是候选规则生成接口，本身不承诺任务已完成。
 - `observability/tracing.py` 统一处理事件、模型/工具指标、框架日志和执行追踪文件。
 - 应用内 `ChatOpenAIResponses` 与 browser-use `ChatOpenAI` 同级，通过 OpenAI-compatible Responses API 提交完整消息，并用 `text.format=json_schema` 校验每一步 `AgentOutput`。`LimitedChatOpenAI` 仅继承它并增加付费调用预算；DeepSeek 的模型、Base URL和非思考模式都由构造参数传入，不存在 DeepSeek 专属 provider 类。browser-use 同时使用精简的 flash prompt/schema，避免 `deepseek-flash` 输出内部 DSML 工具语法。
 

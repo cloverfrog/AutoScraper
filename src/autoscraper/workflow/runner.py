@@ -4,11 +4,8 @@
 """Bounded generate -> validate -> feedback -> repair workflow for the Agent CLI."""
 
 import asyncio
-import json
 import os
-import re
 import time
-from dataclasses import dataclass, field
 from contextlib import nullcontext
 
 from playwright.sync_api import Error as PlaywrightError
@@ -29,13 +26,12 @@ from autoscraper.scraping.executor import (
     ContentTimeout,
     NavigationError,
     ScrapeError,
-    ScrapeResult,
     ScraperExecutor,
 )
-from autoscraper.scraping.spec import ScraperSpec
+from .outcome import TaskOutcome
+from .requirements import extract_requirements
 from .validation import (
     Feedback,
-    TaskRequirements,
     ValidationSettings,
     build_preview_spec,
     validate_execution_data,
@@ -43,123 +39,6 @@ from .validation import (
     validate_spec,
 )
 from autoscraper.observability.tracing import Trace, emit, labels, operation, traced_task
-
-
-# 任务全过程的结果容器：状态、候选规则、数据、反馈、预算使用和澄清记录。
-# spec 可能是在执行失败后保留的候选，是否完成任务应结合 status 和 sample_only 判断。
-@dataclass
-class TaskOutcome:
-    # status 是任务终态；spec/data 可以保留失败现场，不能仅凭它们存在判断成功。
-    status: str
-    requirements: TaskRequirements | None = None
-    spec: ScraperSpec | None = None
-    data: ScrapeResult | None = None
-    feedback: list[Feedback] = field(default_factory=list)
-    attempts: int = 0
-    llm_calls: int = 0
-    wait_llm_calls: int = 0
-    sample_only: bool = False
-    failure_stage: str | None = None
-    # history 记录各轮验证反馈；clarifications 是跨修复轮次共享的用户问答。
-    history: list[dict] = field(default_factory=list)
-    original_url: str | None = None
-    clarifications: list[dict] = field(default_factory=list)
-    pending_clarification: dict | None = None
-
-    # 生成 CLI/追踪共用的 JSON 摘要；区分 Agent 返回、实际执行和任务是否完成。
-    # spec_valid 目前仅表示已得到协议模型，不能单凭它判断需求和数据验证是否通过。
-    def summary(self) -> dict:
-        return {
-            "status": self.status,
-            "agent_status": "completed"
-            if self.spec is not None or self.status == "unsupported"
-            else "not_completed",
-            "failure_stage": self.failure_stage,
-            "spec_valid": self.spec is not None,
-            "execution_success": self.data is not None
-            and not self.data.errors
-            and self.data.stop_reason != "detail_limit",
-            "task_fulfilled": self.status in {"success", "validated"} and not self.sample_only,
-            "fulfillment_basis": "clarified_task" if self.clarifications else "original_task",
-            "sample_only": self.sample_only,
-            "requirements": self.requirements.model_dump() if self.requirements else None,
-            "attempts": self.attempts,
-            "llm_calls": self.llm_calls,
-            "wait_llm_calls": self.wait_llm_calls,
-            "items": len(self.data.records) if self.data else 0,
-            "pages": self.data.pages_visited if self.data else 0,
-            "detail_pages": self.data.detail_pages_visited if self.data else 0,
-            "stop_reason": self.data.stop_reason if self.data else None,
-            "feedback": [item.model_dump() for item in self.feedback],
-            "validation_history": self.history,
-            "original_url": self.original_url,
-            "actual_start_url": str(self.spec.start_url) if self.spec else None,
-            "clarifications": self.clarifications,
-            "pending_clarification": self.pending_clarification,
-            "validation_scope": "protocol, required fields, count and extraction; "
-            "source equivalence and semantic constraints are not independently verified",
-        }
-
-
-# 从有限的中英文表达中保留明确字段名与数量；显式参数优先于文本推断。
-def explicit_requirements(task: str, fields: list[str] | None, count: int | None):
-    """Preserve explicitly named identifiers independently of generated rules."""
-    match = re.search(
-        r"(?:字段名(?:称)?\s*(?:为|是|[:：])|fields?\s+(?:named|names?\s*[:：]))\s*"
-        r"([A-Za-z_][A-Za-z0-9_]*(?:(?:\s*[,，、]\s*(?:and\s+)?|\s+and\s+|\s*[和及]\s*)"
-        r"[A-Za-z_][A-Za-z0-9_]*)*)",
-        task,
-        re.IGNORECASE,
-    )
-    if fields is None and match:
-        fields = re.split(
-            r"\s*[,，、]\s*(?:and\s+)?|\s+and\s+|\s*[和及]\s*", match.group(1), flags=re.IGNORECASE
-        )
-    if count is None:
-        number = re.search(
-            r"(?:前|first\s+)\s*(\d+)|"
-            r"(\d+)\s*(?:本|条|个|books?\b|records?\b|items?\b)",
-            task,
-            re.IGNORECASE,
-        )
-        if number:
-            count = int(number.group(1) or number.group(2))
-    return fields, count
-
-
-# 先解析确定的字段/数量，只把缺失部分交给模型；不向它提供生成后的规则。
-# 模型返回后再次应用显式值并校验，防止生成规则反过来缩减用户原始需求。
-async def extract_requirements(task: str, llm, fields=None, count=None) -> TaskRequirements:
-    fields, count = explicit_requirements(task, fields, count)
-    if fields is not None and count is not None:
-        return TaskRequirements(fields=fields, count=count)
-    from browser_use.llm.messages import SystemMessage, UserMessage
-
-    response = await llm.ainvoke(
-        [
-            SystemMessage(
-                content="Extract the user's required field names and requested record count. "
-                "Do not see or use any generated scraping rule. Preserve exact field names "
-                "when given; otherwise choose short descriptive names. Count=null if absent. "
-                "All requested fields are mandatory. Only mark unsupported_capabilities when "
-                "the user EXPLICITLY requires JS-only pagination, infinite scroll or login. "
-                "One level of detail-page extraction is supported. "
-                "Do not mark detail-page crawling as unsupported."
-            ),
-            UserMessage(content=json.dumps({"task": task}, ensure_ascii=False)),
-        ],
-        output_format=TaskRequirements,
-    )
-    result = TaskRequirements.model_validate(response.completion)
-    if count is not None or fields is not None:
-        result = result.model_copy(
-            update={
-                "count": count if count is not None else result.count,
-                "fields": fields if fields is not None else result.fields,
-            }
-        )
-        result = TaskRequirements.model_validate(result.model_dump())
-    return result
 
 
 # 同步任务入口：在有限预算内完成需求解析、探索、验证和可选完整抓取。

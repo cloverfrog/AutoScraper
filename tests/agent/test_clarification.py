@@ -342,7 +342,7 @@ def test_workflow_shares_answers_budget_and_waiting_time(monkeypatch, mode):
 @pytest.mark.parametrize("non_interactive", [False, True])
 def test_cli_pending_preserves_existing_outputs(monkeypatch, capsys, tmp_path, non_interactive):
     import autoscraper.cli.agent as cli
-    from autoscraper.workflow.runner import TaskOutcome
+    from autoscraper.workflow.outcome import TaskOutcome
 
     rule = tmp_path / "rule.json"
     data = tmp_path / "data.json"

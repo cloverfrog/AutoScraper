@@ -91,7 +91,7 @@ LLM `source`。同一调用的 started / finished 事件使用相同 `call_id`�
 
 ## 汇总与指标
 
-`summary.json.outcome` 来自原有 `TaskOutcome.summary()`，经过同一隐私处理，不建立
+`summary.json.outcome` 来自 `workflow/outcome.py` 的 `TaskOutcome.summary()`，经过同一隐私处理，不建立
 第二套业务状态判断；`metadata` 保存原始入口 URL、任务需求和模型（受长度限制及明确凭据替换规则约束）。`termination`
 表示追踪上下文正常返回、异常或中断；CLI 的 `exit_code` 单独保存。规则/数据落盘失败
 时保留工作流原结果，通过 `artifacts.finished` / `cli.failed` 和退出码表达产物失败。

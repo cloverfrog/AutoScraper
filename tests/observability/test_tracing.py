@@ -15,7 +15,8 @@ from autoscraper.agent.clarification import ClarificationRequest, ClarificationS
 from autoscraper.scraping.executor import ScrapeResult, ScraperExecutor
 from autoscraper.scraping.spec import ScraperSpec
 from autoscraper.observability.tracing import FileSink, Trace, current_trace, emit, labels, operation
-from autoscraper.workflow.runner import TaskOutcome, run_task
+from autoscraper.workflow.outcome import TaskOutcome
+from autoscraper.workflow.runner import run_task
 
 
 # 将事件、History 和汇总收集到内存，便于断言输出结构与关联关系。
