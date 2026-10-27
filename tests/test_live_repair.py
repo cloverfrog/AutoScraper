@@ -1,3 +1,5 @@
+# 可选付费修复验收：对真实网站和 DeepSeek 制造一次选择器失败，验证实际修复闭环。
+# 默认不运行，只有显式设置 RUN_LIVE_REPAIR 才会调用真实模型。
 """Opt-in paid DeepSeek repair test against Books to Scrape, without LLM mocks."""
 
 import json
@@ -11,6 +13,7 @@ from autoscraper.validation import ValidationSettings, validate_data, validate_s
 from autoscraper.workflow import run_task
 
 
+# 保留真实生成器、模型和执行器，确认反馈可驱动后续规则修复并完成抓取。
 @pytest.mark.llm
 @pytest.mark.skipif(
     os.getenv("RUN_LIVE_REPAIR") != "1",

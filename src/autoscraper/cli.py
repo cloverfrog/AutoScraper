@@ -1,3 +1,6 @@
+# 已有规则的命令行入口：autoscraper <规则.json> --output <数据文件>。
+# 负责参数和路径检查、执行规则、导出数据及返回退出码，不生成规则，也不调用模型。
+# 退出码：0 正常结束；2 有单条错误或详情预算耗尽；1 输入、文件或执行异常。
 import argparse
 import json
 import sys
@@ -11,6 +14,7 @@ from .export import export_records
 from .spec import ScraperSpec
 
 
+# 校验输入与输出路径，应用可选超时覆盖，执行并导出；异常转换为 JSON 诊断和退出码。
 def main() -> int:
     parser = argparse.ArgumentParser(description="Execute a declarative ScraperSpec")
     parser.add_argument("spec", type=Path)

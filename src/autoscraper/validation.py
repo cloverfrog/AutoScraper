@@ -1,3 +1,6 @@
+# 独立校验与验证策略：保存用户的字段/数量约束，检查候选规则及真实提取结果。
+# 试抓取预算、完整执行的完成条件和错误是否可修复都在这里判断，不依赖 LLM。
+# 这里只能验证协议、字段、数量和提取结果，不能证明数据来源或自然语言语义完全等价。
 """Task constraints and deterministic validation, independent of any LLM provider."""
 
 from __future__ import annotations
@@ -12,6 +15,7 @@ if TYPE_CHECKING:
     from .executor import ScrapeResult
 
 
+# 独立于生成规则的用户约束：必需字段、目标数量和明确要求的不支持能力。
 class TaskRequirements(ProtocolModel):
     fields: list[NonEmpty] = Field(min_length=1, max_length=50)
     count: int | None = Field(default=None, ge=1, le=1_000_000)
@@ -19,6 +23,7 @@ class TaskRequirements(ProtocolModel):
         Field(default_factory=list)
     )
 
+    # 拒绝空白或重复字段名，保证后续逐字段校验有确定含义。
     @field_validator("fields")
     @classmethod
     def unique_fields(cls, values):
@@ -27,6 +32,7 @@ class TaskRequirements(ProtocolModel):
         return values
 
 
+# 提供给调用方和下一轮 Agent 的结构化反馈；recoverable 表示是否值得修复规则。
 class Feedback(ProtocolModel):
     code: Literal[
         "missing_required_field",
@@ -50,6 +56,7 @@ class Feedback(ProtocolModel):
     recoverable: bool = True
 
 
+# report_unsupported 工具的独立输出类型，不与候选 ScraperSpec 混用。
 class UnsupportedResult(ProtocolModel):
     """Result of the explicit report_unsupported tool, not a partial ScraperSpec."""
 
@@ -58,6 +65,7 @@ class UnsupportedResult(ProtocolModel):
     unsupported_fields: list[str] = Field(default_factory=list)
 
 
+# 试抓取的记录/列表页/详情页预算，以及最多允许多少轮规则修复。
 class ValidationSettings(ProtocolModel):
     max_repairs: int = Field(default=2, ge=0, le=3)
     max_items: int = Field(default=100, ge=1, le=1000)
@@ -66,6 +74,8 @@ class ValidationSettings(ProtocolModel):
     timeout_ms: int | None = Field(default=None, ge=1, le=30000)
 
 
+# 根据验证预算缩小规则副本的执行范围，保持原候选可用于后续完整抓取。
+# 仅可缩短普通操作超时；独立的 content_timeout_ms 仍使用用户选择的内容等待上限。
 def build_preview_spec(spec: ScraperSpec, policy: ValidationSettings) -> ScraperSpec:
     """构造受验证预算约束的副本，保留原规则供完整执行和后续修复使用。"""
     preview = spec.model_copy(
@@ -90,6 +100,7 @@ def build_preview_spec(spec: ScraperSpec, policy: ValidationSettings) -> Scraper
     return preview
 
 
+# 执行前比较候选规则与独立需求：必需字段、目标数量和 Agent 允许的执行上限。
 def validate_spec(spec: ScraperSpec, requirements: TaskRequirements) -> list[Feedback]:
     issues = []
     missing = [
@@ -119,6 +130,8 @@ def validate_spec(spec: ScraperSpec, requirements: TaskRequirements) -> list[Fee
     return issues
 
 
+# 结合原规则和试抓取范围判断反馈与完成情况；返回 (反馈列表, 是否完整)。
+# execute=True 时，单纯验证页数截断可交由后续完整执行继续处理。
 def validate_preview_data(
     result: ScrapeResult,
     requirements: TaskRequirements,
@@ -148,6 +161,7 @@ def validate_preview_data(
     return issues, complete
 
 
+# 检查完整抓取结果；达到列表或详情预算不能作为任务完成的依据。
 def validate_execution_data(
     result: ScrapeResult, requirements: TaskRequirements
 ) -> tuple[list[Feedback], bool]:
@@ -165,6 +179,8 @@ def validate_execution_data(
     return issues, complete
 
 
+# 统一检查运行错误、空结果、必需值、分页循环及数量不足。
+# expected_count 可为试抓取设置较小目标；返回空列表只表示这些确定性检查通过。
 def validate_data(
     result: ScrapeResult, requirements: TaskRequirements, *, expected_count: int | None = None
 ) -> list[Feedback]:
@@ -186,13 +202,13 @@ def validate_data(
                 recoverable=error.code == "selector_failure",
             )
         )
-    # Keep compatibility with callers that only supply the original string errors.
+    # 兼容只返回 errors 文本的旧调用方；已有结构化描述的同一错误不重复转换。
     described = {error.message for error in result.error_details}
     remaining_errors = [message for message in result.errors if message not in described]
     if remaining_errors:
         issues.append(Feedback(code="selector_failure", message="; ".join(remaining_errors)[:2000]))
     if any(not item.recoverable for item in issues):
-        # Missing rows after a timeout, navigation failure or budget limit do not justify repair.
+        # 超时、导航失败或预算截断后的记录不足，不足以说明规则需要修复。
         return issues
     if not result.records:
         issues.append(Feedback(code="empty_extraction", message="No records were extracted"))

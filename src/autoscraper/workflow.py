@@ -1,3 +1,6 @@
+# 任务主流程：独立解析需求 → 生成候选规则 → 校验/试抓取 → 必要时完整执行。
+# 可修复的规则错误连同上轮候选反馈给 Agent；超时、导航失败和预算耗尽不会触发无效修复。
+# 需求解析与所有修复共享主模型调用上限，语义等待另有预算，最终统一输出 TaskOutcome。
 """Bounded generate -> validate -> feedback -> repair workflow for the Agent CLI."""
 
 import asyncio
@@ -26,8 +29,11 @@ from .validation import (
 from .tracing import Trace, emit, labels, operation, traced_task
 
 
+# 任务全过程的结果容器：状态、候选规则、数据、反馈、预算使用和澄清记录。
+# spec 可能是在执行失败后保留的候选，是否完成任务应结合 status 和 sample_only 判断。
 @dataclass
 class TaskOutcome:
+    # status 是任务终态；spec/data 可以保留失败现场，不能仅凭它们存在判断成功。
     status: str
     requirements: TaskRequirements | None = None
     spec: ScraperSpec | None = None
@@ -38,11 +44,14 @@ class TaskOutcome:
     wait_llm_calls: int = 0
     sample_only: bool = False
     failure_stage: str | None = None
+    # history 记录各轮验证反馈；clarifications 是跨修复轮次共享的用户问答。
     history: list[dict] = field(default_factory=list)
     original_url: str | None = None
     clarifications: list[dict] = field(default_factory=list)
     pending_clarification: dict | None = None
 
+    # 生成 CLI/追踪共用的 JSON 摘要；区分 Agent 返回、实际执行和任务是否完成。
+    # spec_valid 目前仅表示已得到协议模型，不能单凭它判断需求和数据验证是否通过。
     def summary(self) -> dict:
         return {
             "status": self.status,
@@ -76,6 +85,7 @@ class TaskOutcome:
         }
 
 
+# 从有限的中英文表达中保留明确字段名与数量；显式参数优先于文本推断。
 def explicit_requirements(task: str, fields: list[str] | None, count: int | None):
     """Preserve explicitly named identifiers independently of generated rules."""
     match = re.search(
@@ -101,6 +111,8 @@ def explicit_requirements(task: str, fields: list[str] | None, count: int | None
     return fields, count
 
 
+# 先解析确定的字段/数量，只把缺失部分交给模型；不向它提供生成后的规则。
+# 模型返回后再次应用显式值并校验，防止生成规则反过来缩减用户原始需求。
 async def extract_requirements(task: str, llm, fields=None, count=None) -> TaskRequirements:
     fields, count = explicit_requirements(task, fields, count)
     if fields is not None and count is not None:
@@ -134,6 +146,9 @@ async def extract_requirements(task: str, llm, fields=None, count=None) -> TaskR
     return result
 
 
+# 同步任务入口：在有限预算内完成需求解析、探索、验证和可选完整抓取。
+# execute=False 也会试抓取，但可返回 sample_only；execute=True 需要完整数据验证通过。
+# ask_user 注入交互方式；trace 由装饰器管理，函数最终返回 TaskOutcome 而不写产物文件。
 @traced_task
 def run_task(
     url: str,
@@ -153,9 +168,9 @@ def run_task(
     os.environ.setdefault("BROWSER_USE_CLOUD_SYNC", "false")
     from .agent_tools import make_llm, make_wait_llm
 
-    build_task(url, task)  # Validate input before paying for requirement extraction.
+    build_task(url, task)  # 在付费解析需求之前先验证任务输入。
     policy = validation or ValidationSettings()
-    llm = make_llm(settings)  # One paid-call budget shared by extraction and every repair.
+    llm = make_llm(settings)  # 独立需求解析和每轮修复共享同一付费调用预算。
     wait_llm = make_wait_llm(settings)
     deadline = time.monotonic() + settings.timeout_seconds
     clarification = ClarificationSession(handler=ask_user)
@@ -163,12 +178,14 @@ def run_task(
         status="unfulfilled", original_url=url, clarifications=clarification.history
     )
 
+    # 计算共享剩余时长并检查主模型调用预算；人工问答等待加回截止时间。
     def remaining():
         seconds = deadline + clarification.waiting_seconds - time.monotonic()
         if seconds <= 0 or llm.calls >= settings.max_steps:
             raise AgentError("Shared time or LLM call budget exhausted")
         return seconds
 
+    # 为独立需求解析套用追踪和剩余时间限制，调用量计入共享主模型预算。
     async def requirements_call():
         with labels(source="requirements"), operation("requirements") as details:
             async with asyncio.timeout(remaining()):
@@ -176,6 +193,7 @@ def run_task(
                 details.update(result.model_dump())
                 return result
 
+    # 先建立独立需求基准，后续生成和修复都必须满足它，不能用候选规则反推需求。
     try:
         try:
             outcome.requirements = asyncio.run(requirements_call())
@@ -198,6 +216,7 @@ def run_task(
                 )
             ]
             return outcome
+        # 首次生成也算一次尝试，因此总尝试数为 max_repairs + 1。
         previous_spec = None
         for attempt in range(policy.max_repairs + 1):
             with (labels(attempt=attempt + 1), operation("attempt"),
@@ -210,6 +229,7 @@ def run_task(
                 candidate = None
                 result = None
                 try:
+                    # 复用模型实例，并把剩余步骤/时间交给这一轮；修复不会重置总预算。
                     run_settings = settings.model_copy(
                         update={
                             "max_steps": settings.max_steps - llm.calls,
@@ -237,6 +257,7 @@ def run_task(
                         issues = validate_spec(candidate, requirements)
                         validation_details["feedback"] = [item.model_dump() for item in issues]
                     if not issues:
+                        # 先用较小预算验证提取；只有样本无错误且尚未抓完时才完整执行。
                         preview = build_preview_spec(candidate, policy)
                         stage = "validation"
                         with operation("validation_extraction"):
@@ -273,9 +294,11 @@ def run_task(
                     )
                     return outcome
                 except (NavigationError, ContentTimeout) as exc:
+                    # 环境/等待失败不证明规则错误，保留候选供排查但停止修复。
                     issues = [Feedback(code=exc.code, message=str(exc), recoverable=False)]
                     outcome.spec, outcome.data = candidate, None
                 except (ScrapeError, PlaywrightError) as exc:
+                    # 剩余执行错误按可修复的选择器问题反馈，交由下一轮探索核对 DOM。
                     issues = [Feedback(code="selector_failure", message=str(exc)[:2000])]
                     outcome.spec, outcome.data = candidate, None
                 except InvalidSpecError as exc:
@@ -300,6 +323,7 @@ def run_task(
                     return outcome
                 if any(not item.recoverable for item in issues):
                     break
+                # 传回失败规则与具体反馈，让下一轮围绕已知问题修复而非从零猜测。
                 previous_spec = candidate
         return outcome
     except (AgentError, TimeoutError) as exc:

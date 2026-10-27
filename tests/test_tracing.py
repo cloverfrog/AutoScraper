@@ -1,3 +1,5 @@
+# 生产追踪契约测试：覆盖事件顺序、凭据替换、大小限制、统计和错误隔离。
+# 也验证并发上下文、框架日志、CLI 结果及 Agent 异常收尾，避免追踪改变业务行为。
 """Tracing contracts, failure isolation and privacy without paid LLM calls."""
 
 import asyncio
@@ -16,6 +18,7 @@ from autoscraper.tracing import FileSink, Trace, current_trace, emit, labels, op
 from autoscraper.workflow import TaskOutcome, run_task
 
 
+# 将事件、History 和汇总收集到内存，便于断言输出结构与关联关系。
 class MemorySink:
     def __init__(self):
         self.events = []
@@ -32,6 +35,7 @@ class MemorySink:
         self.summary_data = data
 
 
+# 为追踪测试提供固定模型配置和可识别的测试密钥。
 @pytest.fixture
 def settings():
     return AgentSettings(
@@ -39,6 +43,7 @@ def settings():
     )
 
 
+# 提供一份最小合法规则，用于工作流和 CLI 的模拟结果。
 @pytest.fixture
 def spec():
     return ScraperSpec.model_validate(
@@ -51,6 +56,7 @@ def spec():
     )
 
 
+# 检查流式事件、明确凭据替换、最终指标和业务汇总。
 def test_streaming_privacy_and_summary(tmp_path):
     sink = FileSink(tmp_path)
     trace = Trace(sink, secrets=("PRIVATE_API_KEY",))
@@ -109,6 +115,7 @@ def test_streaming_privacy_and_summary(tmp_path):
     assert current_trace() is None
 
 
+# 一个消费者写入失败不能中断任务或其他消费者。
 @pytest.mark.parametrize("failure", ["start", "event", "history", "summary"])
 def test_consumer_failure_does_not_change_task_or_other_consumers(failure, capsys):
     class Broken:
@@ -133,6 +140,7 @@ def test_consumer_failure_does_not_change_task_or_other_consumers(failure, capsy
     assert "PRIVATE_DISK_ERROR" not in stderr
 
 
+# 事件达到空间上限时仍保留汇总空间，并限制单条事件大小。
 def test_size_limit_reserves_summary_and_bounds_events(tmp_path, capsys):
     sink = FileSink(tmp_path, max_bytes=70000)
     trace = Trace(sink)
@@ -144,6 +152,7 @@ def test_size_limit_reserves_summary_and_bounds_events(tmp_path, capsys):
     assert capsys.readouterr().err.count("trace consumer failed") == 1
 
 
+# 异常和中断应留下已发生事件，同时保留原始异常语义。
 @pytest.mark.parametrize(
     "error", [RuntimeError("PRIVATE_ERROR"), KeyboardInterrupt(), asyncio.CancelledError()]
 )
@@ -171,6 +180,7 @@ def test_exception_and_interruption_preserve_events_and_original_error(error, tm
         assert "test_exception_and_interruption" in finished["payload"]["traceback"]
 
 
+# 并发任务的标签、事件和框架日志不得互相混入。
 def test_concurrent_runs_and_logging_are_isolated():
     memories = [MemorySink(), MemorySink()]
 
@@ -195,6 +205,7 @@ def test_concurrent_runs_and_logging_are_isolated():
     assert memories[0].events[0]["run_id"] != memories[1].events[0]["run_id"]
 
 
+# 检查模型来源与 token 统计，即使解析输出失败也保留已发生用量。
 @pytest.mark.parametrize("source", ["requirements", "main", "wait"])
 @pytest.mark.parametrize("invalid", [False, True])
 def test_llm_usage_sources_and_parse_failure(monkeypatch, source, invalid):
@@ -242,6 +253,7 @@ def test_llm_usage_sources_and_parse_failure(monkeypatch, source, invalid):
     assert memory.events[-2]["event_type"] == "llm.finished"
 
 
+# 多轮修复、候选和反馈必须关联同一个追踪运行。
 def test_workflow_repair_and_feedback_share_run(monkeypatch, settings, spec):
     pytest.importorskip("browser_use")
     import autoscraper.workflow as workflow
@@ -282,6 +294,7 @@ def test_workflow_repair_and_feedback_share_run(monkeypatch, settings, spec):
     assert memory.summary_data["outcome"]["requirements"]["fields"] == ["title"]
 
 
+# 追踪澄清时保留当前尝试轮次和可读用户回答。
 def test_clarification_keeps_attempt_and_readable_answer():
     memory = MemorySink()
     session = ClarificationSession(handler=lambda request: "PRIVATE_ANSWER")
@@ -294,6 +307,7 @@ def test_clarification_keeps_attempt_and_readable_answer():
     assert event["payload"]["answer"] == "PRIVATE_ANSWER"
 
 
+# CLI JSON、退出码和追踪汇总应描述相同的业务结果。
 @pytest.mark.parametrize(
     "status,code",
     [
@@ -331,6 +345,7 @@ def test_cli_json_exit_codes_and_trace_summary(monkeypatch, tmp_path, capsys, sp
     assert "PRIVATE_API_KEY" not in json.dumps(persisted)
 
 
+# 保存产物失败时，追踪仍应保留此前完成的工作流结果。
 def test_cli_artifact_error_preserves_workflow_result(monkeypatch, tmp_path, spec, capsys):
     import autoscraper.agent_cli as cli
 
@@ -359,6 +374,7 @@ def test_cli_artifact_error_preserves_workflow_result(monkeypatch, tmp_path, spe
     assert "artifacts.finished" in events and "cli.failed" in events
 
 
+# 日志写入失败不应把成功任务改成失败。
 def test_cli_logging_failure_does_not_change_success(monkeypatch, tmp_path, spec, capsys):
     import autoscraper.agent_cli as cli
 
@@ -386,6 +402,7 @@ def test_cli_logging_failure_does_not_change_success(monkeypatch, tmp_path, spec
     assert captured.err.count("trace consumer failed") == 1
 
 
+# 通过真实工具分发验证返回值、工具错误和取消事件。
 @pytest.mark.parametrize("mode", ["return_error", "raise", "timeout", "cancel"])
 def test_actual_traced_tools_record_result_errors_and_cancellation(mode):
     pytest.importorskip("browser_use")
@@ -427,6 +444,7 @@ def test_actual_traced_tools_record_result_errors_and_cancellation(mode):
         assert "PRIVATE_ERROR" in end["payload"]["error"]
 
 
+# 模型未报告 token 用量时应明确为空，不能误记为零。
 @pytest.mark.parametrize("usage", [None, "request_failure"])
 def test_missing_usage_is_explicit(monkeypatch, usage):
     pytest.importorskip("browser_use")
@@ -458,6 +476,7 @@ def test_missing_usage_is_explicit(monkeypatch, usage):
         assert "PRIVATE_PROVIDER_ERROR" in end["payload"]["message"]
 
 
+# 框架未触发步骤结束回调时，外层清理仍需关闭追踪跨度。
 def test_step_without_end_callback_is_closed_by_outer_cleanup():
     pytest.importorskip("browser_use")
     from autoscraper.tracing import StepObserver
@@ -498,6 +517,7 @@ def test_step_without_end_callback_is_closed_by_outer_cleanup():
     assert "step" not in next(e for e in memory.events if e["event_type"] == "after.cleanup")
 
 
+# 异常 Unicode 和递归结构不能破坏日志序列化或拖垮记录器。
 def test_unusual_unicode_and_cyclic_payload_do_not_break_recording(tmp_path):
     sink = FileSink(tmp_path)
     circular = {"selector": "div\ud800", "count": float("nan")}
@@ -511,6 +531,7 @@ def test_unusual_unicode_and_cyclic_payload_do_not_break_recording(tmp_path):
     assert not json.loads((sink.directory / "summary.json").read_text())["trace_errors"]
 
 
+# 开启追踪后，成功、失败、预算和不支持等终态保持原有业务语义。
 @pytest.mark.parametrize(
     "kind,status,code",
     [
@@ -563,6 +584,7 @@ def test_workflow_terminal_paths_preserve_original_semantics(
     assert any(event["event_type"] == "attempt.finished" for event in memory.events)
 
 
+# 在全新进程中检查日志初始化，避免追踪抢先阻断框架终端日志。
 @pytest.mark.parametrize("preconfigured", [False, True])
 def test_fresh_process_keeps_terminal_logging_and_captures_framework_logs(tmp_path, preconfigured):
     """pytest's root handlers otherwise hide browser-use's first-import guard."""
@@ -625,6 +647,7 @@ print(json.dumps({"status": "validated"}))
     assert result.stderr.count("FRAMEWORK_WARNING") == 1
 
 
+# 默认追踪保留有用诊断，只替换明确凭据，不泛化删除普通文本。
 def test_default_policy_preserves_url_selectors_text_and_noncredential_headers():
     from autoscraper.tracing import Sanitizer
 
@@ -656,6 +679,7 @@ def test_default_policy_preserves_url_selectors_text_and_noncredential_headers()
     assert result["api_key"] == "[redacted]"
 
 
+# 工具反馈应保留可读证据，同时不持久化完整 DOM。
 def test_tool_feedback_keeps_evidence_without_persisting_entire_dom():
     from autoscraper.tracing import summarize_tool_output
 
@@ -687,6 +711,7 @@ def test_tool_feedback_keeps_evidence_without_persisting_entire_dom():
     assert summarize_tool_output(json.dumps(selector)) == selector
 
 
+# 模型自报评价在存在时保留，缺失时不编造内容。
 def test_model_assessments_remain_readable_and_optional():
     from autoscraper.tracing import StepObserver
 
@@ -712,6 +737,7 @@ def test_model_assessments_remain_readable_and_optional():
     assert planned[1]["assessment"] == {}
 
 
+# 框架异常保留诊断和堆栈，同时替换已知密钥。
 def test_framework_exception_keeps_message_and_stack_without_known_key():
     memory = MemorySink()
     with Trace(memory, secrets=("KNOWN_KEY",)).run():
@@ -726,6 +752,7 @@ def test_framework_exception_keeps_message_and_stack_without_known_key():
     assert "KNOWN_KEY" not in json.dumps(event)
 
 
+# 运行目录按开始时间可排序，同时用 run_id 区分同时启动的任务。
 def test_run_directories_sort_by_time_and_still_distinguish_simultaneous_runs(tmp_path, monkeypatch):
     from datetime import datetime, timedelta, timezone
     import autoscraper.tracing as tracing

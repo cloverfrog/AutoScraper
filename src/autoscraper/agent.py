@@ -1,3 +1,6 @@
+# 浏览器探索与规则生成：将用户需求、验证反馈和澄清历史交给 browser-use Agent。
+# 本模块负责探索浏览器的生命周期，只返回候选 ScraperSpec；独立验证由 workflow.py 编排。
+# 人工澄清在动作批次结束后进行，保留当前浏览器和探索历史，并从探索超时中扣除等待时间。
 """Single browser-use explorer. The JSON protocol is its only executor boundary."""
 
 import asyncio
@@ -14,35 +17,46 @@ from .spec import ScraperSpec
 from .validation import Feedback, TaskRequirements, UnsupportedResult
 
 
+# 探索层统一异常，表示 Agent 无法在能力或预算范围内生成候选规则。
 class AgentError(RuntimeError):
     pass
 
 
+# 模型最终输出无法解析成合法抓取协议；工作流可尝试让 Agent 修复。
 class InvalidSpecError(AgentError):
     pass
 
 
+# Agent 明确报告协议无法表达需求，携带原因和受影响字段。
 class UnsupportedTaskError(AgentError):
+    # 保留不能满足的字段，使工作流能输出机器可读的失败反馈。
     def __init__(self, reason: str, fields: list[str]):
         super().__init__(reason)
         self.fields = fields
 
 
+# Agent 运行配置：模型连接、探索上限、内容等待和浏览器选项。
+# max_steps 同时用于工作流主模型调用上限和单次 Agent 步数限制；等待模型单独计数。
 class AgentSettings(BaseModel):
     model: str
     base_url: HttpUrl
     api_key: SecretStr
+    # 主探索预算；需求解析和各轮修复由工作流共享同一个模型实例累计调用量。
     max_steps: int = Field(default=12, ge=1, le=50)
     timeout_seconds: int = Field(default=240, ge=1, le=900)
     llm_timeout_seconds: int = Field(default=45, ge=1, le=120)
     max_output_tokens: int = Field(default=3000, ge=256, le=8192)
     content_timeout_ms: int = Field(default=30_000, ge=1, le=120_000)
+    # 语义等待使用单独模型实例，不占用主模型调用次数，但仍受单次内容等待时限约束。
     max_wait_llm_calls: int = Field(default=8, ge=0, le=30)
     executable_path: str | None = None
     headless: bool = True
+    # 兼容旧 CLI 参数；当前 Responses 适配器始终使用 JSON Schema 输出结构化结果。
     structured_output: bool = False
 
 
+# 只接受纯 JSON 或单个 Markdown JSON 代码块，并按 ScraperSpec 严格校验。
+# 输出为空、过大或格式错误时抛 InvalidSpecError，不尝试从任意文本中拼凑规则。
 def parse_spec_output(output: str | None) -> ScraperSpec:
     """Accept a JSON object or a single fenced JSON block; never extract/execute code."""
     if not output or len(output) > 100_000:
@@ -57,8 +71,10 @@ def parse_spec_output(output: str | None) -> ScraperSpec:
         raise InvalidSpecError(f"Invalid ScraperSpec: {exc}") from exc
 
 
+# 先校验 URL 和需求长度，再组装探索提示词，说明工具边界、协议及完成标准。
+# 返回值是给模型的任务说明，不是可执行抓取代码。
 def build_task(url: str, task: str) -> str:
-    # URL validation happens before opening a browser or paying for an LLM request.
+    # 在启动浏览器或付费调用模型之前，先验证 URL。
     from pydantic import TypeAdapter
 
     url = str(TypeAdapter(HttpUrl).validate_python(url))
@@ -66,7 +82,7 @@ def build_task(url: str, task: str) -> str:
         raise AgentError("Task must not be empty")
     if len(task) > 8000:
         raise AgentError("Task must be at most 8000 characters")
-    # browser-use attaches the schema via output_model_schema; do not duplicate it here.
+    # browser-use 通过 output_model_schema 注入协议 Schema，提示词不再重复整份结构。
     return f"""Explore {url} and produce a reusable ScraperSpec.
 User request: {json.dumps(task, ensure_ascii=False)}
 
@@ -117,6 +133,9 @@ If requirements cannot fit the protocol, use report_unsupported when available, 
 failure; never submit a partial rule as success."""
 
 
+# 运行一轮探索/修复，返回尚待独立验证的候选规则。
+# llm、wait_llm 和 clarification 可由工作流复用，以共享预算及澄清历史。
+# 待澄清时暂停 Agent 动作，回答后在同一浏览器和历史上继续；退出时始终回收浏览器。
 async def generate_spec(
     url: str,
     task: str,
@@ -147,7 +166,7 @@ async def generate_spec(
             prompt += "\nRepair these validation failures and retest:\n" + json.dumps(
                 [item.model_dump() for item in feedback], ensure_ascii=False
             )
-    # Optional dependency: the standalone executor does not import browser-use.
+    # 延迟导入可选依赖，独立运行执行器时无需加载 browser-use。
     os.environ.setdefault("ANONYMIZED_TELEMETRY", "false")
     os.environ.setdefault("BROWSER_USE_CLOUD_SYNC", "false")
     try:
@@ -182,7 +201,7 @@ async def generate_spec(
             ),
             output_model_schema=ScraperSpec,
             use_vision=False,
-            # Keep the browser-use prompt and output schema compact and deterministic.
+            # 关闭额外规划、评判和思考字段，减少提示词及输出结构的复杂度。
             use_thinking=False,
             flash_mode=True,
             use_judge=False,
@@ -203,6 +222,7 @@ async def generate_spec(
         started = time.monotonic()
         initial_waiting = clarification.waiting_seconds
         while True:
+            # 会话可能继承上轮等待记录；只扣除本轮新增的人工等待时间。
             active_seconds = (
                 time.monotonic() - started - clarification.waiting_seconds + initial_waiting
             )
@@ -217,6 +237,7 @@ async def generate_spec(
                     if observer:
                         observer.finish(agent, interrupted=True)
             if clarification.pending is not None:
+                # ask_user 已终止动作批次；先在超时块外获取回答，再继续原 Agent。
                 clarification.answer_pending()
                 agent.add_new_task(
                     "Continue the original scraping task with this clarification."
@@ -224,6 +245,7 @@ async def generate_spec(
                 )
                 continue
             final = history.final_result()
+            # 不支持能力是独立终态，先识别它，再把普通成功结果按 ScraperSpec 解析。
             if requirements is not None and final:
                 try:
                     output = json.loads(final)
@@ -233,7 +255,7 @@ async def generate_spec(
                             unsupported.reason, unsupported.unsupported_fields
                         )
                 except (ValueError, TypeError):
-                    pass  # The usual ScraperSpec parser below reports invalid output.
+                    pass  # 非不支持结果交给下方常规协议解析器统一报告格式错误。
             if history.is_successful() is not True:
                 raise AgentError("Agent did not finish successfully within its limits")
             return parse_spec_output(final).model_copy(
@@ -242,10 +264,11 @@ async def generate_spec(
     except TimeoutError as exc:
         raise AgentError(f"Agent timed out after {settings.timeout_seconds}s") from exc
     finally:
-        # Cleanup also runs for cancellation, model failures and invalid final JSON.
+        # 取消、模型失败和最终 JSON 非法时，也必须回收探索浏览器。
         await asyncio.wait_for(browser.kill(), timeout=20)
 
 
+# 将已由调用方确认可保存的规则写为格式化 UTF-8 JSON，必要时创建父目录。
 def save_spec(spec: ScraperSpec, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(spec.model_dump_json(indent=2) + "\n", encoding="utf-8")

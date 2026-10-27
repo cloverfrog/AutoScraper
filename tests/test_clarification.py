@@ -1,3 +1,5 @@
+# 需求澄清测试：覆盖终端回答、无回答暂停、动作批次停止和原 Agent 继续执行。
+# 同时验证问答历史与预算共享、人工等待不占探索超时，以及待澄清时不覆盖产物。
 """Clarification pauses execution, preserves answers, and never assumes a default."""
 
 import asyncio
@@ -35,11 +37,13 @@ RULE = {
 }
 
 
+# 可控制 isatty 的输入流替身，用于区分交互与非交互终端。
 class Terminal(io.StringIO):
     def isatty(self):
         return True
 
 
+# 终端处理器应正确解释选项编号和自由回答，不默认选择无效输入。
 @pytest.mark.parametrize(
     "text, expected",
     [
@@ -58,6 +62,7 @@ def test_cli_answers(monkeypatch, capsys, text, expected):
     assert REQUEST.explanation in captured.err
 
 
+# 非交互输入应返回待澄清，不消费其他管道内容。
 def test_non_terminal_does_not_consume_stdin(monkeypatch):
     stream = io.StringIO("yes\n")
     monkeypatch.setattr("sys.stdin", stream)
@@ -65,6 +70,7 @@ def test_non_terminal_does_not_consume_stdin(monkeypatch):
     assert stream.tell() == 0
 
 
+# 空回答保留原问题，不能伪造已完成澄清。
 @pytest.mark.parametrize("answer", [None, "", "  "])
 def test_no_answer_remains_pending(answer):
     session = ClarificationSession(handler=lambda request: answer, pending=REQUEST)
@@ -74,6 +80,7 @@ def test_no_answer_remains_pending(answer):
     assert session.history == []
 
 
+# EOF 或用户中断回答时仍返回待澄清状态。
 def test_interrupt_remains_pending():
     def interrupted(request):
         raise KeyboardInterrupt
@@ -84,6 +91,7 @@ def test_interrupt_remains_pending():
     assert session.pending == REQUEST
 
 
+# 调用 ask_user 后必须停止同批后续动作，避免回答前执行替代方案。
 def test_real_browser_use_action_batch_stops_at_question():
     bu = pytest.importorskip("browser_use")
     from autoscraper.agent_tools import build_tools
@@ -122,6 +130,7 @@ def test_real_browser_use_action_batch_stops_at_question():
     assert agent._log_action.await_count == 1  # No queued navigate after the question.
 
 
+# 有答案时复用原 Agent 继续，无答案时保留请求并清理浏览器。
 @pytest.mark.parametrize("answer", ["允许传统分页入口", "必须使用原入口", None])
 def test_generation_resumes_same_agent_or_returns_pending(monkeypatch, answer):
     bu = pytest.importorskip("browser_use")
@@ -190,6 +199,7 @@ def test_generation_resumes_same_agent_or_returns_pending(monkeypatch, answer):
     assert captured["killed"]
 
 
+# 人工回答耗时即使超过探索预算，也不应消耗有效探索时间。
 def test_human_wait_excluded_from_timeout(monkeypatch):
     bu = pytest.importorskip("browser_use")
     # 在替换 BrowserSession 前加载工具，避免单独运行时缓存替身作为参数注解。
@@ -251,6 +261,7 @@ def test_human_wait_excluded_from_timeout(monkeypatch):
     assert session.waiting_seconds > settings.timeout_seconds
 
 
+# 多轮修复应共享问答、调用预算和人工等待累计值。
 @pytest.mark.parametrize("mode", ["answer", "pending", "budget"])
 def test_workflow_shares_answers_budget_and_waiting_time(monkeypatch, mode):
     pytest.importorskip("browser_use")
@@ -327,6 +338,7 @@ def test_workflow_shares_answers_budget_and_waiting_time(monkeypatch, mode):
         assert len(executions) == 1 and len(received) == 2
 
 
+# 待澄清退出时返回问题和退出码 4，并保留已有规则与数据。
 @pytest.mark.parametrize("non_interactive", [False, True])
 def test_cli_pending_preserves_existing_outputs(monkeypatch, capsys, tmp_path, non_interactive):
     import autoscraper.agent_cli as cli
@@ -369,6 +381,7 @@ def test_cli_pending_preserves_existing_outputs(monkeypatch, capsys, tmp_path, n
     assert sorted(p.name for p in tmp_path.iterdir()) == ["data.json", "rule.json"]
 
 
+# 用真实本地 Chromium 与脚本模型验证框架的暂停/继续和不支持终态。
 @pytest.mark.parametrize("mode", ["clarification", "unsupported"])
 def test_real_agent_continues_with_browser_and_history(monkeypatch, tmp_path, mode):
     """Exercise pinned browser-use run/add_new_task with real local Chromium, no paid LLM."""

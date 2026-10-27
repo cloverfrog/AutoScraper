@@ -1,3 +1,6 @@
+# Agent 命令行入口：读取模型配置，调用完整工作流，再保存规则和数据。
+# 终端问答走 stderr，正常结果以 JSON 写入 stdout；文件只在验证成功后覆盖。
+# 退出码：0 成功；1 未完成；3 协议不支持；4 等待用户澄清。
 """Generate a reusable rule; optionally hand it to the existing executor."""
 
 import argparse
@@ -14,6 +17,8 @@ from .workflow import run_task
 from .tracing import FileSink, Trace, emit, operation
 
 
+# 从环境读取密钥和模型默认配置，再应用非 None 的命令行覆盖值。
+# 供应商默认值留在 CLI 层，AgentSettings 本身不绑定 DeepSeek。
 def settings_from_env(**overrides) -> AgentSettings:
     """Apply CLI provider defaults without coupling the agent runtime to them."""
     key = os.getenv("AUTOSCRAPER_API_KEY") or os.getenv("DEEPSEEK_API_KEY")
@@ -29,6 +34,8 @@ def settings_from_env(**overrides) -> AgentSettings:
     return AgentSettings.model_validate(data)
 
 
+# 将执行超时等场景下的候选规则另存为 .unvalidated[-编号].json。
+# 排除保留路径，并用独占创建防止覆盖已有规则或数据。
 def save_unvalidated_spec(spec, output: Path, reserved: set[Path]) -> Path:
     """Keep a reusable candidate without replacing verified rules or requested data paths."""
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -47,6 +54,8 @@ def save_unvalidated_spec(spec, output: Path, reserved: set[Path]) -> Path:
     raise FileExistsError("No available unvalidated rule filename")
 
 
+# 终端澄清处理器：支持编号或自由回答，空输入/中断/非交互环境返回 None。
+# 问题写入 stderr，避免污染最终 stdout JSON；不会默认选择某个选项。
 def ask_user(request: ClarificationRequest) -> str | None:
     """No default selection; prompts stay separate from the final stdout JSON."""
     if not sys.stdin.isatty():
@@ -66,11 +75,12 @@ def ask_user(request: ClarificationRequest) -> str | None:
         index = int(answer)
         if 1 <= index <= len(request.options):
             return request.options[index - 1]
-        # An invalid selection is not a user decision.
+        # 超范围编号不构成有效用户决定，也不自动回退到某个选项。
         return None
     return answer
 
 
+# 解析 Agent CLI 参数，建立文件追踪，再交给 _execute 执行业务流程。
 def main() -> int:
     parser = argparse.ArgumentParser(description="Explore a website and generate a ScraperSpec")
     parser.add_argument("url")
@@ -107,6 +117,7 @@ def main() -> int:
     parser.add_argument("--runs-dir", type=Path, default=Path(".agent-runtime/runs"),
                         help="Local execution traces (default: .agent-runtime/runs)")
     args = parser.parse_args()
+    # 在读取详细配置前先注册可能用到的密钥，避免初始化失败时日志泄漏凭据。
     trace = Trace(FileSink(args.runs_dir), secrets=(
         os.getenv("AUTOSCRAPER_API_KEY"), os.getenv("DEEPSEEK_API_KEY"),
     ))
@@ -116,6 +127,8 @@ def main() -> int:
         return code
 
 
+# 检查输出路径，构造运行配置并调用工作流，根据状态保存候选或验证后的产物。
+# 只有 success/validated 才写正式输出；其他状态映射为约定退出码。
 def _execute(args, trace) -> int:
     try:
         paths = [args.spec_output.resolve(), *(p.resolve() for p in args.output)]
@@ -164,6 +177,7 @@ def _execute(args, trace) -> int:
         trace.outcome = summary
         emit("cli.result", **summary)
         if outcome.status not in {"success", "validated"}:
+            # 导航/内容等待失败时保留未验证规则用于排查，正式规则和数据仍由成功分支写入。
             if outcome.spec is not None and outcome.failure_stage in {"validation", "execution"}:
                 try:
                     candidate_path = save_unvalidated_spec(
@@ -176,7 +190,7 @@ def _execute(args, trace) -> int:
             if outcome.status == "needs_clarification":
                 return 4
             return 3 if outcome.status == "unsupported" else 1
-        # No rule/data writes until constraints and execution/data checks pass.
+        # 需求约束、执行和数据检查通过后，才写正式规则与数据文件。
         with operation("artifacts"):
             save_spec(outcome.spec, args.spec_output)
             if args.output:

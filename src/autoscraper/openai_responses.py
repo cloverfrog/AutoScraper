@@ -1,3 +1,6 @@
+# 模型接口适配：把 browser-use 的消息和结构化输出类型转换为 Responses API 请求。
+# 负责序列化消息、生成 JSON Schema、解析输出及 token 用量，并统一第三方 API 异常。
+# 调用次数上限由 agent_tools.py 的 LimitedChatOpenAI 管理，本模块负责实际请求。
 """OpenAI-compatible Responses API adapter for browser-use structured output."""
 
 from dataclasses import dataclass
@@ -23,6 +26,7 @@ from .tracing import capture_usage, traced_llm
 T = TypeVar("T", bound=BaseModel)
 
 
+# 实现 browser-use 的聊天模型接口，将底层调用路由到兼容 Responses 的服务。
 @dataclass
 class ChatOpenAIResponses(BaseChatModel):
     """A browser-use chat model backed by an OpenAI-compatible Responses API."""
@@ -39,14 +43,17 @@ class ChatOpenAIResponses(BaseChatModel):
     remove_min_items_from_schema: bool = False
     remove_defaults_from_schema: bool = False
 
+    # 向框架声明 OpenAI 兼容接口类型；实际服务地址仍由 base_url 决定。
     @property
     def provider(self) -> str:
         return "openai"
 
+    # 提供框架用于日志和异常的模型标识。
     @property
     def name(self) -> str:
         return self.model
 
+    # 按当前连接参数创建异步 API 客户端，统一超时与 SDK 重试设置。
     def get_client(self) -> AsyncOpenAI:
         return AsyncOpenAI(
             api_key=self.api_key,
@@ -55,6 +62,7 @@ class ChatOpenAIResponses(BaseChatModel):
             max_retries=self.max_retries,
         )
 
+    # 把 Responses 的 token 用量转换成 browser-use 的统计结构；缺失用量保留为 None。
     @staticmethod
     def _usage(response: Any) -> ChatInvokeUsage | None:
         usage = response.usage
@@ -70,6 +78,7 @@ class ChatOpenAIResponses(BaseChatModel):
             total_tokens=usage.total_tokens,
         )
 
+    # 拒绝服务端失败或不完整响应；输出 token 用尽单独报告为截断错误。
     def _check_response(self, response: Any) -> None:
         if response.status == "failed":
             error = getattr(response, "error", None)
@@ -92,16 +101,20 @@ class ChatOpenAIResponses(BaseChatModel):
                 model=self.name,
             )
 
+    # 文本调用的类型重载：未给 output_format 时，completion 是字符串。
     @overload
     async def ainvoke(
         self, messages: list[BaseMessage], output_format: None = None, **kwargs: Any
     ) -> ChatInvokeCompletion[str]: ...
 
+    # 结构化调用的类型重载：给定 Pydantic 类型时，completion 是对应模型实例。
     @overload
     async def ainvoke(
         self, messages: list[BaseMessage], output_format: type[T], **kwargs: Any
     ) -> ChatInvokeCompletion[T]: ...
 
+    # 将消息和可选 Pydantic 输出模型转成 Responses 请求，再解析文本或结构化结果。
+    # 上方重载只描述返回类型；此处实际发送请求、记录用量并转换 API 异常。
     @traced_llm
     async def ainvoke(
         self,
