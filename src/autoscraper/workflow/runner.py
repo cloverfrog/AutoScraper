@@ -13,10 +13,26 @@ from contextlib import nullcontext
 
 from playwright.sync_api import Error as PlaywrightError
 
-from .agent import AgentError, AgentSettings, InvalidSpecError, UnsupportedTaskError, generate_spec
-from .clarification import ClarificationHandler, ClarificationRequired, ClarificationSession
-from .executor import ContentTimeout, NavigationError, ScrapeError, ScrapeResult, ScraperExecutor
-from .spec import ScraperSpec
+from autoscraper.agent.explorer import (
+    AgentError,
+    AgentSettings,
+    InvalidSpecError,
+    UnsupportedTaskError,
+    generate_spec,
+)
+from autoscraper.agent.clarification import (
+    ClarificationHandler,
+    ClarificationRequired,
+    ClarificationSession,
+)
+from autoscraper.scraping.executor import (
+    ContentTimeout,
+    NavigationError,
+    ScrapeError,
+    ScrapeResult,
+    ScraperExecutor,
+)
+from autoscraper.scraping.spec import ScraperSpec
 from .validation import (
     Feedback,
     TaskRequirements,
@@ -26,7 +42,7 @@ from .validation import (
     validate_preview_data,
     validate_spec,
 )
-from .tracing import Trace, emit, labels, operation, traced_task
+from autoscraper.observability.tracing import Trace, emit, labels, operation, traced_task
 
 
 # 任务全过程的结果容器：状态、候选规则、数据、反馈、预算使用和澄清记录。
@@ -162,11 +178,11 @@ def run_task(
     ask_user: ClarificationHandler | None = None,
     trace: Trace | None = None,
 ) -> TaskOutcome:
-    from .agent import build_task
+    from autoscraper.agent.explorer import build_task
 
     os.environ.setdefault("ANONYMIZED_TELEMETRY", "false")
     os.environ.setdefault("BROWSER_USE_CLOUD_SYNC", "false")
-    from .agent_tools import make_llm, make_wait_llm
+    from autoscraper.agent.tools import make_llm, make_wait_llm
 
     build_task(url, task)  # 在付费解析需求之前先验证任务输入。
     policy = validation or ValidationSettings()

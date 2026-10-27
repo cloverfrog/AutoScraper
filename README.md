@@ -212,7 +212,7 @@ uv run --extra agent pytest -m llm
 真实 DeepSeek 修复测试默认跳过，需单独启用（会产生 API 费用）：
 
 ```bash
-RUN_LIVE_REPAIR=1 uv run --extra agent pytest tests/test_live_repair.py -v
+RUN_LIVE_REPAIR=1 uv run --extra agent pytest tests/workflow/test_live_repair.py -v
 ```
 
 PowerShell 先执行 `$env:RUN_LIVE_REPAIR = "1"`，再运行上述 pytest 命令。
@@ -221,6 +221,33 @@ PowerShell 先执行 `$env:RUN_LIVE_REPAIR = "1"`，再运行上述 pytest 命�
 最终通过 Playwright 检查跨两页的 25 条书籍数据。候选规则、损坏规则和验证报告保存在 pytest 临时目录中。
 
 ## 项目结构与当前范围
+
+源码按职责分组，包根目录只保留公共入口 `__init__.py`：
+
+```text
+src/autoscraper/
+├── agent/          # 浏览器探索、工具、模型适配和需求澄清
+│   ├── explorer.py
+│   ├── tools.py
+│   ├── responses.py
+│   └── clarification.py
+├── scraping/       # 抓取协议、确定性执行和数据导出
+│   ├── spec.py
+│   ├── executor.py
+│   └── export.py
+├── workflow/       # 任务编排与独立验证
+│   ├── runner.py
+│   └── validation.py
+├── cli/            # 两个命令行入口
+│   ├── scraper.py
+│   └── agent.py
+└── observability/  # 执行追踪与日志
+    └── tracing.py
+```
+
+测试分别放在 `tests/agent/`、`tests/scraping/`、`tests/workflow/` 和
+`tests/observability/`，运行 `pytest` 仍会统一发现全部测试。
+CLI 命令名称保持为 `autoscraper` 和 `autoscraper-agent`。
 
 ```text
 自然语言需求 → 独立需求约束 → Agent 生成规则 → 验证 / 反馈修复 → Executor → CSV / JSON

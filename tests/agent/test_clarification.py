@@ -12,14 +12,14 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from autoscraper.agent import AgentSettings, generate_spec
-from autoscraper.agent_cli import ask_user
-from autoscraper.clarification import (
+from autoscraper.agent.explorer import AgentSettings, generate_spec
+from autoscraper.cli.agent import ask_user
+from autoscraper.agent.clarification import (
     ClarificationRequest,
     ClarificationRequired,
     ClarificationSession,
 )
-from autoscraper.validation import TaskRequirements
+from autoscraper.workflow.validation import TaskRequirements
 
 
 URL = "https://fixture.test/scroll"
@@ -94,7 +94,7 @@ def test_interrupt_remains_pending():
 # 调用 ask_user 后必须停止同批后续动作，避免回答前执行替代方案。
 def test_real_browser_use_action_batch_stops_at_question():
     bu = pytest.importorskip("browser_use")
-    from autoscraper.agent_tools import build_tools
+    from autoscraper.agent.tools import build_tools
 
     session = ClarificationSession()
     tools = build_tools(clarification=session)
@@ -171,7 +171,7 @@ def test_generation_resumes_same_agent_or_returns_pending(monkeypatch, answer):
     monkeypatch.setattr(bu, "Agent", Agent)
     monkeypatch.setattr(bu, "BrowserSession", Browser)
     settings = AgentSettings(api_key="fake", model="test", base_url="https://llm.test", max_steps=4)
-    from autoscraper.agent import UnsupportedTaskError
+    from autoscraper.agent.explorer import UnsupportedTaskError
 
     async def run():
         return await generate_spec(
@@ -203,7 +203,7 @@ def test_generation_resumes_same_agent_or_returns_pending(monkeypatch, answer):
 def test_human_wait_excluded_from_timeout(monkeypatch):
     bu = pytest.importorskip("browser_use")
     # 在替换 BrowserSession 前加载工具，避免单独运行时缓存替身作为参数注解。
-    import_module("autoscraper.agent_tools")
+    import_module("autoscraper.agent.tools")
     captured = {}
 
     def answer(request):
@@ -265,10 +265,10 @@ def test_human_wait_excluded_from_timeout(monkeypatch):
 @pytest.mark.parametrize("mode", ["answer", "pending", "budget"])
 def test_workflow_shares_answers_budget_and_waiting_time(monkeypatch, mode):
     pytest.importorskip("browser_use")
-    import autoscraper.agent_tools as helpers
-    import autoscraper.workflow as workflow
-    from autoscraper.executor import ScrapeResult
-    from autoscraper.spec import ScraperSpec
+    import autoscraper.agent.tools as helpers
+    import autoscraper.workflow.runner as workflow
+    from autoscraper.scraping.executor import ScrapeResult
+    from autoscraper.scraping.spec import ScraperSpec
 
     model = SimpleNamespace(calls=0)
     wait_model = SimpleNamespace(calls=0)
@@ -341,8 +341,8 @@ def test_workflow_shares_answers_budget_and_waiting_time(monkeypatch, mode):
 # 待澄清退出时返回问题和退出码 4，并保留已有规则与数据。
 @pytest.mark.parametrize("non_interactive", [False, True])
 def test_cli_pending_preserves_existing_outputs(monkeypatch, capsys, tmp_path, non_interactive):
-    import autoscraper.agent_cli as cli
-    from autoscraper.workflow import TaskOutcome
+    import autoscraper.cli.agent as cli
+    from autoscraper.workflow.runner import TaskOutcome
 
     rule = tmp_path / "rule.json"
     data = tmp_path / "data.json"
@@ -393,9 +393,9 @@ def test_real_agent_continues_with_browser_and_history(monkeypatch, tmp_path, mo
     from browser_use.llm.views import ChatInvokeCompletion
     from playwright.sync_api import sync_playwright
 
-    from autoscraper.agent_tools import make_llm
-    from autoscraper.openai_responses import ChatOpenAIResponses
-    from autoscraper.tracing import FileSink, Trace, labels
+    from autoscraper.agent.tools import make_llm
+    from autoscraper.agent.responses import ChatOpenAIResponses
+    from autoscraper.observability.tracing import FileSink, Trace, labels
 
     visits = []
 
@@ -511,8 +511,8 @@ def test_real_agent_continues_with_browser_and_history(monkeypatch, tmp_path, mo
     sink = FileSink(tmp_path / "runs")
     try:
         if mode == "unsupported":
-            from autoscraper.workflow import run_task
-            monkeypatch.setattr("autoscraper.agent_tools.make_llm", lambda settings: model)
+            from autoscraper.workflow.runner import run_task
+            monkeypatch.setattr("autoscraper.agent.tools.make_llm", lambda settings: model)
             outcome = run_task(url, "前2条，字段名为quote", settings, trace=Trace(sink))
             assert outcome.status == "unsupported"
             summary = json.loads((sink.directory / "summary.json").read_text())

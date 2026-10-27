@@ -5,16 +5,16 @@
 ## 模块边界
 
 ```text
-browser-use Agent → ScraperSpec JSON → ScraperExecutor → records → CSV / JSON
-                         spec.py            executor.py               export.py
+agent/explorer.py → scraping/spec.py → scraping/executor.py → records → scraping/export.py
 ```
 
-- `spec.py` 仅依赖 Pydantic；通过 `ScraperSpec.model_validate_json(...)` 验证规则，通过 `ScraperSpec.model_json_schema()` 提供未来 Agent 使用的 JSON Schema。
-- `executor.py` 接受已验证的规则，管理浏览器生命周期；`run_page` 可注入调用方管理的 Playwright Page，方便离线测试和后续集成。
-- `export.py` 处理 UTF-8 CSV/JSON，空 CSV 也保留字段表头；`cli.py` 负责文件读取、调用与退出状态。
-- `examples/books.json` 是手写规则；`tests/test_scraper.py` 用 Playwright 路由提供离线 HTML，并提供可选线上测试。
-- `agent.py` 编排探索、超时、输出解析和规则保存；`agent_tools.py` 使用 browser-use 扩展接口提供 DOM 检查与选择器测试；`agent_cli.py` 提供独立入口。Agent 不导入 Executor，CLI 在探索结束后选择性调用现有执行器。
-- `validation.py` 定义独立需求约束、反馈及确定性规则/数据检查；`workflow.py` 负责需求解析、试跑现有 Executor、反馈修复和最终任务状态。只有工作流验证通过，CLI 才写规则和数据。`generate_spec` 是候选规则生成接口，本身不承诺任务已完成。
+- `scraping/spec.py` 仅依赖 Pydantic；通过 `ScraperSpec.model_validate_json(...)` 验证规则，通过 `ScraperSpec.model_json_schema()` 提供 Agent 使用的 JSON Schema。
+- `scraping/executor.py` 接受已验证的规则，管理浏览器生命周期；`run_page` 可注入调用方管理的 Playwright Page，方便离线测试和后续集成。
+- `scraping/export.py` 处理 UTF-8 CSV/JSON，空 CSV 也保留字段表头；`cli/scraper.py` 负责文件读取、调用与退出状态。
+- `examples/books.json` 是手写规则；`tests/scraping/test_scraper.py` 用 Playwright 路由提供离线 HTML，并提供可选线上测试。
+- `agent/explorer.py` 编排探索、超时、输出解析和规则保存；`agent/tools.py` 使用 browser-use 扩展接口提供 DOM 检查与选择器测试；`cli/agent.py` 提供独立入口。Agent 不导入 Executor，CLI 通过工作流协调探索与执行。
+- `workflow/validation.py` 定义独立需求约束、反馈及确定性规则/数据检查；`workflow/runner.py` 负责需求解析、试跑现有 Executor、反馈修复和最终任务状态。只有工作流验证通过，CLI 才写规则和数据。`generate_spec` 是候选规则生成接口，本身不承诺任务已完成。
+- `observability/tracing.py` 统一处理事件、模型/工具指标、框架日志和执行追踪文件。
 - 应用内 `ChatOpenAIResponses` 与 browser-use `ChatOpenAI` 同级，通过 OpenAI-compatible Responses API 提交完整消息，并用 `text.format=json_schema` 校验每一步 `AgentOutput`。`LimitedChatOpenAI` 仅继承它并增加付费调用预算；DeepSeek 的模型、Base URL和非思考模式都由构造参数传入，不存在 DeepSeek 专属 provider 类。browser-use 同时使用精简的 flash prompt/schema，避免 `deepseek-flash` 输出内部 DSML 工具语法。
 
 
@@ -163,7 +163,7 @@ Python 3.12.10；依赖版本记录于 `uv.lock`。全套测试（包含线上�
 新增用例覆盖跨两页 25 条详情记录、相对与重定向 URL、导航和字段失败、超时、去重、
 详情预算、完整字段导出及反馈修复。Ruff lint 与本次修改文件的格式检查通过。
 
-`RUN_LIVE=1 uv run --extra agent pytest tests/test_detail.py::test_live_books_25_details -q`：
+`RUN_LIVE=1 uv run --extra agent pytest tests/scraping/test_detail.py::test_live_books_25_details -q`：
 1 项通过。真实 Books to Scrape 返回 25 条唯一记录，访问 2 个列表页、25 个详情页，
 标题、价格、description 均非空，零抓取错误。此验证使用手写 v2 示例，不调用真实 LLM；
 Agent 的详情探索提示、结构化解析及修复链路通过确定性测试验证。

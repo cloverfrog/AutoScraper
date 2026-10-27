@@ -27,7 +27,7 @@ async def main() -> None:
         from browser_use.agent.views import AgentOutput
         from browser_use.llm.schema import SchemaOptimizer
 
-        from autoscraper.agent_tools import build_tools
+        from autoscraper.agent.tools import build_tools
 
         actions = build_tools().registry.create_action_model()
         if args.flash:

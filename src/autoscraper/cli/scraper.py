@@ -9,9 +9,9 @@ from pathlib import Path
 from playwright.sync_api import Error as PlaywrightError
 from pydantic import ValidationError
 
-from .executor import ContentTimeout, NavigationError, ScrapeError, ScraperExecutor
-from .export import export_records
-from .spec import ScraperSpec
+from autoscraper.scraping.executor import ContentTimeout, NavigationError, ScrapeError, ScraperExecutor
+from autoscraper.scraping.export import export_records
+from autoscraper.scraping.spec import ScraperSpec
 
 
 # 校验输入与输出路径，应用可选超时覆盖，执行并导出；异常转换为 JSON 诊断和退出码。

@@ -21,8 +21,8 @@ pytest.importorskip("browser_use")
 from browser_use import ActionResult, Agent, Tools
 from browser_use.agent.views import AgentHistoryList, AgentOutput, AgentState, AgentStepInfo
 
-from autoscraper.agent_tools import build_tools
-from autoscraper.clarification import ClarificationSession
+from autoscraper.agent.tools import build_tools
+from autoscraper.agent.clarification import ClarificationSession
 
 
 # 在项目工具集合上加探针动作，测试错误与取消如何穿过框架分发层。

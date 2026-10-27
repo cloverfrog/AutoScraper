@@ -12,8 +12,8 @@ uv run --extra agent autoscraper-agent "https://books.toscrape.com/" "前25本�
 启用核心接口。每个 `Trace` 表示一个 Run，应为每个任务创建新实例：
 
 ```python
-from autoscraper.tracing import FileSink, Trace
-from autoscraper.workflow import run_task
+from autoscraper.observability.tracing import FileSink, Trace
+from autoscraper.workflow.runner import run_task
 
 trace = Trace(FileSink(".agent-runtime/runs"))
 outcome = run_task(url, task, settings, trace=trace)
@@ -140,8 +140,8 @@ Authorization、Cookie、api_key、password、access_token）隐藏值，普通 
 消费者应保持快速、无副作用；暂不提供异步队列、数据库或实时推送。
 
 ```bash
-uv run --extra agent pytest tests/test_tracing.py -q
-uv run --extra agent pytest tests/test_clarification.py -q
+uv run --extra agent pytest tests/observability/test_tracing.py -q
+uv run --extra agent pytest tests/agent/test_clarification.py -q
 ```
 
 前者无需真实浏览器或付费 LLM，覆盖写入失败、体积限制、隐私、并发、LLM Usage、

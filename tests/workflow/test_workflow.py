@@ -6,17 +6,17 @@ from types import SimpleNamespace
 
 import pytest
 
-from autoscraper.agent import AgentSettings, UnsupportedTaskError
-from autoscraper.executor import ScrapeResult, ScraperExecutor
-from autoscraper.spec import ScraperSpec
-from autoscraper.validation import (
+from autoscraper.agent.explorer import AgentSettings, UnsupportedTaskError
+from autoscraper.scraping.executor import ScrapeResult, ScraperExecutor
+from autoscraper.scraping.spec import ScraperSpec
+from autoscraper.workflow.validation import (
     UnsupportedResult,
     TaskRequirements,
     ValidationSettings,
     validate_data,
     validate_spec,
 )
-from autoscraper.workflow import explicit_requirements, extract_requirements, run_task
+from autoscraper.workflow.runner import explicit_requirements, extract_requirements, run_task
 
 
 URL = "https://fixture.test/"
@@ -56,8 +56,8 @@ def settings():
 @pytest.fixture
 def workflow(monkeypatch):
     pytest.importorskip("browser_use")
-    import autoscraper.workflow as module
-    import autoscraper.agent_tools as tools
+    import autoscraper.workflow.runner as module
+    import autoscraper.agent.tools as tools
 
     model = SimpleNamespace(calls=0)
     monkeypatch.setattr(tools, "make_llm", lambda settings: model)
@@ -263,7 +263,7 @@ def test_known_unsupported_stops_without_repairs(settings, workflow, monkeypatch
 # 探索器调用 report_unsupported 后不能按成功候选继续处理。
 def test_explorer_unsupported_tool_is_a_failure_terminal(settings, monkeypatch):
     bu = pytest.importorskip("browser_use")
-    from autoscraper.agent import generate_spec
+    from autoscraper.agent.explorer import generate_spec
 
     class Browser:
         killed = False
@@ -477,7 +477,7 @@ def test_unsupported_envelope_requires_reason():
 def test_issue_regression_cli_does_not_save_partial_spec(
     candidate, workflow, monkeypatch, tmp_path, capsys
 ):
-    import autoscraper.agent_cli as cli
+    import autoscraper.cli.agent as cli
 
     install_candidates(monkeypatch, workflow, [candidate])
     monkeypatch.setenv("AUTOSCRAPER_API_KEY", "fake")
@@ -509,9 +509,9 @@ def test_issue_regression_cli_does_not_save_partial_spec(
 # 各种失败终态都应保留原有已验证规则和数据。
 @pytest.mark.parametrize("status,exit_code", [("unsupported", 3), ("unfulfilled", 1)])
 def test_failed_cli_preserves_existing_files(monkeypatch, tmp_path, status, exit_code):
-    import autoscraper.agent_cli as cli
-    from autoscraper.validation import Feedback
-    from autoscraper.workflow import TaskOutcome
+    import autoscraper.cli.agent as cli
+    from autoscraper.workflow.validation import Feedback
+    from autoscraper.workflow.runner import TaskOutcome
 
     paths = [tmp_path / "rule.json", tmp_path / "data.json", tmp_path / "data.csv"]
     for path in paths:
@@ -551,7 +551,7 @@ def test_failed_cli_preserves_existing_files(monkeypatch, tmp_path, status, exit
 
 # 一层详情能力应被需求解析和探索提示词识别为受支持能力。
 def test_detail_requirements_and_agent_prompt():
-    from autoscraper.agent import build_task
+    from autoscraper.agent.explorer import build_task
 
     assert "detail_pages" not in str(TaskRequirements.model_json_schema())
     prompt = build_task(URL, "Get descriptions from detail pages")
@@ -752,7 +752,7 @@ def test_navigation_failure_does_not_repair(
 
 # 完整执行阶段导航失败应保留候选并准确标记失败阶段。
 def test_navigation_failure_in_full_execution(candidate, settings, workflow, monkeypatch):
-    from autoscraper.executor import NavigationError
+    from autoscraper.scraping.executor import NavigationError
 
     received = install_candidates(monkeypatch, workflow, [candidate])
     seen = []
@@ -776,7 +776,7 @@ def test_navigation_failure_in_full_execution(candidate, settings, workflow, mon
 
 # 导航反馈应保留有助定位原因的完整诊断。
 def test_navigation_feedback_preserves_full_diagnostic():
-    from autoscraper.executor import ScrapeFailure
+    from autoscraper.scraping.executor import ScrapeFailure
 
     message = "Navigation failed: " + "x" * 2100 + " net::ERR_NAME_NOT_RESOLVED at " + URL
     result = ScrapeResult(
@@ -795,7 +795,7 @@ def test_navigation_feedback_preserves_full_diagnostic():
 def test_wait_timeouts_stop_without_repair(
     candidate, settings, workflow, monkeypatch, stage, error_name
 ):
-    import autoscraper.executor as executor
+    import autoscraper.scraping.executor as executor
 
     received = install_candidates(monkeypatch, workflow, [candidate])
     calls = []
@@ -824,9 +824,9 @@ def test_wait_timeouts_stop_without_repair(
 def test_timeout_cli_keeps_candidate_without_overwriting_outputs(
     candidate, monkeypatch, tmp_path, capsys, stage
 ):
-    import autoscraper.agent_cli as cli
-    from autoscraper.validation import Feedback
-    from autoscraper.workflow import TaskOutcome
+    import autoscraper.cli.agent as cli
+    from autoscraper.workflow.validation import Feedback
+    from autoscraper.workflow.runner import TaskOutcome
 
     spec_path = tmp_path / "rule.json"
     data_path = tmp_path / "data.json"
@@ -917,8 +917,8 @@ def test_validation_inherits_rule_navigation_timeout(candidate, settings, workfl
     "flags, expected", [([], None), (["--validation-timeout-ms", "5000"], 5000)]
 )
 def test_agent_cli_navigation_timeout_is_optional(monkeypatch, tmp_path, flags, expected):
-    import autoscraper.agent_cli as cli
-    from autoscraper.workflow import TaskOutcome
+    import autoscraper.cli.agent as cli
+    from autoscraper.workflow.runner import TaskOutcome
 
     seen = []
     monkeypatch.setenv("AUTOSCRAPER_API_KEY", "fake")

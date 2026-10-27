@@ -10,8 +10,8 @@ from dataclasses import dataclass, field
 
 from pydantic import Field
 
-from .spec import NonEmpty, ProtocolModel
-from .tracing import emit, operation
+from autoscraper.scraping.spec import NonEmpty, ProtocolModel
+from autoscraper.observability.tracing import emit, operation
 
 
 # 待用户澄清的问题：包含问题本身、页面依据/不确定性说明和可选建议。

@@ -12,7 +12,7 @@ from playwright.sync_api import Locator, Page, TimeoutError as PlaywrightTimeout
 from pydantic import HttpUrl, TypeAdapter
 
 from .spec import FieldSpec, ScraperSpec
-from .tracing import emit, operation
+from autoscraper.observability.tracing import emit, operation
 
 
 # 抓取致命错误的基类；工作流捕获后转换为结构化验证反馈。

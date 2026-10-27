@@ -12,8 +12,8 @@ from browser_use import ActionResult, BrowserSession, Tools
 from pydantic import BaseModel, ConfigDict
 
 from .clarification import ClarificationRequest, ClarificationSession
-from .openai_responses import ChatOpenAIResponses
-from .tracing import current_trace, operation, summarize_tool_output
+from .responses import ChatOpenAIResponses
+from autoscraper.observability.tracing import current_trace, operation, summarize_tool_output
 
 
 # 下方 JavaScript 由应用固定编写；模型输入只作为 JSON 参数传入，不拼接进脚本源码。
@@ -375,7 +375,7 @@ def build_tools(
             "ScraperSpec. Give observed evidence in reason and affected field names in fields."
         )
         async def report_unsupported(reason: str, fields: list[str]) -> ActionResult:
-            from .validation import UnsupportedResult
+            from autoscraper.workflow.validation import UnsupportedResult
 
             output = UnsupportedResult(reason=reason, unsupported_fields=fields)
             return ActionResult(

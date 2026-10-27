@@ -82,7 +82,7 @@ DOM 摘要不变时跳过模型调用；LLM 失败报告 `llm_error`，不冒充
 
 ## 测试
 
-`tests/test_workflow.py` 使用固定模型候选和真实离线 Playwright 页面，覆盖支持任务、遗漏字段、选择器失败后的修复与重验、次数/调用预算、unsupported 立即停止、样本与全量结果区分、失败时保留文件。默认测试不调用真实 LLM。
+`tests/workflow/test_workflow.py` 使用固定模型候选和真实离线 Playwright 页面，覆盖支持任务、遗漏字段、选择器失败后的修复与重验、次数/调用预算、unsupported 立即停止、样本与全量结果区分、失败时保留文件。默认测试不调用真实 LLM。
 
 ## 验证记录（2026-10-21）
 

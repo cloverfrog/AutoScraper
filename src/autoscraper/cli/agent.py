@@ -9,12 +9,12 @@ import os
 import sys
 from pathlib import Path
 
-from .agent import AgentError, AgentSettings, save_spec
-from .clarification import ClarificationRequest
-from .export import export_records
-from .validation import ValidationSettings
-from .workflow import run_task
-from .tracing import FileSink, Trace, emit, operation
+from autoscraper.agent.explorer import AgentError, AgentSettings, save_spec
+from autoscraper.agent.clarification import ClarificationRequest
+from autoscraper.scraping.export import export_records
+from autoscraper.workflow.validation import ValidationSettings
+from autoscraper.workflow.runner import run_task
+from autoscraper.observability.tracing import FileSink, Trace, emit, operation
 
 
 # 从环境读取密钥和模型默认配置，再应用非 None 的命令行覆盖值。

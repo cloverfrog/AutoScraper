@@ -10,9 +10,9 @@ import pytest
 from playwright.sync_api import sync_playwright
 from pydantic import ValidationError
 
-from autoscraper.executor import ScrapeError, ScraperExecutor
-from autoscraper.spec import ScraperSpec
-from autoscraper.validation import TaskRequirements, validate_data, validate_spec
+from autoscraper.scraping.executor import ScrapeError, ScraperExecutor
+from autoscraper.scraping.spec import ScraperSpec
+from autoscraper.workflow.validation import TaskRequirements, validate_data, validate_spec
 
 
 BASE = "https://fixture.test/catalogue/"
@@ -197,7 +197,7 @@ def test_invalid_detail_css_fails_even_with_skip(site, selector):
 def test_redirect_base_and_optional_field(site):
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
     from threading import Thread
-    from autoscraper.spec import FieldSpec
+    from autoscraper.scraping.spec import FieldSpec
 
     page, _, _ = site
     page.context.unroute("**/*")
@@ -299,9 +299,9 @@ def test_protocol_constraints(change):
 
 # 独立执行器和 Agent CLI 导出都应包含合并后的详情字段。
 def test_both_cli_exports_include_detail_fields(monkeypatch, tmp_path, capsys):
-    from autoscraper import cli, agent_cli
-    from autoscraper.executor import ScrapeResult
-    from autoscraper.workflow import TaskOutcome
+    from autoscraper.cli import scraper as cli, agent as agent_cli
+    from autoscraper.scraping.executor import ScrapeResult
+    from autoscraper.workflow.runner import TaskOutcome
 
     spec = detail_spec(max_items=1)
     record = {"title": "A", "price": "£1", "url": "https://fixture.test/a", "description": "正文"}
@@ -403,7 +403,7 @@ def test_live_books_25_details():
     ],
 )
 def test_detail_url_rejects_non_http_and_malformed_values(value):
-    from autoscraper.executor import ItemError, http_url
+    from autoscraper.scraping.executor import ItemError, http_url
 
     with pytest.raises(ItemError):
         http_url(BASE, value)
@@ -420,16 +420,16 @@ def test_detail_url_rejects_non_http_and_malformed_values(value):
     ],
 )
 def test_detail_url_resolution(value, expected):
-    from autoscraper.executor import http_url
+    from autoscraper.scraping.executor import http_url
 
     assert http_url(BASE + "page.html", value) == expected
 
 
 # 独立执行器达到详情上限时仍可导出部分数据，并以退出码 2 标记。
 def test_detail_limit_cli_reports_partial_result(monkeypatch, tmp_path, capsys):
-    from autoscraper import cli
-    from autoscraper.executor import ScrapeResult
-    from autoscraper.workflow import TaskOutcome
+    from autoscraper.cli import scraper as cli
+    from autoscraper.scraping.executor import ScrapeResult
+    from autoscraper.workflow.runner import TaskOutcome
 
     spec = detail_spec()
     result = ScrapeResult(stop_reason="detail_limit", detail_pages_visited=25)

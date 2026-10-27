@@ -1,5 +1,5 @@
 # 浏览器探索与规则生成：将用户需求、验证反馈和澄清历史交给 browser-use Agent。
-# 本模块负责探索浏览器的生命周期，只返回候选 ScraperSpec；独立验证由 workflow.py 编排。
+# 本模块负责探索浏览器的生命周期，只返回候选 ScraperSpec；独立验证由 workflow/runner.py 编排。
 # 人工澄清在动作批次结束后进行，保留当前浏览器和探索历史，并从探索超时中扣除等待时间。
 """Single browser-use explorer. The JSON protocol is its only executor boundary."""
 
@@ -13,8 +13,8 @@ from pathlib import Path
 from pydantic import BaseModel, Field, HttpUrl, SecretStr
 
 from .clarification import ClarificationSession
-from .spec import ScraperSpec
-from .validation import Feedback, TaskRequirements, UnsupportedResult
+from autoscraper.scraping.spec import ScraperSpec
+from autoscraper.workflow.validation import Feedback, TaskRequirements, UnsupportedResult
 
 
 # 探索层统一异常，表示 Agent 无法在能力或预算范围内生成候选规则。
@@ -149,7 +149,7 @@ async def generate_spec(
     clarification: ClarificationSession | None = None,
 ) -> ScraperSpec:
     """Generate a candidate. The workflow separately validates it before publication."""
-    from .tracing import StepObserver, current_trace
+    from autoscraper.observability.tracing import StepObserver, current_trace
 
     observer = StepObserver() if current_trace() is not None else None
     prompt = build_task(url, task)
@@ -171,7 +171,7 @@ async def generate_spec(
     os.environ.setdefault("BROWSER_USE_CLOUD_SYNC", "false")
     try:
         from browser_use import Agent, BrowserSession
-        from .agent_tools import build_tools, make_llm, make_wait_llm
+        from .tools import build_tools, make_llm, make_wait_llm
     except ImportError as exc:
         raise AgentError("Install agent dependencies: uv sync --extra agent --locked") from exc
 

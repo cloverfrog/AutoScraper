@@ -7,10 +7,10 @@ import os
 
 import pytest
 
-from autoscraper.agent import save_spec
-from autoscraper.agent_cli import settings_from_env
-from autoscraper.validation import ValidationSettings, validate_data, validate_spec
-from autoscraper.workflow import run_task
+from autoscraper.agent.explorer import save_spec
+from autoscraper.cli.agent import settings_from_env
+from autoscraper.workflow.validation import ValidationSettings, validate_data, validate_spec
+from autoscraper.workflow.runner import run_task
 
 
 # 保留真实生成器、模型和执行器，确认反馈可驱动后续规则修复并完成抓取。
@@ -20,7 +20,7 @@ from autoscraper.workflow import run_task
     reason="Set RUN_LIVE_REPAIR=1 for paid DeepSeek repair test",
 )
 def test_real_deepseek_repairs_broken_selector(monkeypatch, tmp_path):
-    import autoscraper.workflow as workflow
+    import autoscraper.workflow.runner as workflow
 
     settings = settings_from_env(
         base_url="https://api.deepseek.com", max_steps=24, timeout_seconds=480

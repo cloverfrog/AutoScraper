@@ -9,9 +9,9 @@ import pytest
 from playwright.sync_api import sync_playwright
 from pydantic import ValidationError
 
-from autoscraper.executor import ScrapeError, ScraperExecutor
-from autoscraper.export import export_records
-from autoscraper.spec import ScraperSpec
+from autoscraper.scraping.executor import ScrapeError, ScraperExecutor
+from autoscraper.scraping.export import export_records
+from autoscraper.scraping.spec import ScraperSpec
 
 
 # 构造通用列表抓取规则，按用例覆盖分页、去重、字段和执行上限。

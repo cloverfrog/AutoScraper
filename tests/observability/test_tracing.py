@@ -10,12 +10,12 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from autoscraper.agent import AgentSettings
-from autoscraper.clarification import ClarificationRequest, ClarificationSession
-from autoscraper.executor import ScrapeResult, ScraperExecutor
-from autoscraper.spec import ScraperSpec
-from autoscraper.tracing import FileSink, Trace, current_trace, emit, labels, operation
-from autoscraper.workflow import TaskOutcome, run_task
+from autoscraper.agent.explorer import AgentSettings
+from autoscraper.agent.clarification import ClarificationRequest, ClarificationSession
+from autoscraper.scraping.executor import ScrapeResult, ScraperExecutor
+from autoscraper.scraping.spec import ScraperSpec
+from autoscraper.observability.tracing import FileSink, Trace, current_trace, emit, labels, operation
+from autoscraper.workflow.runner import TaskOutcome, run_task
 
 
 # 将事件、History 和汇总收集到内存，便于断言输出结构与关联关系。
@@ -211,7 +211,7 @@ def test_concurrent_runs_and_logging_are_isolated():
 def test_llm_usage_sources_and_parse_failure(monkeypatch, source, invalid):
     pytest.importorskip("browser_use")
     from pydantic import BaseModel
-    from autoscraper.openai_responses import ChatOpenAIResponses
+    from autoscraper.agent.responses import ChatOpenAIResponses
 
     class Output(BaseModel):
         ready: bool
@@ -256,7 +256,7 @@ def test_llm_usage_sources_and_parse_failure(monkeypatch, source, invalid):
 # 多轮修复、候选和反馈必须关联同一个追踪运行。
 def test_workflow_repair_and_feedback_share_run(monkeypatch, settings, spec):
     pytest.importorskip("browser_use")
-    import autoscraper.workflow as workflow
+    import autoscraper.workflow.runner as workflow
 
     attempts = []
 
@@ -319,7 +319,7 @@ def test_clarification_keeps_attempt_and_readable_answer():
     ],
 )
 def test_cli_json_exit_codes_and_trace_summary(monkeypatch, tmp_path, capsys, spec, status, code):
-    import autoscraper.agent_cli as cli
+    import autoscraper.cli.agent as cli
 
     monkeypatch.setenv("AUTOSCRAPER_API_KEY", "PRIVATE_API_KEY")
     outcome = TaskOutcome(status=status, spec=spec if code == 0 else None)
@@ -347,7 +347,7 @@ def test_cli_json_exit_codes_and_trace_summary(monkeypatch, tmp_path, capsys, sp
 
 # 保存产物失败时，追踪仍应保留此前完成的工作流结果。
 def test_cli_artifact_error_preserves_workflow_result(monkeypatch, tmp_path, spec, capsys):
-    import autoscraper.agent_cli as cli
+    import autoscraper.cli.agent as cli
 
     monkeypatch.setenv("AUTOSCRAPER_API_KEY", "PRIVATE_API_KEY")
     monkeypatch.setattr(
@@ -376,7 +376,7 @@ def test_cli_artifact_error_preserves_workflow_result(monkeypatch, tmp_path, spe
 
 # 日志写入失败不应把成功任务改成失败。
 def test_cli_logging_failure_does_not_change_success(monkeypatch, tmp_path, spec, capsys):
-    import autoscraper.agent_cli as cli
+    import autoscraper.cli.agent as cli
 
     blocked = tmp_path / "not-a-directory"
     blocked.write_text("block")
@@ -407,7 +407,7 @@ def test_cli_logging_failure_does_not_change_success(monkeypatch, tmp_path, spec
 def test_actual_traced_tools_record_result_errors_and_cancellation(mode):
     pytest.importorskip("browser_use")
     from browser_use import ActionResult
-    from autoscraper.agent_tools import TracedTools
+    from autoscraper.agent.tools import TracedTools
 
     tools = TracedTools()
 
@@ -448,7 +448,7 @@ def test_actual_traced_tools_record_result_errors_and_cancellation(mode):
 @pytest.mark.parametrize("usage", [None, "request_failure"])
 def test_missing_usage_is_explicit(monkeypatch, usage):
     pytest.importorskip("browser_use")
-    from autoscraper.openai_responses import ChatOpenAIResponses
+    from autoscraper.agent.responses import ChatOpenAIResponses
 
     create = AsyncMock(
         return_value=SimpleNamespace(status="completed", output_text="ok", usage=None)
@@ -479,7 +479,7 @@ def test_missing_usage_is_explicit(monkeypatch, usage):
 # 框架未触发步骤结束回调时，外层清理仍需关闭追踪跨度。
 def test_step_without_end_callback_is_closed_by_outer_cleanup():
     pytest.importorskip("browser_use")
-    from autoscraper.tracing import StepObserver
+    from autoscraper.observability.tracing import StepObserver
 
     agent = SimpleNamespace(
         state=SimpleNamespace(n_steps=7, last_result=None), history=SimpleNamespace(history=[])
@@ -550,10 +550,10 @@ def test_workflow_terminal_paths_preserve_original_semantics(
     code,
 ):
     pytest.importorskip("browser_use")
-    import autoscraper.workflow as workflow
-    from autoscraper.agent import AgentError, UnsupportedTaskError
-    from autoscraper.clarification import ClarificationRequired
-    from autoscraper.executor import ContentTimeout
+    import autoscraper.workflow.runner as workflow
+    from autoscraper.agent.explorer import AgentError, UnsupportedTaskError
+    from autoscraper.agent.clarification import ClarificationRequired
+    from autoscraper.scraping.executor import ContentTimeout
 
     async def generate(*args, **kwargs):
         if kind == "unsupported":
@@ -598,7 +598,7 @@ import json
 import logging
 import sys
 from pathlib import Path
-from autoscraper.tracing import FileSink, Trace
+from autoscraper.observability.tracing import FileSink, Trace
 
 root = logging.getLogger()
 assert not root.handlers
@@ -649,7 +649,7 @@ print(json.dumps({"status": "validated"}))
 
 # 默认追踪保留有用诊断，只替换明确凭据，不泛化删除普通文本。
 def test_default_policy_preserves_url_selectors_text_and_noncredential_headers():
-    from autoscraper.tracing import Sanitizer
+    from autoscraper.observability.tracing import Sanitizer
 
     sanitizer = Sanitizer(secrets=("KNOWN_KEY",))
     original = "https://user:pw@example.test:8443/cars?page=2&sort=year&token=abc#details"
@@ -681,7 +681,7 @@ def test_default_policy_preserves_url_selectors_text_and_noncredential_headers()
 
 # 工具反馈应保留可读证据，同时不持久化完整 DOM。
 def test_tool_feedback_keeps_evidence_without_persisting_entire_dom():
-    from autoscraper.tracing import summarize_tool_output
+    from autoscraper.observability.tracing import summarize_tool_output
 
     nodes = [{"tag": "div", "attrs": {"class": f"card-{i}"}, "text": f"Car {i}"} for i in range(30)]
     nodes.append({"tag": "button", "attrs": {"id": "load-more"}, "text": "Load More"})
@@ -713,7 +713,7 @@ def test_tool_feedback_keeps_evidence_without_persisting_entire_dom():
 
 # 模型自报评价在存在时保留，缺失时不编造内容。
 def test_model_assessments_remain_readable_and_optional():
-    from autoscraper.tracing import StepObserver
+    from autoscraper.observability.tracing import StepObserver
 
     memory = MemorySink()
     with Trace(memory).run():
@@ -755,7 +755,7 @@ def test_framework_exception_keeps_message_and_stack_without_known_key():
 # 运行目录按开始时间可排序，同时用 run_id 区分同时启动的任务。
 def test_run_directories_sort_by_time_and_still_distinguish_simultaneous_runs(tmp_path, monkeypatch):
     from datetime import datetime, timedelta, timezone
-    import autoscraper.tracing as tracing
+    import autoscraper.observability.tracing as tracing
 
     earlier = datetime(2026, 10, 27, 8, 0, tzinfo=timezone.utc)
     moments = iter([earlier, earlier + timedelta(seconds=2), earlier + timedelta(seconds=2)])

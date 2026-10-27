@@ -9,10 +9,10 @@ from typing import TYPE_CHECKING, Literal
 
 from pydantic import Field, field_validator
 
-from .spec import NonEmpty, ProtocolModel, ScraperSpec
+from autoscraper.scraping.spec import NonEmpty, ProtocolModel, ScraperSpec
 
 if TYPE_CHECKING:
-    from .executor import ScrapeResult
+    from autoscraper.scraping.executor import ScrapeResult
 
 
 # 独立于生成规则的用户约束：必需字段、目标数量和明确要求的不支持能力。

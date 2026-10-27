@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import pytest
 from playwright.sync_api import Error, TimeoutError as PlaywrightTimeout
 
-from autoscraper.executor import (
+from autoscraper.scraping.executor import (
     ContentTimeout,
     NavigationError,
     NavigationTimeout,
@@ -19,8 +19,8 @@ from autoscraper.executor import (
     ScraperExecutor,
     navigate,
 )
-from autoscraper.spec import ScraperSpec
-from autoscraper.validation import TaskRequirements, validate_data
+from autoscraper.scraping.spec import ScraperSpec
+from autoscraper.workflow.validation import TaskRequirements, validate_data
 
 
 # 可脚本化的语义模型替身，记录调用次数并模拟任务级调用上限。
@@ -52,7 +52,7 @@ class Session:
 # 根据给定模型和时限构造等待器，供无浏览器的语义等待用例复用。
 def waiter(model, timeout=1000):
     pytest.importorskip("browser_use")
-    from autoscraper.agent_tools import ContentWaiter
+    from autoscraper.agent.tools import ContentWaiter
 
     return ContentWaiter(timeout, model)
 
@@ -134,7 +134,7 @@ def test_semantic_parameters_bounded(params):
 # 已知 CSS 等待应遵守时限，并返回 DOM 或明确错误状态。
 @pytest.mark.parametrize("outcome", ["ready", "timeout"])
 def test_selector_wait_is_bounded_and_returns_dom(monkeypatch, outcome):
-    from autoscraper import agent_tools
+    from autoscraper.agent import tools as agent_tools
 
     seen = []
 
@@ -258,7 +258,7 @@ def test_live_delayed_quotes(page):
 def test_selector_wait_attaches_focused_cdp_target_and_preserves_browser():
     import socket
     from playwright.async_api import async_playwright
-    from autoscraper.agent_tools import selector_wait
+    from autoscraper.agent.tools import selector_wait
 
     async def run():
         with socket.socket() as sock:
@@ -370,7 +370,7 @@ def test_executor_cli_reports_error_code_and_preserves_output(
 ):
     import json
     import sys
-    from autoscraper.cli import main
+    from autoscraper.cli.scraper import main
 
     spec_path = tmp_path / "spec.json"
     spec_path.write_text(rule().model_dump_json())
