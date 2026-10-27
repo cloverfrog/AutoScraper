@@ -66,6 +66,30 @@ class ValidationSettings(ProtocolModel):
     timeout_ms: int | None = Field(default=None, ge=1, le=30000)
 
 
+def build_preview_spec(spec: ScraperSpec, policy: ValidationSettings) -> ScraperSpec:
+    """构造受验证预算约束的副本，保留原规则供完整执行和后续修复使用。"""
+    preview = spec.model_copy(
+        update={
+            "max_items": min(spec.max_items, policy.max_items),
+            "max_pages": min(spec.max_pages, policy.max_pages),
+            "timeout_ms": (
+                min(spec.timeout_ms, policy.timeout_ms)
+                if policy.timeout_ms is not None
+                else spec.timeout_ms
+            ),
+        }
+    )
+    if spec.detail:
+        preview = preview.model_copy(
+            update={
+                "detail": spec.detail.model_copy(
+                    update={"max_pages": min(spec.detail.max_pages, policy.max_detail_pages)}
+                )
+            }
+        )
+    return preview
+
+
 def validate_spec(spec: ScraperSpec, requirements: TaskRequirements) -> list[Feedback]:
     issues = []
     missing = [
@@ -93,6 +117,52 @@ def validate_spec(spec: ScraperSpec, requirements: TaskRequirements) -> list[Fee
             Feedback(code="invalid_spec", message="Use max_pages <= 100 and timeout_ms <= 30000")
         )
     return issues
+
+
+def validate_preview_data(
+    result: ScrapeResult,
+    requirements: TaskRequirements,
+    spec: ScraperSpec,
+    preview: ScraperSpec,
+    *,
+    execute: bool,
+) -> tuple[list[Feedback], bool]:
+    """返回试抓取反馈及是否已抓完；无反馈仍可能只代表样本验证通过。"""
+    target = min(requirements.count, preview.max_items) if requirements.count else None
+    issues = validate_data(result, requirements, expected_count=target)
+    if result.stop_reason == "max_pages" and preview.max_pages < spec.max_pages:
+        # 验证预算截断不说明规则有误；需要导出时允许继续完整执行。
+        # 只移除数量不足反馈，提取错误和详情预算耗尽仍按原规则处理。
+        issues = [item for item in issues if item.code != "insufficient_items"]
+        if not execute and (target is None or len(result.records) < target):
+            issues.append(
+                Feedback(
+                    code="validation_limit",
+                    recoverable=False,
+                    message="Validation page limit reached; increase --validation-pages",
+                )
+            )
+    complete = len(result.records) >= spec.max_items or result.stop_reason in {
+        "no_next", "no_pagination"
+    }
+    return issues, complete
+
+
+def validate_execution_data(
+    result: ScrapeResult, requirements: TaskRequirements
+) -> tuple[list[Feedback], bool]:
+    """完整执行受预算截断时不能宣称完成，即使已有记录满足字段和数量校验。"""
+    issues = validate_data(result, requirements)
+    complete = result.stop_reason not in {"max_pages", "detail_limit"}
+    if not complete and not issues:
+        issues.append(
+            Feedback(
+                code="validation_limit",
+                recoverable=False,
+                message="Full execution reached max_pages before completion",
+            )
+        )
+    return issues, complete
 
 
 def validate_data(

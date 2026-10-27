@@ -373,6 +373,64 @@ def test_validation_budget_exhaustion_is_not_repaired(candidate, settings, workf
     assert result.feedback[0].code == "validation_limit"
 
 
+@pytest.mark.parametrize(
+    "execute, final_stop, status, code, sample_only",
+    [
+        (False, None, "unfulfilled", "validation_limit", True),
+        (True, "max_items", "success", None, False),
+        (True, "no_next", "success", None, False),
+        (True, "max_pages", "unfulfilled", "validation_limit", True),
+        (True, "detail_limit", "unfulfilled", "validation_limit", True),
+        (True, "pagination_cycle", "unfulfilled", "selector_failure", False),
+    ],
+)
+def test_preview_page_limit_preserves_execution_decisions(
+    candidate, settings, workflow, monkeypatch, execute, final_stop, status, code, sample_only
+):
+    """区分验证预算截断与完整执行失败，防止重构改变导出或修复决策。"""
+    received = install_candidates(monkeypatch, workflow, [candidate])
+    seen = []
+    rows = [{"title": "A", "price": "1"}, {"title": "B", "price": "2"}]
+
+    def run(self, spec):
+        seen.append(spec.max_pages)
+        if len(seen) == 1:
+            return ScrapeResult(records=rows[:1], stop_reason="max_pages")
+        return ScrapeResult(records=rows, stop_reason=final_stop)
+
+    monkeypatch.setattr(ScraperExecutor, "run", run)
+    outcome = run_task(
+        URL, TASK, settings, execute=execute,
+        validation=ValidationSettings(max_pages=1, max_repairs=0),
+    )
+    assert seen == ([1, candidate.max_pages] if execute else [1])
+    assert len(received) == outcome.attempts == 1
+    assert outcome.status == status
+    assert outcome.sample_only is sample_only
+    assert [item.code for item in outcome.feedback] == ([code] if code else [])
+    assert outcome.summary()["task_fulfilled"] is (status == "success")
+
+
+def test_preview_page_limit_does_not_hide_missing_data(
+    candidate, settings, workflow, monkeypatch
+):
+    install_candidates(monkeypatch, workflow, [candidate])
+    seen = []
+
+    def run(self, spec):
+        seen.append(spec.max_pages)
+        return ScrapeResult(records=[{"title": "A", "price": ""}], stop_reason="max_pages")
+
+    monkeypatch.setattr(ScraperExecutor, "run", run)
+    outcome = run_task(
+        URL, TASK, settings, execute=True,
+        validation=ValidationSettings(max_pages=1, max_repairs=0),
+    )
+    assert seen == [1]
+    assert outcome.status == "unfulfilled"
+    assert [item.code for item in outcome.feedback] == ["missing_data"]
+
+
 def test_bad_requirements_stop_without_exploration(settings, workflow, monkeypatch):
     result = run_task(URL, TASK, settings, count=0)
     assert result.status == "unfulfilled"

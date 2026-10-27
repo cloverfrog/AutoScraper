@@ -14,7 +14,15 @@ from .agent import AgentError, AgentSettings, InvalidSpecError, UnsupportedTaskE
 from .clarification import ClarificationHandler, ClarificationRequired, ClarificationSession
 from .executor import ContentTimeout, NavigationError, ScrapeError, ScrapeResult, ScraperExecutor
 from .spec import ScraperSpec
-from .validation import Feedback, TaskRequirements, ValidationSettings, validate_data, validate_spec
+from .validation import (
+    Feedback,
+    TaskRequirements,
+    ValidationSettings,
+    build_preview_spec,
+    validate_execution_data,
+    validate_preview_data,
+    validate_spec,
+)
 from .tracing import Trace, emit, labels, operation, traced_task
 
 
@@ -229,67 +237,18 @@ def run_task(
                         issues = validate_spec(candidate, requirements)
                         validation_details["feedback"] = [item.model_dump() for item in issues]
                     if not issues:
-                        preview = candidate.model_copy(
-                            update={
-                                "max_items": min(candidate.max_items, policy.max_items),
-                                "max_pages": min(candidate.max_pages, policy.max_pages),
-                                "timeout_ms": (
-                                    min(candidate.timeout_ms, policy.timeout_ms)
-                                    if policy.timeout_ms is not None
-                                    else candidate.timeout_ms
-                                ),
-                            }
-                        )
-                        if candidate.detail:
-                            preview = preview.model_copy(
-                                update={
-                                    "detail": candidate.detail.model_copy(
-                                        update={
-                                            "max_pages": min(
-                                                candidate.detail.max_pages, policy.max_detail_pages
-                                            )
-                                        }
-                                    )
-                                }
-                            )
+                        preview = build_preview_spec(candidate, policy)
                         stage = "validation"
                         with operation("validation_extraction"):
                             result = ScraperExecutor().run(preview)
-                        target = (
-                            min(requirements.count, policy.max_items) if requirements.count else None
+                        issues, complete = validate_preview_data(
+                            result, requirements, candidate, preview, execute=execute
                         )
-                        issues = validate_data(result, requirements, expected_count=target)
-                        if (
-                            result.stop_reason == "max_pages"
-                            and preview.max_pages < candidate.max_pages
-                        ):
-                            issues = [item for item in issues if item.code != "insufficient_items"]
-                            if not execute and (target is None or len(result.records) < target):
-                                issues.append(
-                                    Feedback(
-                                        code="validation_limit",
-                                        recoverable=False,
-                                        message="Validation page limit reached; increase --validation-pages",
-                                    )
-                                )
-                        complete = len(result.records) >= candidate.max_items or result.stop_reason in {
-                            "no_next",
-                            "no_pagination",
-                        }
                         if not issues and execute and not complete:
                             stage = "execution"
                             with operation("execution"):
                                 result = ScraperExecutor().run(candidate)
-                            issues = validate_data(result, requirements)
-                            complete = result.stop_reason not in {"max_pages", "detail_limit"}
-                            if not complete and not issues:
-                                issues.append(
-                                    Feedback(
-                                        code="validation_limit",
-                                        recoverable=False,
-                                        message="Full execution reached max_pages before completion",
-                                    )
-                                )
+                            issues, complete = validate_execution_data(result, requirements)
                         outcome.sample_only = not complete
                     outcome.spec, outcome.data = candidate, result
                 except ClarificationRequired as exc:

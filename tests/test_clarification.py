@@ -4,6 +4,7 @@ import asyncio
 import io
 import json
 import time
+from importlib import import_module
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -191,6 +192,8 @@ def test_generation_resumes_same_agent_or_returns_pending(monkeypatch, answer):
 
 def test_human_wait_excluded_from_timeout(monkeypatch):
     bu = pytest.importorskip("browser_use")
+    # 在替换 BrowserSession 前加载工具，避免单独运行时缓存替身作为参数注解。
+    import_module("autoscraper.agent_tools")
     captured = {}
 
     def answer(request):
@@ -244,7 +247,8 @@ def test_human_wait_excluded_from_timeout(monkeypatch):
         )
     )
     assert str(result.start_url) == RULE["start_url"]
-    assert session.waiting_seconds >= 1.1
+    # 验证人工等待超过任务预算；不要求 Windows 计时结果精确达到 sleep 的参数。
+    assert session.waiting_seconds > settings.timeout_seconds
 
 
 @pytest.mark.parametrize("mode", ["answer", "pending", "budget"])
