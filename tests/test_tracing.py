@@ -20,6 +20,7 @@ class MemorySink:
     def __init__(self):
         self.events = []
         self.histories = []
+        self.consoles = []
         self.summary_data = None
 
     def event(self, event):
@@ -30,6 +31,9 @@ class MemorySink:
 
     def summary(self, data):
         self.summary_data = data
+
+    def console(self, data):
+        self.consoles.append(data)
 
 
 @pytest.fixture
@@ -76,7 +80,7 @@ def test_streaming_privacy_and_summary(tmp_path):
                     "step_number": 3,
                 }
             )
-            logging.getLogger("fixture").warning("PRIVATE_LOG %s", "PRIVATE_API_KEY")
+            logging.getLogger("browser_use.fixture").warning("PRIVATE_LOG %s", "PRIVATE_API_KEY")
             # Events and history are visible before normal completion.
             assert (sink.directory / "events.jsonl").read_text()
             assert (sink.directory / "history/attempt-2.jsonl").read_text()
@@ -163,7 +167,7 @@ def test_concurrent_runs_and_logging_are_isolated():
             with labels(attempt=index + 1):
                 await asyncio.sleep(0)
                 emit("worker", count=index)
-                logging.getLogger("fixture").warning("PRIVATE_LOG")
+                logging.getLogger("browser_use.fixture").warning("PRIVATE_LOG")
 
     async def scenario():
         await asyncio.gather(worker(0), worker(1))
@@ -174,6 +178,7 @@ def test_concurrent_runs_and_logging_are_isolated():
         assert event["attempt"] == index + 1
         assert event["payload"]["count"] == index
         assert len({e["run_id"] for e in memory.events}) == 1
+        assert len(memory.consoles) == 1
     assert memories[0].events[0]["run_id"] != memories[1].events[0]["run_id"]
 
 
@@ -527,3 +532,59 @@ def test_workflow_terminal_paths_preserve_original_semantics(
     assert memory.summary_data["metrics"]["attempts"] == 1
     assert "PRIVATE_" not in json.dumps(memory.summary_data)
     assert any(event["event_type"] == "attempt.finished" for event in memory.events)
+
+
+@pytest.mark.parametrize("preconfigured", [False, True])
+def test_fresh_process_keeps_terminal_logging_and_captures_framework_logs(tmp_path, preconfigured):
+    """pytest's root handlers otherwise hide browser-use's first-import guard."""
+    pytest.importorskip("browser_use")
+    import os
+    import subprocess
+    import sys
+
+    script = """
+import json
+import logging
+import sys
+from pathlib import Path
+from autoscraper.tracing import FileSink, Trace
+
+root = logging.getLogger()
+assert not root.handlers
+if sys.argv[2] == "True":
+    root.addHandler(logging.StreamHandler(sys.stderr))
+    root.setLevel(logging.INFO)
+original_handlers = list(root.handlers)
+sink = FileSink(Path(sys.argv[1]))
+with Trace(sink).run():
+    assert root.handlers == original_handlers
+    import browser_use
+    logging.getLogger("browser_use.agent").info("TERMINAL_MARKER")
+assert root.handlers
+assert all(handler.__class__.__name__ != "_LogHandler"
+           for name in ("browser_use", "bubus", "autoscraper")
+           for handler in logging.getLogger(name).handlers)
+print(json.dumps({"status": "validated"}))
+"""
+    env = {
+        **os.environ,
+        "BROWSER_USE_SETUP_LOGGING": "true",
+        "BROWSER_USE_LOGGING_LEVEL": "info",
+        "ANONYMIZED_TELEMETRY": "false",
+        "BROWSER_USE_CLOUD_SYNC": "false",
+    }
+    env.pop("BROWSER_USE_DEBUG_LOG_FILE", None)
+    env.pop("BROWSER_USE_INFO_LOG_FILE", None)
+    result = subprocess.run(
+        [sys.executable, "-c", script, str(tmp_path), str(preconfigured)],
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stderr.count("TERMINAL_MARKER") == 1
+    assert json.loads(result.stdout) == {"status": "validated"}
+    console = next(tmp_path.glob("*/console.log")).read_text()
+    assert "TERMINAL_MARKER" not in console
+    assert any(json.loads(line).get("level") == "INFO" for line in console.splitlines())

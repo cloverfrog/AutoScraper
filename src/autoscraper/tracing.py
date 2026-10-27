@@ -305,7 +305,12 @@ class Trace:
         context_token = _labels.set({})
         handler = _LogHandler(self)
         self._send("start", self.run_id)
-        logging.getLogger().addHandler(handler)
+        # Do not attach to root: browser-use's lazy initialization checks root
+        # hasHandlers() and would skip installing its terminal handler. Framework
+        # loggers also stop propagation, so subscribe to those namespaces directly.
+        loggers = [logging.getLogger(name) for name in ("autoscraper", "browser_use", "bubus")]
+        for logger in loggers:
+            logger.addHandler(handler)
         termination = "returned"
         try:
             self.metadata = self.sanitizer.clean(
@@ -355,7 +360,8 @@ class Trace:
                 }
                 self._send("summary", summary)
             finally:
-                logging.getLogger().removeHandler(handler)
+                for logger in loggers:
+                    logger.removeHandler(handler)
                 _labels.reset(context_token)
                 _current.reset(token)
                 self.active = False

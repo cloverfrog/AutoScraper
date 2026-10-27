@@ -88,8 +88,9 @@ API 未返回 Usage 时 `tokens: null`；部分可得时只汇总已报告值，
 
 事件、History、summary 与 console 使用同一处理规则。console 保存事件和框架日志的
 级别/来源元数据，原始消息、异常堆栈和格式化参数被省略，因此不是终端逐字副本。
-原终端显示不被重定向。根 logging handler 通过任务上下文过滤，避免把并发 Run 的
-日志混写；不在当前任务上下文中的后台线程日志不采集。
+原终端显示不被重定向。追踪 handler 直接监听 `autoscraper`、`browser_use` 和 `bubus`
+命名空间，不提前配置根 logger，以保留框架的终端日志初始化；通过任务上下文过滤，
+避免把并发 Run 的日志混写。不在当前任务上下文中的后台线程日志不采集。
 
 字符串、集合长度、递归深度和总访问节点数都有上限；单条事件和 History 的 payload
 约 12 KB，过长时保留截断标记。默认单 Run 写入预算为 20 MB（包括 console 和 History），
