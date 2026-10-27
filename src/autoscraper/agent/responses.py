@@ -1,6 +1,6 @@
 # 模型接口适配：把 browser-use 的消息和结构化输出类型转换为 Responses API 请求。
 # 负责序列化消息、生成 JSON Schema、解析输出及 token 用量，并统一第三方 API 异常。
-# 调用次数上限由 agent/tools.py 的 LimitedChatOpenAI 管理，本模块负责实际请求。
+# 调用次数上限由 agent/llm.py 的 LimitedChatOpenAI 管理，本模块负责实际请求。
 """OpenAI-compatible Responses API adapter for browser-use structured output."""
 
 from dataclasses import dataclass

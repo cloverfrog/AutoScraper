@@ -52,7 +52,7 @@ class Session:
 # 根据给定模型和时限构造等待器，供无浏览器的语义等待用例复用。
 def waiter(model, timeout=1000):
     pytest.importorskip("browser_use")
-    from autoscraper.agent.tools import ContentWaiter
+    from autoscraper.agent.waiting import ContentWaiter
 
     return ContentWaiter(timeout, model)
 
@@ -134,7 +134,7 @@ def test_semantic_parameters_bounded(params):
 # 已知 CSS 等待应遵守时限，并返回 DOM 或明确错误状态。
 @pytest.mark.parametrize("outcome", ["ready", "timeout"])
 def test_selector_wait_is_bounded_and_returns_dom(monkeypatch, outcome):
-    from autoscraper.agent import tools as agent_tools
+    from autoscraper.agent import waiting as agent_waiting
 
     seen = []
 
@@ -143,7 +143,7 @@ def test_selector_wait_is_bounded_and_returns_dom(monkeypatch, outcome):
         if outcome == "timeout":
             raise PlaywrightTimeout("not attached")
 
-    monkeypatch.setattr(agent_tools, "selector_wait", wait)
+    monkeypatch.setattr(agent_waiting, "selector_wait", wait)
     result = asyncio.run(
         waiter(None, timeout=50).selector(Session(['{"text":"quote"}']), ".quote", 30000)
     )
@@ -258,7 +258,7 @@ def test_live_delayed_quotes(page):
 def test_selector_wait_attaches_focused_cdp_target_and_preserves_browser():
     import socket
     from playwright.async_api import async_playwright
-    from autoscraper.agent.tools import selector_wait
+    from autoscraper.agent.waiting import selector_wait
 
     async def run():
         with socket.socket() as sock:

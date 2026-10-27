@@ -265,7 +265,7 @@ def test_human_wait_excluded_from_timeout(monkeypatch):
 @pytest.mark.parametrize("mode", ["answer", "pending", "budget"])
 def test_workflow_shares_answers_budget_and_waiting_time(monkeypatch, mode):
     pytest.importorskip("browser_use")
-    import autoscraper.agent.tools as helpers
+    import autoscraper.agent.llm as helpers
     import autoscraper.workflow.runner as workflow
     from autoscraper.scraping.executor import ScrapeResult
     from autoscraper.scraping.spec import ScraperSpec
@@ -393,7 +393,7 @@ def test_real_agent_continues_with_browser_and_history(monkeypatch, tmp_path, mo
     from browser_use.llm.views import ChatInvokeCompletion
     from playwright.sync_api import sync_playwright
 
-    from autoscraper.agent.tools import make_llm
+    from autoscraper.agent.llm import make_llm
     from autoscraper.agent.responses import ChatOpenAIResponses
     from autoscraper.observability.tracing import FileSink, Trace, labels
 
@@ -512,7 +512,7 @@ def test_real_agent_continues_with_browser_and_history(monkeypatch, tmp_path, mo
     try:
         if mode == "unsupported":
             from autoscraper.workflow.runner import run_task
-            monkeypatch.setattr("autoscraper.agent.tools.make_llm", lambda settings: model)
+            monkeypatch.setattr("autoscraper.agent.llm.make_llm", lambda settings: model)
             outcome = run_task(url, "前2条，字段名为quote", settings, trace=Trace(sink))
             assert outcome.status == "unsupported"
             summary = json.loads((sink.directory / "summary.json").read_text())

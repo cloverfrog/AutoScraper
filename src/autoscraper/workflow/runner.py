@@ -182,7 +182,7 @@ def run_task(
 
     os.environ.setdefault("ANONYMIZED_TELEMETRY", "false")
     os.environ.setdefault("BROWSER_USE_CLOUD_SYNC", "false")
-    from autoscraper.agent.tools import make_llm, make_wait_llm
+    from autoscraper.agent.llm import make_llm, make_wait_llm
 
     build_task(url, task)  # 在付费解析需求之前先验证任务输入。
     policy = validation or ValidationSettings()

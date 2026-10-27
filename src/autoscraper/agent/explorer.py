@@ -171,7 +171,8 @@ async def generate_spec(
     os.environ.setdefault("BROWSER_USE_CLOUD_SYNC", "false")
     try:
         from browser_use import Agent, BrowserSession
-        from .tools import build_tools, make_llm, make_wait_llm
+        from .tools import build_tools
+        from .llm import make_llm, make_wait_llm
     except ImportError as exc:
         raise AgentError("Install agent dependencies: uv sync --extra agent --locked") from exc
 

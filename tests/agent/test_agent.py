@@ -3,6 +3,7 @@
 import asyncio
 import json
 import os
+from importlib import import_module
 from types import SimpleNamespace
 
 import pytest
@@ -116,7 +117,7 @@ def test_generated_rule_with_existing_executor(rule):
 # DOM 工具应相对每条记录测试字段，并按字面读取属性名。
 def test_dom_helpers_use_relative_css_and_literal_attributes():
     pytest.importorskip("browser_use")
-    from autoscraper.agent.tools import INSPECT_SCRIPT, SELECTOR_SCRIPT
+    from autoscraper.agent.dom import INSPECT_SCRIPT, SELECTOR_SCRIPT
     from playwright.sync_api import sync_playwright
 
     with sync_playwright() as p:
@@ -172,7 +173,7 @@ def selector_page():
 
 # 在测试页面中执行项目固定的选择器检查脚本。
 def evaluate_selector(page, item, field="", attribute=""):
-    from autoscraper.agent.tools import SELECTOR_SCRIPT
+    from autoscraper.agent.dom import SELECTOR_SCRIPT
 
     return page.evaluate(f"(args) => ({SELECTOR_SCRIPT})(...args)", [item, field, attribute])
 
@@ -260,7 +261,8 @@ def test_selector_sample_scope_and_value_limits(selector_page):
 # 工具应原样传递待测试参数，并保留运行错误供 Agent 处理。
 def test_selector_tool_passes_exact_inputs_and_keeps_runtime_errors():
     pytest.importorskip("browser_use")
-    from autoscraper.agent.tools import SELECTOR_SCRIPT, build_tools
+    from autoscraper.agent.dom import SELECTOR_SCRIPT
+    from autoscraper.agent.tools import build_tools
 
     action = build_tools().registry.registry.actions["test_selector"].function
     raw = '{"status":"invalid_css","item_selector":"article"}'
@@ -387,7 +389,9 @@ def test_exploration_prompt_preserves_task_context(monkeypatch, rule, repair):
 @pytest.mark.parametrize("outcome", ["success", "invalid", "unfinished", "timeout"])
 def test_runner_limits_validation_cleanup(monkeypatch, rule, outcome):
     bu = pytest.importorskip("browser_use")
-    import autoscraper.agent.tools as helpers
+    import autoscraper.agent.llm as helpers
+    # 先加载工具模块，避免 BrowserSession 替身被缓存为工具参数注解。
+    import_module("autoscraper.agent.tools")
 
     class Browser:
         killed = False
@@ -437,7 +441,8 @@ def test_runner_limits_validation_cleanup(monkeypatch, rule, outcome):
 def test_tools_and_llm_budget(monkeypatch):
     pytest.importorskip("browser_use")
     from browser_use.llm.views import ChatInvokeCompletion
-    from autoscraper.agent.tools import build_tools, make_llm
+    from autoscraper.agent.tools import build_tools
+    from autoscraper.agent.llm import make_llm
     from autoscraper.agent.responses import ChatOpenAIResponses
 
     assert set(build_tools().registry.registry.actions) == {
@@ -535,7 +540,7 @@ def test_openai_responses_structured_request(monkeypatch):
 # 自定义兼容接口地址仍应使用项目的 Responses 适配器。
 def test_custom_endpoint_uses_responses_adapter():
     pytest.importorskip("browser_use")
-    from autoscraper.agent.tools import LimitedChatOpenAI, make_llm
+    from autoscraper.agent.llm import LimitedChatOpenAI, make_llm
 
     settings = AgentSettings(api_key="fake", model="compatible", base_url="https://llm.example/v1")
     llm = make_llm(settings)

@@ -57,10 +57,10 @@ def settings():
 def workflow(monkeypatch):
     pytest.importorskip("browser_use")
     import autoscraper.workflow.runner as module
-    import autoscraper.agent.tools as tools
+    import autoscraper.agent.llm as models
 
     model = SimpleNamespace(calls=0)
-    monkeypatch.setattr(tools, "make_llm", lambda settings: model)
+    monkeypatch.setattr(models, "make_llm", lambda settings: model)
     return module, model
 
 

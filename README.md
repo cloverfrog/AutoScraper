@@ -229,6 +229,9 @@ src/autoscraper/
 ├── agent/          # 浏览器探索、工具、模型适配和需求澄清
 │   ├── explorer.py
 │   ├── tools.py
+│   ├── dom.py
+│   ├── waiting.py
+│   ├── llm.py
 │   ├── responses.py
 │   └── clarification.py
 ├── scraping/       # 抓取协议、确定性执行和数据导出
