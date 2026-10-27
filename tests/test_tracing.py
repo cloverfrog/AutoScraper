@@ -724,3 +724,19 @@ def test_framework_exception_keeps_message_and_stack_without_known_key():
     assert "ValueError" in event["payload"]["traceback"]
     assert "/cars?page=2" in event["payload"]["traceback"]
     assert "KNOWN_KEY" not in json.dumps(event)
+
+
+def test_run_directories_sort_by_time_and_still_distinguish_simultaneous_runs(tmp_path, monkeypatch):
+    from datetime import datetime, timedelta, timezone
+    import autoscraper.tracing as tracing
+
+    earlier = datetime(2026, 10, 27, 8, 0, tzinfo=timezone.utc)
+    moments = iter([earlier, earlier + timedelta(seconds=2), earlier + timedelta(seconds=2)])
+    monkeypatch.setattr(tracing, "datetime", SimpleNamespace(now=lambda: next(moments)))
+    ids = ["f" * 32, "0" * 32, "1" * 32]
+    sinks = [FileSink(tmp_path) for _ in ids]
+    for sink, run_id in zip(sinks, ids):
+        sink.start(run_id)
+    names = sorted(path.name for path in tmp_path.iterdir())
+    assert [name.rsplit("_", 1)[1] for name in names] == ids
+    assert len(set(names)) == 3

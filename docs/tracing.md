@@ -1,6 +1,6 @@
 # Agent 执行追踪
 
-Agent CLI 默认将每个任务保存到 `.agent-runtime/runs/<run_id>/`。该目录已被 Git
+Agent CLI 默认将每个任务保存到 `.agent-runtime/runs/<开始时间>_<run_id>/`。该目录已被 Git
 忽略。追踪不调用额外 LLM，不改变任务状态、最终 stdout JSON、规则/数据格式或退出码。
 
 ```bash
@@ -26,13 +26,18 @@ print(trace.run_id, outcome.status)
 ## 文件与事件
 
 ```text
-<run_id>/
+<开始时间>_<run_id>/
   events.jsonl
   summary.json
   history/
     attempt-1.jsonl
     attempt-2.jsonl
 ```
+
+目录前缀使用运行机器的本地时间，包含微秒和时区，例如
+`20261027-163012-123456+0800_<run_id>`；在同一时区按名称排序即可查看先后顺序。
+随机 Run ID 继续用于唯一关联和避免同一时刻重名，事件中的 `run_id` 保持不变。
+旧目录不会自动重命名。
 
 事件和经过筛选的 History 在运行中逐条写入并 flush，不等任务结束。
 History 每行对应框架的一条 History，复用其步骤编号、时间元数据、动作及结果摘要；

@@ -137,7 +137,7 @@ Agent 工作流判定为验证失败，不覆盖已有输出。只运行 Executo
 
 完整参数：`uv run --extra agent autoscraper-agent --help`。
 
-Agent 执行轨迹默认保存至 `.agent-runtime/runs/<run_id>/`，包括持续追加的事件、经过
+Agent 执行轨迹默认保存至 `.agent-runtime/runs/<开始时间>_<run_id>/`，按名称即可排序，包括持续追加的事件、经过
 筛选的 History 和最终汇总。可用 `--runs-dir` 更改路径。默认保留完整 URL、决策摘要、
 工具反馈、问答和失败原因，仅替换明确凭据；完整 DOM 和模型请求/响应不默认采集。
 不再创建重复的 console.log。日志失败会警告并继续任务，不改变 stdout JSON 与退出码。

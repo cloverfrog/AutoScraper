@@ -200,7 +200,8 @@ class FileSink:
         self.directory = None
 
     def start(self, run_id):
-        self.directory = self.root / run_id
+        stamp = datetime.now().astimezone().strftime("%Y%m%d-%H%M%S-%f%z")
+        self.directory = self.root / f"{stamp}_{run_id}"
         self.directory.mkdir(parents=True, mode=0o700)
         (self.directory / "history").mkdir(mode=0o700)
 
