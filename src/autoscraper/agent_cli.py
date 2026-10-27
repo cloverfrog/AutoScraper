@@ -11,6 +11,7 @@ from .clarification import ClarificationRequest
 from .export import export_records
 from .validation import ValidationSettings
 from .workflow import run_task
+from .tracing import FileSink, Trace, emit, operation
 
 
 def settings_from_env(**overrides) -> AgentSettings:
@@ -103,7 +104,19 @@ def main() -> int:
         action="store_true",
         help="Legacy compatibility flag; Responses output always uses json_schema",
     )
+    parser.add_argument("--runs-dir", type=Path, default=Path(".agent-runtime/runs"),
+                        help="Local execution traces (default: .agent-runtime/runs)")
     args = parser.parse_args()
+    trace = Trace(FileSink(args.runs_dir), secrets=(
+        os.getenv("AUTOSCRAPER_API_KEY"), os.getenv("DEEPSEEK_API_KEY"),
+    ))
+    with trace.run(url=args.url, task=args.task, model=args.model):
+        code = _execute(args, trace)
+        trace.exit_code = code
+        return code
+
+
+def _execute(args, trace) -> int:
     try:
         paths = [args.spec_output.resolve(), *(p.resolve() for p in args.output)]
         if len(paths) != len(set(paths)):
@@ -148,6 +161,8 @@ def main() -> int:
             ask_user=None if args.non_interactive else ask_user,
         )
         summary = outcome.summary()
+        trace.outcome = summary
+        emit("cli.result", **summary)
         if outcome.status not in {"success", "validated"}:
             if outcome.spec is not None and outcome.failure_stage in {"validation", "execution"}:
                 try:
@@ -162,14 +177,16 @@ def main() -> int:
                 return 4
             return 3 if outcome.status == "unsupported" else 1
         # No rule/data writes until constraints and execution/data checks pass.
-        save_spec(outcome.spec, args.spec_output)
-        if args.output:
-            for output in args.output:
-                export_records(outcome.data.records, output, list(outcome.spec.all_fields))
+        with operation("artifacts"):
+            save_spec(outcome.spec, args.spec_output)
+            if args.output:
+                for output in args.output:
+                    export_records(outcome.data.records, output, list(outcome.spec.all_fields))
         summary["spec"] = str(args.spec_output)
         print(json.dumps(summary, ensure_ascii=False))
         return 0
     except Exception as exc:
+        emit("cli.failed", exception=type(exc).__name__, message=str(exc))
         print(
             json.dumps(
                 {

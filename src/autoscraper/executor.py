@@ -9,6 +9,7 @@ from playwright.sync_api import Locator, Page, TimeoutError as PlaywrightTimeout
 from pydantic import HttpUrl, TypeAdapter
 
 from .spec import FieldSpec, ScraperSpec
+from .tracing import emit, operation
 
 
 class ScrapeError(RuntimeError):
@@ -148,6 +149,15 @@ def extract_detail(page: Page, url: str, spec: ScraperSpec) -> dict[str, str | N
 
 class ScraperExecutor:
     def run(self, spec: ScraperSpec) -> ScrapeResult:
+        with operation("executor", start_url=str(spec.start_url)) as details:
+            result = self._run(spec)
+            details.update(items=len(result.records), pages=result.pages_visited,
+                           detail_pages=result.detail_pages_visited, errors=len(result.errors),
+                           stop_reason=result.stop_reason,
+                           error_codes=[error.code for error in result.error_details])
+            return result
+
+    def _run(self, spec: ScraperSpec) -> ScrapeResult:
         with sync_playwright() as playwright:
             browser = playwright.chromium.launch(headless=False)
             try:
@@ -263,6 +273,10 @@ class ScraperExecutor:
         except PlaywrightError as exc:
             raise ScrapeError(f"Browser failure at {page.url}: {exc}") from exc
         finally:
+            emit("executor.result", items=len(result.records), pages=result.pages_visited,
+                 detail_pages=result.detail_pages_visited, errors=len(result.errors),
+                 stop_reason=result.stop_reason,
+                 error_codes=[error.code for error in result.error_details])
             if detail_page is not None:
                 detail_page.close()
         return result

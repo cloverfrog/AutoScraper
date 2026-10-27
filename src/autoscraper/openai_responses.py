@@ -18,6 +18,8 @@ from browser_use.llm.openai.responses_serializer import ResponsesAPIMessageSeria
 from browser_use.llm.schema import SchemaOptimizer
 from browser_use.llm.views import ChatInvokeCompletion, ChatInvokeUsage
 
+from .tracing import capture_usage, traced_llm
+
 T = TypeVar("T", bound=BaseModel)
 
 
@@ -100,6 +102,7 @@ class ChatOpenAIResponses(BaseChatModel):
         self, messages: list[BaseMessage], output_format: type[T], **kwargs: Any
     ) -> ChatInvokeCompletion[T]: ...
 
+    @traced_llm
     async def ainvoke(
         self,
         messages: list[BaseMessage],
@@ -134,8 +137,9 @@ class ChatOpenAIResponses(BaseChatModel):
 
         try:
             response = await self.get_client().responses.create(**params)
-            self._check_response(response)
             usage = self._usage(response)
+            capture_usage(usage)
+            self._check_response(response)
             if output_format is None:
                 return ChatInvokeCompletion(
                     completion=response.output_text or "",
