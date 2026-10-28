@@ -195,6 +195,9 @@ $env:UV_CACHE_DIR = "$PWD\.uv-cache"
 
 默认测试不调用真实 LLM：
 
+测试中的默认运行日志自动写入 pytest 临时目录，不会混入项目的
+`.agent-runtime/runs/`；显式指定的其他日志目录仍按用例配置生效。
+
 ```bash
 uv run --extra agent pytest
 ```
