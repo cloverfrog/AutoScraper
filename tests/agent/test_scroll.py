@@ -1,3 +1,4 @@
+# Agent 滚动探索测试：验证一次工具调用内多轮检查，以及内置滚动与 CSS 容器的分工。
 """Bounded scroll exploration reuses built-in scrolling and checks record growth."""
 
 import asyncio
@@ -9,6 +10,7 @@ import pytest
 from autoscraper.scraping.progress import STATE_SCRIPT
 
 
+# 脚本化记录数先增长后稳定，确认工具返回完整的轮数、数量变化和推断结束原因。
 @pytest.mark.parametrize("container", ["", "main"])
 def test_scroll_tool_checks_multiple_rounds_in_one_call(monkeypatch, container):
     pytest.importorskip("browser_use")
@@ -27,10 +29,12 @@ def test_scroll_tool_checks_multiple_rounds_in_one_call(monkeypatch, container):
         original_init(self, *args, **kwargs)
         self.registry.registry.actions["scroll"].function = scroll
 
+    # 只替换内置滚动入口，保留真实工具注册，检查普通页面确实复用了该入口。
     monkeypatch.setattr(Tools, "__init__", init)
     tools = build_tools(content_timeout_ms=1000)
     states = iter([1, 2, 3, 3, 3])
 
+    # 固定脚本按快照取状态；CSS 容器的滚动单独记账，不能误走普通页面动作。
     class Page:
         async def evaluate(self, script, options):
             if script != STATE_SCRIPT:

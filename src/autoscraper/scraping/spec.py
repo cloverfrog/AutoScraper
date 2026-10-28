@@ -32,30 +32,35 @@ class FieldSpec(ProtocolModel):
         return self
 
 
-# 分页类型使用判别联合，拒绝不适用的字段。
+# 链接分页：唯一 Next 元素提供 href，执行器继续使用 URL 导航和循环检测。
 class LinkPagination(ProtocolModel):
     type: Literal["link"]
     next_selector: NonEmpty
 
 
+# 动态分页共用页面状态标志；加载标志消失只表示本轮加载结束，不代表已到末尾。
 class DynamicPagination(ProtocolModel):
     loading_selector: NonEmpty | None = None
     end_selector: NonEmpty | None = None
 
 
+# 点击分页覆盖追加和整批替换；mode 决定使用记录数还是字段快照确认推进。
 class ClickPagination(DynamicPagination):
     type: Literal["click"]
     next_selector: NonEmpty
     mode: Literal["append", "replace"] = "append"
 
 
+# 滚动分页默认作用于页面，也可指定唯一容器；动作预算与已处理批次预算相互独立。
 class ScrollPagination(DynamicPagination):
     type: Literal["scroll"]
     container_selector: NonEmpty | None = None
+    # 无新增的重试也消耗动作预算；仅到底后连续无新增才累计启发式结束阈值。
     max_scrolls: int = Field(default=100, ge=1, le=1000)
     no_change_limit: int = Field(default=3, ge=2, le=10)
 
 
+# 显式 type 选择对应模型，拒绝未知类型和跨类型字段；旧 JSON 必须迁移，不静默兼容。
 PaginationSpec = Annotated[
     LinkPagination | ClickPagination | ScrollPagination, Field(discriminator="type")
 ]

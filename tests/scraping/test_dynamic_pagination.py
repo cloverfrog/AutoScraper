@@ -1,3 +1,5 @@
+# 动态分页离线回归：覆盖追加、替换和滚动的推进、结束、失败及预算边界。
+# 复用基础抓取测试的浏览器与路由夹具，以真实页面行为验证等待逻辑。
 """Offline browser regressions for append, replacement and scroll termination."""
 
 import pytest
@@ -11,6 +13,7 @@ from test_scraper import route_pages
 page = test_scraper.page
 
 
+# 构造最小动态分页规则，允许用例单独覆盖等待和预算参数。
 def rule(pagination, **updates):
     data = dict(
         start_url="https://fixture.test/1",
@@ -25,11 +28,13 @@ def rule(pagination, **updates):
     return ScraperSpec.model_validate(data)
 
 
+# 将 HTML 挂到离线路由并运行真实 Chromium，避免依赖外部站点。
 def run(page, body, pagination, **updates):
     route_pages(page, {"https://fixture.test/1": body})
     return ScraperExecutor().run_page(rule(pagination, **updates), page)
 
 
+# 页码先变、数据延迟更新时，追加和替换模式都必须等到真实记录变化。
 @pytest.mark.parametrize("mode", ["append", "replace"])
 def test_click_delayed_records_and_early_page_number(page, mode):
     body = """<main><article><span>A</span></article></main><b>1</b>
@@ -51,6 +56,7 @@ def test_click_delayed_records_and_early_page_number(page, mode):
     assert result.stop_reason == "no_next"
 
 
+# 按钮文字变化不等于记录推进；控件仍可用但无新内容时必须超时。
 def test_click_animation_is_not_progress(page):
     body = """<article><span>A</span></article>
     <button onclick="this.textContent='Loading...'">Next</button>"""
@@ -58,6 +64,7 @@ def test_click_animation_is_not_progress(page):
         run(page, body, dict(type="click", next_selector="button"))
 
 
+# 不可点击的控件应报告动作失败，与点击成功后的内容等待超时区分。
 def test_click_action_failure(page):
     with pytest.raises(PaginationActionError):
         run(
@@ -67,6 +74,7 @@ def test_click_action_failure(page):
         )
 
 
+# 无新增记录时，区分控件消失/禁用与显式结束标志这两类自然结束。
 @pytest.mark.parametrize(
     "terminal",
     ["this.remove()", "this.disabled=true", "document.querySelector('#end').hidden=false"],
@@ -78,6 +86,7 @@ def test_click_end_without_growth(page, terminal):
     assert result.stop_reason == ("end_marker" if "#end" in terminal else "no_next")
 
 
+# 已处理批次达到上限后，不得为了判断下一页而额外点击。
 def test_click_budget_prevents_extra_action(page):
     result = run(
         page,
@@ -90,6 +99,7 @@ def test_click_budget_prevents_extra_action(page):
     assert page.evaluate("window.clicked") is None
 
 
+# 页面和指定容器均能滚动追加；结束标志与最后一批同时到达时不能漏提取。
 @pytest.mark.parametrize("container", [False, True])
 def test_scroll_append_and_explicit_end(page, container):
     style = "<style>article {height: 900px}</style>"
@@ -111,6 +121,7 @@ def test_scroll_append_and_explicit_end(page, container):
     assert result.stop_reason == "end_marker"
 
 
+# 连续无新增达到阈值才推断结束；动作预算先耗尽时必须报告预算截断。
 @pytest.mark.parametrize(
     "updates,reason", [({}, "no_more_content"), ({"max_scrolls": 2}, "scroll_limit")]
 )
@@ -122,6 +133,7 @@ def test_scroll_no_growth_threshold(page, updates, reason):
     assert result.pages_visited == 1
 
 
+# 加载标志始终可见应按超时失败，不能累积无新增次数后误判完成。
 def test_scroll_loading_timeout(page):
     with pytest.raises(ContentTimeout):
         run(
@@ -131,6 +143,7 @@ def test_scroll_loading_timeout(page):
         )
 
 
+# 记录数增长证明批次推进，即使新批次全是重复记录，结果仍须去重。
 def test_duplicate_batches_advance_but_are_deduplicated(page):
     body = """<main><article><span>A</span></article></main>
     <button onclick="document.querySelector('main').insertAdjacentHTML('beforeend',
@@ -141,6 +154,7 @@ def test_duplicate_batches_advance_but_are_deduplicated(page):
     assert result.duplicates == 2
 
 
+# 拒绝旧格式、未知类型、跨类型字段和无效阈值，防止静默忽略规则。
 @pytest.mark.parametrize(
     "pagination",
     [
@@ -157,6 +171,7 @@ def test_strict_pagination_schema(pagination):
         rule(pagination)
 
 
+# 尚未到底的空滚动不能作为结束证据，只能继续到动作预算耗尽。
 def test_scroll_without_reaching_bottom_does_not_infer_end(page):
     result = run(
         page,
@@ -166,6 +181,7 @@ def test_scroll_without_reaching_bottom_does_not_infer_end(page):
     assert result.stop_reason == "scroll_limit"
 
 
+# 替换期间短暂清空字段不代表新批次就绪，必须等待必填值恢复。
 def test_replace_waits_through_empty_field_placeholder(page):
     body = """<article><span>A</span></article>
     <button onclick="document.querySelector('span').textContent='';
@@ -177,6 +193,7 @@ def test_replace_waits_through_empty_field_placeholder(page):
 
 
 
+# 请求期间暂时禁用按钮时仍等待数据，避免在响应返回前误判结束。
 def test_temporary_disabled_button_does_not_hide_pending_records(page):
     body = """<main><article><span>A</span></article></main>
     <button onclick="this.disabled=true;setTimeout(() => {

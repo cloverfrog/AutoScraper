@@ -1,5 +1,5 @@
 # Agent 工具注册与适配：限制可用动作，将浏览器操作和等待结果包装成工具反馈。
-# 固定 DOM 脚本由 dom.py 提供，等待逻辑由 waiting.py 提供；模型由调用方注入。
+# DOM 检查由 dom.py 提供，分页状态脚本与执行器共享；内容等待模型由调用方注入。
 """Restricted browser-use tools and their tracing adapter."""
 
 import json
@@ -37,7 +37,7 @@ class TracedTools(Tools):
             return result
 
 
-# 创建当前探索可用的工具集合；先移除默认动作，再按参数注册只读辅助工具。
+# 创建探索工具集合：保留导航和分页动作，再注册 DOM 检查、有界等待与澄清工具。
 # 闭包共享等待器和澄清会话；工具说明中的英文字符串会实际发送给模型。
 def build_tools(
     *,
@@ -52,8 +52,11 @@ def build_tools(
         if name not in {"navigate", "done", "click", "scroll"}:
             tools.registry.exclude_action(name)
 
+    # 保存内置滚动入口：普通页面复用框架动作，自定义工具只补充记录检查和有界循环。
     builtin_scroll = tools.registry.registry.actions["scroll"].function
 
+    # 一次 Agent 调用内完成多轮滚动、等待和记录数检查，减少每滚一次就消耗一个 Step。
+    # 只返回探索证据和停止原因，正式去重抓取仍由 Executor 执行。
     @tools.action(
         description="Explore infinite scroll with bounded scroll/wait/record-count checks. "
         "Use built-in scroll for plain scrolling; this tool checks loading/end CSS and "
@@ -84,6 +87,7 @@ def build_tools(
                        loading_selector=loading_selector, end_selector=end_selector)
         used = 0
         unchanged = 0
+        # 总调用时限与单轮等待共同约束探索；不能因记录不断增长而重置总预算。
         deadline = monotonic() + content_timeout_ms / 1000
         try:
             before = json.loads(await page.evaluate(STATE_SCRIPT, options))
@@ -96,6 +100,7 @@ def build_tools(
                 if monotonic() >= deadline:
                     reason = "content_timeout"
                     break
+                # 内置动作按元素索引滚动；CSS 容器用共享的固定脚本补足精确定位。
                 if container_selector:
                     await page.evaluate(SCROLL_SCRIPT, container_selector)
                 else:
@@ -105,6 +110,7 @@ def build_tools(
                     if action.error:
                         return ActionResult(error=action.error)
                 used += 1
+                # 单轮等待不能突破本次工具调用剩余的总时限。
                 round_deadline = min(deadline, monotonic() + wait_ms / 1000)
                 while True:
                     after = json.loads(await page.evaluate(STATE_SCRIPT, options))
@@ -118,6 +124,7 @@ def build_tools(
                     reason = "content_timeout"
                     before = after
                     break
+                # 仅在到底、无新增且加载已结束时累积阈值；结果明确标记为启发式结束。
                 unchanged = unchanged + 1 if not changed and after["bottom"] else 0
                 before = after
                 if after["end"]:
