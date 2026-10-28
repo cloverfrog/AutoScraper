@@ -3,6 +3,7 @@
 # 退出码：0 正常结束；2 有单条错误或详情预算耗尽；1 输入、文件或执行异常。
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -21,6 +22,11 @@ def main() -> int:
     parser.add_argument("--output", type=Path, action="append", required=True)
     parser.add_argument("--content-timeout-ms", type=int)
     parser.add_argument("--navigation-timeout-ms", type=int)
+    parser.add_argument("--headed", action="store_true", help="Show the scraping browser")
+    parser.add_argument(
+        "--browser-path", dest="executable_path", default=os.getenv("AUTOSCRAPER_BROWSER_PATH"),
+        help="Chromium / Chrome executable path (default: AUTOSCRAPER_BROWSER_PATH)",
+    )
     args = parser.parse_args()
     try:
         for output in args.output:
@@ -36,7 +42,9 @@ def main() -> int:
             overrides["timeout_ms"] = args.navigation_timeout_ms
         if overrides:
             spec = ScraperSpec.model_validate({**spec.model_dump(), **overrides})
-        result = ScraperExecutor().run(spec)
+        result = ScraperExecutor(
+            headless=not args.headed, executable_path=args.executable_path
+        ).run(spec)
         for output in args.output:
             export_records(result.records, output, list(spec.all_fields))
         print(

@@ -345,8 +345,13 @@ def test_executor_run_creates_shared_context(monkeypatch):
     launch = BrowserType.launch
     new_context = Browser.new_context
 
-    def headless_launch(self, **kwargs):
-        return launch(self, **{**kwargs, "headless": True})
+    with sync_playwright() as playwright:
+        executable_path = playwright.chromium.executable_path
+    launches = []
+
+    def configured_launch(self, **kwargs):
+        launches.append(kwargs)
+        return launch(self, **kwargs)
 
     def routed_context(self, **kwargs):
         context = new_context(self, **kwargs)
@@ -359,9 +364,10 @@ def test_executor_run_creates_shared_context(monkeypatch):
         )
         return context
 
-    monkeypatch.setattr(BrowserType, "launch", headless_launch)
+    monkeypatch.setattr(BrowserType, "launch", configured_launch)
     monkeypatch.setattr(Browser, "new_context", routed_context)
-    result = ScraperExecutor().run(detail_spec(max_items=1))
+    result = ScraperExecutor(executable_path=executable_path).run(detail_spec(max_items=1))
+    assert launches == [{"headless": True, "executable_path": executable_path}]
     assert result.records[0]["description"] == "Description 1"
     assert result.detail_pages_visited == 1
 

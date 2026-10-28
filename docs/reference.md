@@ -10,6 +10,7 @@ agent/explorer.py → scraping/spec.py → scraping/executor.py → records → 
 
 - `scraping/spec.py` 仅依赖 Pydantic；通过 `ScraperSpec.model_validate_json(...)` 验证规则，通过 `ScraperSpec.model_json_schema()` 提供 Agent 使用的 JSON Schema。
 - `scraping/executor.py` 接受已验证的规则，管理浏览器生命周期；`run_page` 可注入调用方管理的 Playwright Page，方便离线测试和后续集成。
+- `ScraperExecutor(headless=True, executable_path=None)` 单独接收浏览器启动选项；Agent 工作流将探索设置传给试抓取和完整执行。独立 CLI 同样支持 `--headed`、`--browser-path` 和 `AUTOSCRAPER_BROWSER_PATH`。未指定路径时使用 Playwright 默认浏览器，运行选项不写入抓取协议。
 - `scraping/export.py` 处理 UTF-8 CSV/JSON，空 CSV 也保留字段表头；`cli/scraper.py` 负责文件读取、调用与退出状态。
 - `examples/books.json` 是手写规则；`tests/scraping/test_scraper.py` 用 Playwright 路由提供离线 HTML，并提供可选线上测试。
 - `agent/explorer.py` 编排探索、超时、输出解析和规则保存；`agent/tools.py` 使用 browser-use 扩展接口提供 DOM 检查与选择器测试；`cli/agent.py` 提供独立入口。Agent 不导入 Executor，CLI 通过工作流协调探索与执行。

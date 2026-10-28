@@ -185,6 +185,12 @@ def extract_detail(page: Page, url: str, spec: ScraperSpec) -> dict[str, str | N
 
 # 规则执行入口；run 自行管理浏览器，run_page 可复用调用方已有页面。
 class ScraperExecutor:
+    # 浏览器启动配置属于本次运行，不写入可复用的 ScraperSpec。
+    # 默认无头运行；工作流会传入与 Agent 探索相同的配置。
+    def __init__(self, *, headless: bool = True, executable_path: str | None = None):
+        self.headless = headless
+        self.executable_path = executable_path
+
     # 执行规则并记录总体追踪指标；真正的浏览器创建与回收交给 _run。
     def run(self, spec: ScraperSpec) -> ScrapeResult:
         with operation("executor", start_url=str(spec.start_url)) as details:
@@ -198,7 +204,9 @@ class ScraperExecutor:
     # 创建浏览器和列表页面，执行结束或异常退出时统一关闭浏览器。
     def _run(self, spec: ScraperSpec) -> ScrapeResult:
         with sync_playwright() as playwright:
-            browser = playwright.chromium.launch(headless=False)
+            browser = playwright.chromium.launch(
+                headless=self.headless, executable_path=self.executable_path
+            )
             try:
                 context = browser.new_context()
                 page = context.new_page()

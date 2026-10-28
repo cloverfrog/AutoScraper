@@ -382,6 +382,38 @@ def test_output_requires_full_execution_after_sample(candidate, settings, workfl
     assert result.summary()["task_fulfilled"]
 
 
+# 探索、试抓取和完整执行应收到同样的显示模式与路径，且不会因进入新阶段回退到默认值。
+@pytest.mark.parametrize("headless", [True, False])
+@pytest.mark.parametrize("path", [None, "C:/Custom Browser/chrome.exe"])
+def test_browser_settings_shared_across_all_stages(
+    candidate, settings, workflow, monkeypatch, headless, path
+):
+    module, _ = workflow
+    settings.headless = headless
+    settings.executable_path = path
+    exploration = []
+    execution = []
+
+    async def generate(url, task, run_settings, **kwargs):
+        exploration.append((run_settings.headless, run_settings.executable_path))
+        return candidate
+
+    def run(self, spec):
+        execution.append((spec.max_items, self.headless, self.executable_path))
+        return ScrapeResult(
+            records=[{"title": "A", "price": "1"}] * spec.max_items, stop_reason="max_items"
+        )
+
+    monkeypatch.setattr(module, "generate_spec", generate)
+    monkeypatch.setattr(ScraperExecutor, "run", run)
+    outcome = run_task(
+        URL, TASK, settings, execute=True, validation=ValidationSettings(max_items=1)
+    )
+    assert outcome.status == "success"
+    assert exploration == [(headless, path)]
+    assert execution == [(1, headless, path), (2, headless, path)]
+
+
 # 验证页数预算不足应明确报告，而不是要求 Agent 重写正确规则。
 def test_validation_budget_exhaustion_is_not_repaired(candidate, settings, workflow, monkeypatch):
     install_candidates(monkeypatch, workflow, [candidate])

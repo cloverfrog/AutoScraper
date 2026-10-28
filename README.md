@@ -51,7 +51,9 @@ $env:AUTOSCRAPER_BROWSER_PATH = uv run --extra agent python -c "from playwright.
 uv run --extra agent autoscraper-agent "https://books.toscrape.com/" "抓取前25本书，字段名为title、price、url，分别为完整书名、价格、绝对详情链接" --spec-output output/books-agent.json --output output/books.json --output output/books.csv --headed
 ```
 
-`--headed` 显示 Agent 探索浏览器；去掉后使用无头模式。此命令会调用 LLM，产生 API 费用。
+`--headed` 显示探索、试抓取和正式抓取的浏览器；去掉后所有阶段均使用无头模式。
+`--browser-path` 或 `AUTOSCRAPER_BROWSER_PATH` 指定的可执行文件也用于所有阶段。
+此命令会调用 LLM，产生 API 费用。
 
 规则会先校验必需字段、数量并试跑提取；可恢复的错误默认最多修复 2 次。验证通过后得到：
 
@@ -80,6 +82,10 @@ uv run --extra agent autoscraper-agent "https://books.toscrape.com/" "抓取前2
 ```bash
 uv run autoscraper output/books-agent.json --output output/books.json --output output/books.csv
 ```
+
+独立执行器也默认无头运行，可加 `--headed` 显示浏览器，并通过 `--browser-path` 指定
+可执行文件；未传路径时读取 `AUTOSCRAPER_BROWSER_PATH`，再回退到 Playwright 默认浏览器。
+这些启动选项不保存到规则 JSON 中。
 
 也可直接使用仓库中已验证的 Agent 规则快照：
 
@@ -114,7 +120,7 @@ Agent 工作流判定为验证失败，不覆盖已有输出。只运行 Executo
 | --- | --- | --- |
 | `--spec-output` | 规则输出路径，必填 | — |
 | `--output` | 数据输出路径，可重复指定 CSV / JSON | 不抓取数据 |
-| `--headed` | 显示探索浏览器 | 无头模式 |
+| `--headed` | 显示探索、试抓取和正式抓取浏览器 | 无头模式 |
 | `--model` | LLM 模型名 | `deepseek-flash` |
 | `--base-url` | 模型接口地址 | `https://api.deepseek.com` |
 | `--max-steps` | 需求解析、探索、修复共享的 LLM 调用上限 | 12 |

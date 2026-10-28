@@ -111,6 +111,10 @@ def run_task(
                 )
             ]
             return outcome
+        # 试抓取、完整执行和各轮修复都沿用探索阶段的浏览器设置。
+        executor = ScraperExecutor(
+            headless=settings.headless, executable_path=settings.executable_path
+        )
         # 首次生成也算一次尝试，因此总尝试数为 max_repairs + 1。
         previous_spec = None
         for attempt in range(policy.max_repairs + 1):
@@ -156,14 +160,14 @@ def run_task(
                         preview = build_preview_spec(candidate, policy)
                         stage = "validation"
                         with operation("validation_extraction"):
-                            result = ScraperExecutor().run(preview)
+                            result = executor.run(preview)
                         issues, complete = validate_preview_data(
                             result, requirements, candidate, preview, execute=execute
                         )
                         if not issues and execute and not complete:
                             stage = "execution"
                             with operation("execution"):
-                                result = ScraperExecutor().run(candidate)
+                                result = executor.run(candidate)
                             issues, complete = validate_execution_data(result, requirements)
                         outcome.sample_only = not complete
                     outcome.spec, outcome.data = candidate, result
