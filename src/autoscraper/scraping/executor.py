@@ -73,6 +73,19 @@ class ScrapeFailure:
     url: str
 
 
+# 执行器停止原因的静态取值约束；保留空字符串作为初始值，避免改变异常路径的报告。
+# 此处只限制类型提示，不增加运行时校验，也不改变已有 JSON 中的字符串值。
+ScrapeStopReason = Literal[
+    "",                 # 尚未正常记录停止原因，例如执行中途发生异常。
+    "max_items",        # 已达到记录数量上限。
+    "max_pages",        # 列表页访问预算耗尽。
+    "detail_limit",     # 详情导航尝试预算耗尽。
+    "pagination_cycle",  # 下一页链接或重定向重复访问已处理页面。
+    "no_next",          # 下一页链接缺失或已禁用。
+    "no_pagination",    # 规则未声明分页，当前列表页处理完毕。
+]
+
+
 # 执行结果：记录、错误、访问计数和停止原因；有数据并不等于任务完整完成。
 @dataclass
 class ScrapeResult:
@@ -83,7 +96,7 @@ class ScrapeResult:
     duplicates: int = 0
     # max_items/no_next/no_pagination 为数量或自然结束；max_pages/detail_limit 为预算截断。
     # pagination_cycle 表示重复分页链接，工作流将其视为规则错误。
-    stop_reason: str = ""
+    stop_reason: ScrapeStopReason = ""
     error_details: list[ScrapeFailure] = field(default_factory=list)
 
 

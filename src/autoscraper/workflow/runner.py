@@ -28,7 +28,7 @@ from autoscraper.scraping.executor import (
     ScrapeError,
     ScraperExecutor,
 )
-from .outcome import TaskOutcome
+from .outcome import TaskOutcome, TaskStage
 from .requirements import extract_requirements
 from .validation import (
     Feedback,
@@ -117,7 +117,7 @@ def run_task(
             with (labels(attempt=attempt + 1), operation("attempt"),
                   operation("repair") if attempt else nullcontext()):
                 seconds = remaining()
-                stage = "exploration"
+                stage: TaskStage = "exploration"
                 outcome.failure_stage = None
                 outcome.attempts = attempt + 1
                 outcome.spec, outcome.data = None, None

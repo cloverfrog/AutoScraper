@@ -3,10 +3,25 @@
 """Task outcome data and the shared CLI/tracing summary."""
 
 from dataclasses import dataclass, field
+from typing import Literal
 
 from autoscraper.scraping.executor import ScrapeResult
 from autoscraper.scraping.spec import ScraperSpec
 from .validation import Feedback, TaskRequirements
+
+
+# 业务任务状态：供编辑器和静态类型检查使用，序列化时仍是原来的字符串。
+# 不与 DOM 工具的 ready/timeout 或模型接口的 completed/failed 状态混用。
+TaskStatus = Literal[
+    "success",              # 抓取结果已通过完整检查。
+    "validated",            # 规则已通过试抓取验证，可能只覆盖样本。
+    "unfulfilled",          # 任务未完成或验证失败。
+    "unsupported",          # 当前协议无法满足需求。
+    "needs_clarification",  # 等待用户补充任务意图。
+]
+
+# 工作流中的活动阶段；failure_stage=None 保留原有“未标记失败阶段”的含义。
+TaskStage = Literal["exploration", "validation", "execution"]
 
 
 # 任务全过程的结果容器：状态、候选规则、数据、反馈、预算使用和澄清记录。
@@ -14,7 +29,7 @@ from .validation import Feedback, TaskRequirements
 @dataclass
 class TaskOutcome:
     # status 是任务终态；spec/data 可以保留失败现场，不能仅凭它们存在判断成功。
-    status: str
+    status: TaskStatus
     requirements: TaskRequirements | None = None
     spec: ScraperSpec | None = None
     data: ScrapeResult | None = None
@@ -23,7 +38,7 @@ class TaskOutcome:
     llm_calls: int = 0
     wait_llm_calls: int = 0
     sample_only: bool = False
-    failure_stage: str | None = None
+    failure_stage: TaskStage | None = None
     # history 记录各轮验证反馈；clarifications 是跨修复轮次共享的用户问答。
     history: list[dict] = field(default_factory=list)
     original_url: str | None = None
