@@ -24,6 +24,7 @@ from autoscraper.agent.clarification import (
 )
 from autoscraper.scraping.executor import (
     ContentTimeout,
+    PaginationActionError,
     NavigationError,
     ScrapeError,
     ScraperExecutor,
@@ -192,7 +193,7 @@ def run_task(
                         }
                     )
                     return outcome
-                except (NavigationError, ContentTimeout) as exc:
+                except (NavigationError, ContentTimeout, PaginationActionError) as exc:
                     # 环境/等待失败不证明规则错误，保留候选供排查但停止修复。
                     issues = [Feedback(code=exc.code, message=str(exc), recoverable=False)]
                     outcome.spec, outcome.data = candidate, None
@@ -210,7 +211,8 @@ def run_task(
                 emit("validation.feedback", feedback=[item.model_dump() for item in issues],
                      failure_stage=stage)
                 if candidate is not None and any(
-                    item.code in {"navigation_timeout", "navigation_failure", "content_timeout"}
+                    item.code in {"navigation_timeout", "navigation_failure", "content_timeout",
+                                  "pagination_action_failure"}
                     for item in issues
                 ):
                     outcome.failure_stage = stage

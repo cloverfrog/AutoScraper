@@ -42,7 +42,7 @@ def detail_spec(**updates):
             },
             "max_pages": 25,
         },
-        "pagination": {"next_selector": ".next"},
+        "pagination": {"type": "link", "next_selector": ".next"},
         "max_items": 25,
         "max_pages": 2,
         # Leave room for Chromium scheduling; deliberate short waits have dedicated tests.

@@ -65,7 +65,7 @@ uv run --extra agent autoscraper-agent "https://books.toscrape.com/" "抓取前2
 
 换网站时，替换命令里的 URL 和自然语言需求即可。
 
-列表字段和一层详情页字段均可抓取；登录、无限滚动等超出当前协议的场景，会返回 `status: "unsupported"` 并以退出码 3 结束，不再静默省略字段。其他验证失败返回 `unfulfilled` / 退出码 1，保留已有规则和数据文件。运行时导航或内容超时时，还会另存未验证的候选规则。具体反馈见终端最后一条 JSON。
+列表字段和一层详情页字段均可抓取；登录、复杂虚拟列表等超出当前协议的场景，会返回 `status: "unsupported"` 并以退出码 3 结束，不再静默省略字段。其他验证失败返回 `unfulfilled` / 退出码 1，保留已有规则和数据文件。运行时导航或内容超时时，还会另存未验证的候选规则。具体反馈见终端最后一条 JSON。
 
 需要精确固定字段和数量时，可在上述命令中加 `--fields title price --count 25`。否则会先独立解析自然语言需求，再生成和验证规则。
 
@@ -152,7 +152,7 @@ Agent 执行轨迹默认保存至 `.agent-runtime/runs/<开始时间>_<run_id>/`
 ## 任务需求澄清
 
 当不同的合理理解会实质改变数据来源、范围、筛选条件等目标，且已有上下文无法判断
-用户意图时，Agent 可以调用 `ask_user`。例如原入口依赖当前不支持的无限滚动，
+用户意图时，Agent 可以调用 `ask_user`。例如原入口依赖当前不支持的复杂虚拟列表，
 但另一个传统分页入口可能提供所需数据：Agent 应先说明页面证据、替代方案及数据/顺序
 尚未证明等价，再询问用户。普通导航、重定向、分页和详情访问不因 URL 不同就触发提问。
 
@@ -307,3 +307,28 @@ uv run --extra agent autoscraper-agent "https://quotes.toscrape.com/js-delayed/"
 ```bash
 uv run autoscraper output/quotes.unvalidated.json --output output/quotes-data.json --navigation-timeout-ms 60000
 ```
+
+## 动态分页
+
+`pagination` 必须显式声明 `type`；旧的仅含 `next_selector` 的规则需迁移，
+例如 `{"type":"link","next_selector":"li.next a"}`。协议版本 1/2 的列表/详情含义不变。
+
+Load More 使用 `{"type":"click","next_selector":"button.more","mode":"append"}`；
+同 URL 替换列表使用 `mode: "replace"`，执行器比较声明的列表字段值确认更新。
+无限滚动使用 `{"type":"scroll","max_scrolls":100,"no_change_limit":3}`，
+可通过 `container_selector` 指定唯一的滚动容器。虚拟列表暂不支持。
+
+click/scroll 可声明站点真实存在的 `loading_selector` 和 `end_selector`，均按可见状态判断。
+追加列表以记录数增长确认推进；加载标志消失不等于结束。
+`max_pages` 统计已处理列表批次（含初始批次），`max_scrolls` 独立限制滚动动作总数。
+每次等待受 `content_timeout_ms`（默认 `timeout_ms`）限制。
+
+停止原因：`no_next` 为按钮消失/禁用，`end_marker` 为显式结束；
+`no_more_content` 是到底后连续多轮无新增的启发式结束，可能遗漏延迟很长的数据。
+`scroll_limit` / `max_pages` 是预算截断，不能作为完整完成。
+仍可用的按钮没有更新记录会报告 `content_timeout`，点击/滚动动作失败会报告
+`pagination_action_failure`。数量不足始终另由验证器判定。
+
+Agent 开放内置 click/scroll，并通过 `explore_scroll` 在一次调用中执行多轮有界滚动、
+等待和记录数检查，返回滚动次数、初始/最终记录数及停止原因；普通页面滚动复用内置动作。
+执行器始终使用 Playwright，不在批量抓取时调用 LLM。

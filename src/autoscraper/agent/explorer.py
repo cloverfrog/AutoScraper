@@ -111,7 +111,9 @@ Exploration:
    retry unchanged inputs only with new evidence. Retest changed selectors verbatim and submit
    those exact strings. Never claim failed or untested rules are verified, including in memory;
    the workflow validates the candidate separately.
-3. For pagination, navigate to the observed Next href and retest the same selectors.
+3. For link pagination, navigate to the observed Next href and retest the selectors.
+   For dynamic pagination, use click/scroll to observe behavior, or explore_scroll for bounded
+   multi-round scroll/wait/count checks in one step. Verify actual records, not loading animation.
    For detail fields, navigate to an observed detail href and test with item_selector="html".
 
 Protocol semantics:
@@ -121,10 +123,16 @@ Protocol semantics:
 - Detail extraction requires version="2": detail.url_selector uniquely matches a listing href;
   detail.fields are relative to the detail document with names distinct from listing fields.
   Only one detail page per record; detail.max_pages budgets navigation attempts, including failures.
-- pagination.next_selector uniquely matches an anchor with href, absent on the last page.
-  No JS-only pagination, infinite scroll, nested details, custom scripts, regex or numeric transforms.
+- pagination requires explicit type: link, click or scroll. link.next_selector matches one href.
+  click.next_selector matches one actionable Next/Load More control; mode=append (default) waits
+  for increased record count, mode=replace waits for declared list field values to change.
+  scroll optionally has container_selector, max_scrolls (default 100) and no_change_limit (default 3).
+  click/scroll may declare observed loading_selector/end_selector; never invent these markers.
+  Missing/disabled click controls or visible end markers end naturally. Available buttons without
+  record changes time out. Scroll at bottom with repeated no-growth infers no_more_content.
+  Virtual lists, nested details, custom scripts, regex or numeric transforms are unsupported.
 - max_items counts merged unique records: use the requested count, otherwise 100. max_pages counts
-  listing pages: keep <=100; timeout_ms <=30000; on_item_error=fail. Budget enough detail attempts.
+  processed list batches: keep <=100; timeout_ms <=30000; on_item_error=fail. Budget enough detail attempts.
   dedupe_by uses required stable identifier fields, otherwise [].
 
 Completion:

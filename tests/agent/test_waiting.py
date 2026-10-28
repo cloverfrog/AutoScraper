@@ -341,7 +341,7 @@ def test_content_wait_applies_after_every_pagination_navigation(page):
 
     page.route("**/*", serve)
     result = ScraperExecutor().run_page(
-        rule(max_items=2, pagination={"next_selector": ".next"}), page
+        rule(max_items=2, pagination={"type": "link", "next_selector": ".next"}), page
     )
     assert result.records == [{"quote": "A"}, {"quote": "B"}]
     assert result.pages_visited == 2

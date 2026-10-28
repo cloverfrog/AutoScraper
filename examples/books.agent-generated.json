@@ -26,6 +26,7 @@
     }
   },
   "pagination": {
+    "type": "link",
     "next_selector": "ul.pager li.next a"
   },
   "max_items": 25,

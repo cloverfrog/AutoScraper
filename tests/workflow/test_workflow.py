@@ -440,6 +440,9 @@ def test_validation_budget_exhaustion_is_not_repaired(candidate, settings, workf
         (False, None, "unfulfilled", "validation_limit", True),
         (True, "max_items", "success", None, False),
         (True, "no_next", "success", None, False),
+        (True, "end_marker", "success", None, False),
+        (True, "no_more_content", "success", None, False),
+        (True, "scroll_limit", "unfulfilled", "validation_limit", True),
         (True, "max_pages", "unfulfilled", "validation_limit", True),
         (True, "detail_limit", "unfulfilled", "validation_limit", True),
         (True, "pagination_cycle", "unfulfilled", "selector_failure", False),
@@ -730,7 +733,7 @@ def test_navigation_failure_does_not_repair(
     spec.on_item_error = mode
     if stage == "pagination":
         spec = ScraperSpec.model_validate(
-            {**spec.model_dump(), "max_pages": 2, "pagination": {"next_selector": ".next"}}
+            {**spec.model_dump(), "max_pages": 2, "pagination": {"type": "link", "next_selector": ".next"}}
         )
     target = URL + {"listing": "", "pagination": "page-2", "detail": "detail"}[stage]
     original = Page.goto
@@ -827,7 +830,7 @@ def test_navigation_feedback_preserves_full_diagnostic():
 
 # 试抓取或完整执行内容超时时停止修复，并保留可诊断状态。
 @pytest.mark.parametrize("stage", ["preview", "full"])
-@pytest.mark.parametrize("error_name", ["ContentTimeout", "NavigationTimeout"])
+@pytest.mark.parametrize("error_name", ["ContentTimeout", "NavigationTimeout", "PaginationActionError"])
 def test_wait_timeouts_stop_without_repair(
     candidate, settings, workflow, monkeypatch, stage, error_name
 ):
@@ -839,6 +842,8 @@ def test_wait_timeouts_stop_without_repair(
     def run(self, spec):
         calls.append(spec)
         if stage == "preview" or len(calls) == 2:
+            if error_name == "PaginationActionError":
+                raise executor.PaginationActionError("action failed")
             raise getattr(executor, error_name)(URL, "deadline reached")
         return ScrapeResult(records=[{"title": "A", "price": "1"}], stop_reason="max_items")
 
@@ -847,9 +852,7 @@ def test_wait_timeouts_stop_without_repair(
         URL, TASK, settings, execute=True, validation=ValidationSettings(max_items=1)
     )
     assert len(received) == outcome.attempts == 1
-    assert outcome.feedback[0].code == (
-        "content_timeout" if error_name == "ContentTimeout" else "navigation_timeout"
-    )
+    assert outcome.feedback[0].code == getattr(executor, error_name).code
     assert not outcome.feedback[0].recoverable
     assert outcome.failure_stage == ("validation" if stage == "preview" else "execution")
     assert outcome.summary()["agent_status"] == "completed"

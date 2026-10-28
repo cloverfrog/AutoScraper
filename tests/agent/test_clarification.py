@@ -25,7 +25,7 @@ from autoscraper.workflow.requirements import TaskRequirements
 URL = "https://fixture.test/scroll"
 REQUEST = ClarificationRequest(
     question="必须从原入口抓取，还是允许传统分页入口？",
-    explanation="原页面依赖无限滚动，当前协议不支持；另一入口的数据和顺序尚未证明等价。",
+    explanation="原页面依赖复杂虚拟列表，当前协议不支持；另一入口的数据和顺序尚未证明等价。",
     options=["必须使用原入口", "允许传统分页入口"],
 )
 RULE = {
@@ -164,7 +164,7 @@ def test_generation_resumes_same_agent_or_returns_pending(monkeypatch, answer):
             return SimpleNamespace(
                 is_successful=lambda: not rejected,
                 final_result=lambda: json.dumps(
-                    {"status": "unsupported", "reason": "原入口依赖无限滚动"} if rejected else RULE
+                    {"status": "unsupported", "reason": "原入口依赖复杂虚拟列表"} if rejected else RULE
                 ),
             )
 
@@ -407,7 +407,7 @@ def test_real_agent_continues_with_browser_and_history(monkeypatch, tmp_path, mo
             self.end_headers()
             self.wfile.write(
                 b"<html><title>Local fixture</title><article><p>A</p></article>"
-                b"<button id='load-more'>Load More</button></html>"
+                b"<button id='virtual-list'>Virtual list</button></html>"
             )
 
         def log_message(self, *args):
@@ -465,14 +465,14 @@ def test_real_agent_continues_with_browser_and_history(monkeypatch, tmp_path, mo
             actions = [{"inspect_page": {}}]
         elif len(calls) == 3:
             if mode == "unsupported":
-                memory = "Inspection found Load More button without href; test the visible record count."
+                memory = "Inspection found a virtual list that recycles its sole record; test the visible record count."
                 actions = [{"test_selector": {"item_selector": "article", "field_selector": "p"}}]
             else:
                 actions = [{"ask_user": REQUEST.model_dump()}, {"navigate": {"url": rule["start_url"]}}]
         else:
             assert len(calls) == 4
             if mode == "unsupported":
-                memory = "Verified 1 record, need 2; Load More has no href. Protocol requires an anchor."
+                memory = "Verified 1 recycled record, need 2; complex virtual lists are outside the protocol."
                 actions = [{"report_unsupported": {"reason": memory, "fields": ["quote"]}}]
             else:
                 # The follow-up request contains the user's response and initial task.
@@ -516,7 +516,7 @@ def test_real_agent_continues_with_browser_and_history(monkeypatch, tmp_path, mo
             outcome = run_task(url, "前2条，字段名为quote", settings, trace=Trace(sink))
             assert outcome.status == "unsupported"
             summary = json.loads((sink.directory / "summary.json").read_text())
-            assert "Verified 1 record, need 2" in summary["outcome"]["feedback"][0]["message"]
+            assert "Verified 1 recycled record, need 2" in summary["outcome"]["feedback"][0]["message"]
             assert len(runs) == 1
         else:
             with Trace(sink).run(), labels(attempt=1):
@@ -557,10 +557,10 @@ def test_real_agent_continues_with_browser_and_history(monkeypatch, tmp_path, mo
             finished = [event for event in events if event["event_type"] == "tool.finished"]
             inspection = finished[1]["payload"]["feedback"]
             button = next(node for node in inspection["controls_sample"] if node["tag"] == "button")
-            assert button["text"] == "Load More" and "href" not in button["attrs"]
+            assert button["text"] == "Virtual list" and "href" not in button["attrs"]
             assert finished[2]["payload"]["feedback"]["count"] == 1
             assessment = next(event for event in events if event["event_type"] == "step.planned" and event["step"] == 4)
-            assert "Verified 1 record, need 2" in assessment["payload"]["assessment"]["memory"]
+            assert "Verified 1 recycled record, need 2" in assessment["payload"]["assessment"]["memory"]
         else:
             assert "允许传统分页入口" in (sink.directory / "events.jsonl").read_text()
         assert not (sink.directory / "console.log").exists()

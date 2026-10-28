@@ -32,9 +32,33 @@ class FieldSpec(ProtocolModel):
         return self
 
 
-# 传统链接分页：next_selector 必须由执行器解析成唯一的下一页 href。
-class PaginationSpec(ProtocolModel):
+# 分页类型使用判别联合，拒绝不适用的字段。
+class LinkPagination(ProtocolModel):
+    type: Literal["link"]
     next_selector: NonEmpty
+
+
+class DynamicPagination(ProtocolModel):
+    loading_selector: NonEmpty | None = None
+    end_selector: NonEmpty | None = None
+
+
+class ClickPagination(DynamicPagination):
+    type: Literal["click"]
+    next_selector: NonEmpty
+    mode: Literal["append", "replace"] = "append"
+
+
+class ScrollPagination(DynamicPagination):
+    type: Literal["scroll"]
+    container_selector: NonEmpty | None = None
+    max_scrolls: int = Field(default=100, ge=1, le=1000)
+    no_change_limit: int = Field(default=3, ge=2, le=10)
+
+
+PaginationSpec = Annotated[
+    LinkPagination | ClickPagination | ScrollPagination, Field(discriminator="type")
+]
 
 
 # 单层详情规则：从每条列表记录取得链接，再相对详情文档提取额外字段。
@@ -61,7 +85,7 @@ class ScraperSpec(ProtocolModel):
     fields: dict[NonEmpty, FieldSpec] = Field(min_length=1)
     detail: DetailSpec | None = None
     pagination: PaginationSpec | None = None
-    # max_items 统计合并、去重后的记录，max_pages 统计列表页访问量。
+    # max_pages 统计已处理列表批次；滚动重试另受 max_scrolls 约束。
     max_items: int = Field(default=100, ge=1, le=1_000_000)
     max_pages: int = Field(default=100, ge=1, le=100_000)
     timeout_ms: int = Field(default=15_000, ge=1, le=120_000)

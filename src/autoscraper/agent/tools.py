@@ -3,8 +3,13 @@
 """Restricted browser-use tools and their tracing adapter."""
 
 import json
+import asyncio
+from time import monotonic
 
-from browser_use import ActionResult, BrowserSession, Tools
+from autoscraper.scraping.progress import STATE_SCRIPT, SCROLL_SCRIPT
+
+from browser_use import ActionResult, Tools
+from browser_use.browser.session import BrowserSession
 
 from .clarification import ClarificationRequest, ClarificationSession
 from .dom import INSPECT_SCRIPT, SELECTOR_SCRIPT
@@ -42,10 +47,90 @@ def build_tools(
     clarification: ClarificationSession | None = None,
 ) -> Tools:
     tools = TracedTools()
-    # 不继承框架默认的输入、点击、文件等能力，明确限制探索工具的范围。
+    # 只开放导航与分页探索相关动作；继续禁止输入、文件和任意代码执行。
     for name in list(tools.registry.registry.actions):
-        if name not in {"navigate", "done"}:
+        if name not in {"navigate", "done", "click", "scroll"}:
             tools.registry.exclude_action(name)
+
+    builtin_scroll = tools.registry.registry.actions["scroll"].function
+
+    @tools.action(
+        description="Explore infinite scroll with bounded scroll/wait/record-count checks. "
+        "Use built-in scroll for plain scrolling; this tool checks loading/end CSS and "
+        "record growth over multiple rounds in one step. Supports a CSS scroll container. "
+        "Returns counts, scrolls and stop_reason. Does not extract the final dataset."
+    )
+    async def explore_scroll(
+        browser_session: BrowserSession,
+        item_selector: str,
+        container_selector: str = "",
+        loading_selector: str = "",
+        end_selector: str = "",
+        max_scrolls: int = 10,
+        no_change_limit: int = 3,
+        wait_ms: int = 1000,
+    ) -> ActionResult:
+        from browser_use.tools.views import ScrollAction
+
+        if not (1 <= max_scrolls <= 30 and 2 <= no_change_limit <= 10
+                and 1 <= wait_ms <= content_timeout_ms):
+            return ActionResult(error="Invalid bounded scroll parameters")
+        if not item_selector.strip() or any(">>" in value for value in (
+            item_selector, container_selector, loading_selector, end_selector
+        )):
+            return ActionResult(error="Use nonempty CSS selectors without selector chains")
+        page = await browser_session.must_get_current_page()
+        options = dict(item_selector=item_selector, container_selector=container_selector,
+                       loading_selector=loading_selector, end_selector=end_selector)
+        used = 0
+        unchanged = 0
+        deadline = monotonic() + content_timeout_ms / 1000
+        try:
+            before = json.loads(await page.evaluate(STATE_SCRIPT, options))
+            initial = before["count"]
+            reason = "scroll_limit"
+            while used < max_scrolls:
+                if before["end"]:
+                    reason = "end_marker"
+                    break
+                if monotonic() >= deadline:
+                    reason = "content_timeout"
+                    break
+                if container_selector:
+                    await page.evaluate(SCROLL_SCRIPT, container_selector)
+                else:
+                    action = await builtin_scroll(
+                        params=ScrollAction(down=True, pages=1), browser_session=browser_session
+                    )
+                    if action.error:
+                        return ActionResult(error=action.error)
+                used += 1
+                round_deadline = min(deadline, monotonic() + wait_ms / 1000)
+                while True:
+                    after = json.loads(await page.evaluate(STATE_SCRIPT, options))
+                    changed = after["count"] > before["count"]
+                    if not after["loading"] and (changed or after["end"]):
+                        break
+                    if monotonic() >= round_deadline:
+                        break
+                    await asyncio.sleep(min(0.05, max(0, round_deadline - monotonic())))
+                if after["loading"] or monotonic() >= deadline:
+                    reason = "content_timeout"
+                    before = after
+                    break
+                unchanged = unchanged + 1 if not changed and after["bottom"] else 0
+                before = after
+                if after["end"]:
+                    reason = "end_marker"
+                    break
+                if unchanged >= no_change_limit:
+                    reason = "no_more_content"
+                    break
+            return ActionResult(extracted_content=json.dumps(dict(
+                scrolls=used, initial_count=initial, count=before["count"], stop_reason=reason
+            )))
+        except Exception as exc:
+            return ActionResult(error=f"Scroll exploration failed: {exc}")
 
     if clarification is not None:
 

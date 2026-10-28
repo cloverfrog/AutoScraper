@@ -9,7 +9,7 @@
     "url": {"selector": "h3 a", "extract": "attribute", "attribute": "href", "transform": "absolute_url"},
     "image_url": {"selector": "img", "extract": "attribute", "attribute": "src", "transform": "absolute_url"}
   },
-  "pagination": {"next_selector": "li.next a"},
+  "pagination": {"type": "link", "next_selector": "li.next a"},
   "dedupe_by": ["url"],
   "max_items": 100,
   "max_pages": 10,

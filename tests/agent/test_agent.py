@@ -448,6 +448,9 @@ def test_tools_and_llm_budget(monkeypatch):
 
     assert set(build_tools().registry.registry.actions) == {
         "navigate",
+        "click",
+        "scroll",
+        "explore_scroll",
         "done",
         "inspect_page",
         "test_selector",

@@ -4,6 +4,7 @@
 """Deterministic CSS-only execution. Never evaluates rule-provided code."""
 
 from dataclasses import dataclass, field
+from time import monotonic
 from typing import Literal
 from urllib.parse import urldefrag, urljoin, urlsplit
 
@@ -12,6 +13,7 @@ from playwright.sync_api import Locator, Page, TimeoutError as PlaywrightTimeout
 from pydantic import HttpUrl, TypeAdapter
 
 from .spec import FieldSpec, ScraperSpec
+from .progress import STATE_SCRIPT, SCROLL_SCRIPT, state_options, progressed
 from autoscraper.observability.tracing import emit, operation
 
 
@@ -21,6 +23,10 @@ class ScrapeError(RuntimeError):
 
 
 # 单条记录的提取失败；由 on_item_error 决定跳过该条还是终止抓取。
+class PaginationActionError(ScrapeError):
+    code = "pagination_action_failure"
+
+
 class ItemError(ScrapeError):
     """An individual item could not be extracted."""
 
@@ -82,6 +88,9 @@ ScrapeStopReason = Literal[
     "detail_limit",     # 详情导航尝试预算耗尽。
     "pagination_cycle",  # 下一页链接或重定向重复访问已处理页面。
     "no_next",          # 下一页链接缺失或已禁用。
+    "end_marker",
+    "no_more_content",
+    "scroll_limit",
     "no_pagination",    # 规则未声明分页，当前列表页处理完毕。
 ]
 
@@ -183,6 +192,59 @@ def extract_detail(page: Page, url: str, spec: ScraperSpec) -> dict[str, str | N
         raise ContentTimeout(url, f"Detail field extraction timed out: {exc}") from exc
 
 
+def next_button(page, selector):
+    button = css(page, selector)
+    if button.count() == 0:
+        return None
+    if button.count() != 1:
+        raise ScrapeError("Next selector must match exactly one element")
+    if button.is_disabled() or button.get_attribute("aria-disabled") == "true":
+        return None
+    return button
+
+
+def advance_dynamic(page, spec, options, before, scrolls):
+    """Advance one batch; unsuccessful scrolls consume their own bounded budget."""
+    pagination = spec.pagination
+    is_scroll = pagination.type == "scroll"
+    used = 0
+    unchanged = 0
+    while True:
+        if is_scroll and scrolls + used >= pagination.max_scrolls:
+            return "scroll_limit", used
+        try:
+            if is_scroll:
+                page.evaluate(SCROLL_SCRIPT, pagination.container_selector)
+                used += 1
+            else:
+                css(page, pagination.next_selector).click(timeout=spec.timeout_ms)
+        except PlaywrightError as exc:
+            raise PaginationActionError(f"Pagination action failed at {page.url}: {exc}") from exc
+        deadline = monotonic() + (spec.content_timeout_ms or spec.timeout_ms) / 1000
+        while True:
+            after = page.evaluate(STATE_SCRIPT, options)
+            if not after["loading"]:
+                if progressed(before, after, getattr(pagination, "mode", "append")):
+                    emit("pagination.advance", type=pagination.type, before=before["count"],
+                         after=after["count"], scrolls=used)
+                    return None, used
+                if after["end"]:
+                    return "end_marker", used
+            if monotonic() >= deadline:
+                break
+            page.wait_for_timeout(min(50, max(1, (deadline - monotonic()) * 1000)))
+        # Controls may disappear or disable while the request is in flight. Only
+        # infer terminal control state after allowing the content wait to finish.
+        if (not is_scroll and not after["loading"]
+                and next_button(page, pagination.next_selector) is None):
+            return "no_next", used
+        if not is_scroll or after["loading"]:
+            raise ContentTimeout(page.url, "Pagination produced no updated records before timeout")
+        unchanged = unchanged + 1 if after["bottom"] else 0
+        if unchanged >= pagination.no_change_limit:
+            return "no_more_content", used
+
+
 # 规则执行入口；run 自行管理浏览器，run_page 可复用调用方已有页面。
 class ScraperExecutor:
     # 浏览器启动配置属于本次运行，不写入可复用的 ScraperSpec。
@@ -224,6 +286,7 @@ class ScraperExecutor:
         page.set_default_timeout(spec.timeout_ms)
         next_url = str(spec.start_url)
         detail_page = None
+        scrolls = 0
         try:
             if spec.detail:
                 # 详情使用同一 BrowserContext 的独立 Page，保留会话且不打断列表页面。
@@ -231,17 +294,18 @@ class ScraperExecutor:
                 detail_page.set_default_timeout(spec.content_timeout_ms or spec.timeout_ms)
 
             while result.pages_visited < spec.max_pages:
-                # 同时记住请求 URL 和重定向后的 URL，忽略 fragment 后检测分页循环。
-                identity = urldefrag(next_url).url
-                if identity in seen_pages:
-                    result.stop_reason = "pagination_cycle"
-                    break
-                navigate(page, next_url, spec.timeout_ms)
-                final_identity = urldefrag(page.url).url
-                if final_identity in seen_pages:
-                    result.stop_reason = "pagination_cycle"
-                    break
-                seen_pages.update((identity, final_identity))
+                if next_url is not None:
+                    identity = urldefrag(next_url).url
+                    if identity in seen_pages:
+                        result.stop_reason = "pagination_cycle"
+                        break
+                    navigate(page, next_url, spec.timeout_ms)
+                    final_identity = urldefrag(page.url).url
+                    if final_identity in seen_pages:
+                        result.stop_reason = "pagination_cycle"
+                        break
+                    seen_pages.update((identity, final_identity))
+                next_url = None
                 result.pages_visited += 1
                 items = css(page, spec.item_selector)
                 wait_for_content(items, page.url, spec.content_timeout_ms or spec.timeout_ms)
@@ -305,20 +369,39 @@ class ScraperExecutor:
                 if spec.pagination is None:
                     result.stop_reason = "no_pagination"
                     break
-                # 分页只读取唯一锚点的 href，不点击按钮或执行站点提供的 JavaScript。
-                button = css(page, spec.pagination.next_selector)
-                if button.count() == 0:
-                    result.stop_reason = "no_next"
-                    break
-                if button.count() != 1:
-                    raise ScrapeError("Next selector must match exactly one element")
-                if button.is_disabled() or button.get_attribute("aria-disabled") == "true":
-                    result.stop_reason = "no_next"
-                    break
-                href = button.get_attribute("href")
-                if not href:
-                    raise ScrapeError("Phase 1 pagination requires a Next link with href")
-                next_url = http_url(page.url, href)
+                pagination = spec.pagination
+                if pagination.type == "link":
+                    button = next_button(page, pagination.next_selector)
+                    if button is None:
+                        result.stop_reason = "no_next"
+                        break
+                    href = button.get_attribute("href")
+                    if not href:
+                        raise ScrapeError("Link pagination requires a Next link with href")
+                    next_url = http_url(page.url, href)
+                else:
+                    # Inspect termination before enforcing the batch budget; never execute
+                    # another action once the budget has been consumed.
+                    try:
+                        options = state_options(spec)
+                    except ValueError as exc:
+                        raise ScrapeError(str(exc)) from exc
+                    before = page.evaluate(STATE_SCRIPT, options)
+                    if before["end"]:
+                        result.stop_reason = "end_marker"
+                        break
+                    if pagination.type == "click":
+                        if next_button(page, pagination.next_selector) is None:
+                            result.stop_reason = "no_next"
+                            break
+                    if result.pages_visited >= spec.max_pages:
+                        result.stop_reason = "max_pages"
+                        break
+                    reason, used = advance_dynamic(page, spec, options, before, scrolls)
+                    scrolls += used
+                    if reason:
+                        result.stop_reason = reason
+                        break
             else:
                 result.stop_reason = "max_pages"
         except PlaywrightTimeout as exc:
