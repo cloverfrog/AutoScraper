@@ -310,6 +310,13 @@ class ScraperExecutor:
         detail_page = None
         scrolls = 0
         try:
+            # 动态批次的状态读取参数固定不变；提取前后必须使用同一组记录信号比较。
+            options = None
+            if spec.pagination and spec.pagination.type != "link":
+                try:
+                    options = state_options(spec)
+                except ValueError as exc:
+                    raise ScrapeError(str(exc)) from exc
             if spec.detail:
                 # 详情使用同一 BrowserContext 的独立 Page，保留会话且不打断列表页面。
                 detail_page = page.context.new_page()
@@ -332,7 +339,10 @@ class ScraperExecutor:
                 result.pages_visited += 1
                 items = css(page, spec.item_selector)
                 wait_for_content(items, page.url, spec.content_timeout_ms or spec.timeout_ms)
-                for index in range(items.count()):
+                # 范围与比较基线来自同一份提取前快照，不能将提取期间到达的数据算作已处理。
+                batch_state = page.evaluate(STATE_SCRIPT, options) if options else None
+                batch_count = batch_state["count"] if batch_state is not None else items.count()
+                for index in range(batch_count):
                     detail_url = None
                     try:
                         item = items.nth(index)
@@ -403,13 +413,16 @@ class ScraperExecutor:
                         raise ScrapeError("Link pagination requires a Next link with href")
                     next_url = http_url(page.url, href)
                 else:
+                    before = page.evaluate(STATE_SCRIPT, options)
+                    # 慢提取（尤其详情访问）期间也可能自动追加或替换列表。先处理新批次，
+                    # 再认可结束标志/控件状态或建立下一次动作的基线，避免最后一批被静默丢弃。
+                    # 返回外层循环仍消耗 max_pages；达到预算时保留截断状态，不冒充自然完成。
+                    if progressed(batch_state, before, getattr(pagination, "mode", "append")):
+                        emit("pagination.reconcile", type=pagination.type,
+                             before=batch_state["count"], after=before["count"])
+                        continue
                     # 先检查明确结束状态，再判断批次预算；预算耗尽后不再触发下一次动作。
                     # 无新增滚动不计入已处理批次，仍由 advance_dynamic 的动作预算约束。
-                    try:
-                        options = state_options(spec)
-                    except ValueError as exc:
-                        raise ScrapeError(str(exc)) from exc
-                    before = page.evaluate(STATE_SCRIPT, options)
                     if before["end"]:
                         result.stop_reason = "end_marker"
                         break

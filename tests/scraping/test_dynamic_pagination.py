@@ -244,3 +244,146 @@ def test_scroll_waits_for_slow_loading_marker(page):
     result = run(page, body, dict(type='scroll', loading_selector='#loading'),
                  max_items=2, content_timeout_ms=1000)
     assert [r['title'] for r in result.records] == ['A', 'B']
+
+
+# 详情抓取需要可创建多个 Page 的显式 Context，与纯列表测试的快捷 Page 分开。
+@pytest.fixture
+def listing_page(page):
+    context = page.context.browser.new_context()
+    try:
+        yield context.new_page()
+    finally:
+        context.close()
+
+
+# 详情字段延迟出现时，让列表在同一时间追加下一批，确定性复现 Review 指出的竞态。
+# 只安排页面的异步更新，详情导航、字段等待和记录合并仍走真实执行器。
+def pending_batch_during_detail(
+    page, monkeypatch, terminal="marker", replace=False, duplicate=False, **updates
+):
+    import autoscraper.scraping.executor as executor
+
+    body = """<!doctype html><main><article><span>A</span><a href="/a">Detail</a></article></main>
+    <i id="end" hidden>End</i><button id="next">Next</button>"""
+    detail_body = """<script>setTimeout(() => {
+        document.body.innerHTML='<p>Description</p>';
+    }, 120)</script>"""
+    route_pages(
+        page.context,
+        {
+            "https://fixture.test/1": body,
+            "https://fixture.test/a": detail_body,
+            "https://fixture.test/b": detail_body,
+        },
+    )
+    pagination = {"type": "scroll", "end_selector": "#end", "no_change_limit": 2}
+    if terminal in {"disabled", "missing"} or replace:
+        pagination = {
+            "type": "click",
+            "next_selector": "#next",
+            "end_selector": "#end",
+            "mode": "replace" if replace else "append",
+        }
+    settings = dict(
+        version="2",
+        on_item_error="fail",
+        detail={"url_selector": "a", "fields": {"description": {"selector": "p"}}},
+        dedupe_by=["title"],
+    )
+    settings.update(updates)
+    spec = rule(pagination, **settings)
+    original = executor.extract_detail
+    scheduled = False
+
+    # 第一次详情提取期间新增 B；结束状态与 B 同时出现，不能先结束后漏提取。
+    def extract_detail(detail_page, url, candidate):
+        nonlocal scheduled
+        if not scheduled:
+            scheduled = True
+            page.evaluate(
+                """(options) => setTimeout(() => {
+                const main = document.querySelector('main');
+                const card = '<article><span>' + (options.duplicate ? 'A' : 'B') + '</span><a href="/b">Detail</a></article>';
+                if (options.replace) main.innerHTML = card;
+                else main.insertAdjacentHTML('beforeend', card);
+                if (options.terminal === 'marker') document.querySelector('#end').hidden=false;
+                if (options.terminal === 'disabled') document.querySelector('#next').disabled=true;
+                if (options.terminal === 'missing') document.querySelector('#next').remove();
+            }, 20)""",
+                {"terminal": terminal, "replace": replace, "duplicate": duplicate},
+            )
+        return original(detail_page, url, candidate)
+
+    monkeypatch.setattr(executor, "extract_detail", extract_detail)
+    return ScraperExecutor().run_page(spec, page)
+
+
+# 结束标志、控件不可用和没有显式结束标志时，都应先补提取已到达的记录。
+@pytest.mark.parametrize(
+    "terminal,reason",
+    [
+        ("marker", "end_marker"),
+        ("disabled", "no_next"),
+        ("missing", "no_next"),
+        ("none", "no_more_content"),
+    ],
+)
+def test_pending_batch_during_detail_is_processed_before_termination(
+    listing_page, monkeypatch, terminal, reason
+):
+    result = pending_batch_during_detail(listing_page, monkeypatch, terminal)
+    assert [r["title"] for r in result.records] == ["A", "B"]
+    assert result.pages_visited == result.detail_pages_visited == 2
+    assert result.stop_reason == reason
+    assert not result.errors
+
+
+# 替换列表数量不变，也应按字段快照识别提取期间到达的新批次。
+def test_pending_replacement_during_detail_is_not_hidden_by_end_marker(listing_page, monkeypatch):
+    result = pending_batch_during_detail(listing_page, monkeypatch, replace=True)
+    assert [r["title"] for r in result.records] == ["A", "B"]
+    assert result.stop_reason == "end_marker"
+
+
+# 自动追加的补提取仍消耗批次预算；预算不足不能借结束标志冒充自然完成。
+def test_pending_batch_respects_page_budget(listing_page, monkeypatch):
+    from autoscraper.workflow.requirements import TaskRequirements
+    from autoscraper.workflow.validation import validate_execution_data
+
+    result = pending_batch_during_detail(listing_page, monkeypatch, max_pages=1)
+    assert [r["title"] for r in result.records] == ["A"]
+    assert result.pages_visited == result.detail_pages_visited == 1
+    assert result.stop_reason == "max_pages"
+    feedback, complete = validate_execution_data(result, TaskRequirements(fields=["title"]))
+    assert not complete
+    assert feedback[0].code == "validation_limit"
+
+
+# 达到用户数量就停止，不因补提取而多访问详情或超出记录上限。
+def test_pending_batch_respects_item_budget(listing_page, monkeypatch):
+    result = pending_batch_during_detail(listing_page, monkeypatch, max_items=1)
+    assert [r["title"] for r in result.records] == ["A"]
+    assert result.stop_reason == "max_items"
+    assert result.detail_pages_visited == 1
+
+
+# 补提取不得绕过详情预算，且已成功抓到的记录应保留，停止原因明确为详情预算耗尽。
+def test_pending_batch_respects_detail_budget(listing_page, monkeypatch):
+    result = pending_batch_during_detail(
+        listing_page,
+        monkeypatch,
+        detail={"url_selector": "a", "fields": {"description": {"selector": "p"}}, "max_pages": 1},
+    )
+    assert [r["title"] for r in result.records] == ["A"]
+    assert result.stop_reason == "detail_limit"
+    assert result.detail_pages_visited == 1
+
+
+# 新到达的批次即使全是重复记录也必须核对；列表去重键命中时不重复访问详情。
+def test_pending_duplicate_batch_preserves_dedupe(listing_page, monkeypatch):
+    result = pending_batch_during_detail(listing_page, monkeypatch, duplicate=True)
+    assert [r["title"] for r in result.records] == ["A"]
+    assert result.pages_visited == 2
+    assert result.detail_pages_visited == 1
+    assert result.duplicates == 2
+    assert result.stop_reason == "end_marker"
