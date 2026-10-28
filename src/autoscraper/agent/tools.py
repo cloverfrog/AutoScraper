@@ -202,17 +202,22 @@ def build_tools(
 
     waiter = ContentWaiter(content_timeout_ms, wait_llm)
 
-    # 将已知 CSS 的等待结果序列化为 Agent 可读取的工具反馈。
+    # 已知 CSS 直接等待 min_count 条记录；点击追加前记录为 N 时，传 N+1 验证增长。
+    # 返回真实初始/最终数量，语义等待不参与这种已知条件的判断。
     @tools.action(
-        description="Wait for a known CSS selector to attach, then return DOM. "
+        description="Wait for at least min_count CSS matches (default 1), then return actual "
+        "initial_count/count and status (DOM only for default min_count=1). "
+        "After Load More with N records, use min_count=N+1. "
+        "Deterministic, no LLM; prefer this over semantic waiting for known record selectors. "
         "Bounded by content timeout; returns ready/timeout/error."
     )
     async def wait_for_selector(
-        browser_session: BrowserSession, selector: str, timeout_ms: int | None = None
+        browser_session: BrowserSession, selector: str, timeout_ms: int | None = None,
+        min_count: int = 1,
     ) -> ActionResult:
         return ActionResult(
             extracted_content=json.dumps(
-                await waiter.selector(browser_session, selector, timeout_ms), ensure_ascii=False
+                await waiter.selector(browser_session, selector, timeout_ms, min_count), ensure_ascii=False
             )
         )
 

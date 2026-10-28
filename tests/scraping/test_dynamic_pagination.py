@@ -202,3 +202,45 @@ def test_temporary_disabled_button_does_not_hide_pending_records(page):
     result = run(page, body, dict(type="click", next_selector="button"))
     assert [r["title"] for r in result.records] == ["A", "B"]
     assert result.stop_reason == "no_next"
+
+
+# 多屏空白距离应连续推进到加载触发点，不能每滚一屏就消耗完整内容等待时限。
+@pytest.mark.parametrize("container", [False, True])
+def test_scroll_moves_through_multiple_viewports_without_long_wait(page, container):
+    import time
+
+    target = "document.querySelector('main')" if container else "document.scrollingElement"
+    source = "document.querySelector('main')" if container else "window"
+    wrapper = '<main style="height:200px;overflow:auto">' if container else '<main>'
+    body = '<!doctype html><style>article {height:2200px}</style>' + wrapper
+    body += '<article><span>A</span></article></main><i id="end" hidden>End</i>'
+    body += f'''<script>{source}.addEventListener('scroll', () => {{
+        const root = {target};
+        if (root.scrollTop + root.clientHeight >= root.scrollHeight-2) {{
+            document.querySelector('main').insertAdjacentHTML('beforeend', '<article style="height:20px"><span>B</span></article>');
+            document.querySelector('#end').hidden=false;
+        }}
+    }});</script>'''
+    pagination = dict(type='scroll', end_selector='#end', max_scrolls=20)
+    if container:
+        pagination['container_selector'] = 'main'
+    started = time.monotonic()
+    result = run(page, body, pagination, content_timeout_ms=5000, max_items=2)
+    assert [r['title'] for r in result.records] == ['A', 'B']
+    # 容器需要十余次滚动；只要一次半途空等五秒，这个上限就会失败。
+    assert time.monotonic() - started < 5
+
+
+# 底部触发的慢加载必须使用内容等待预算，不能因短间隔推进而提前推断结束。
+def test_scroll_waits_for_slow_loading_marker(page):
+    body = '''<!doctype html><style>article {height:1000px}</style>
+    <article><span>A</span></article><i id="loading" hidden>Loading</i>
+    <script>let requested=false; addEventListener('scroll', () => {
+      if (requested) return; requested=true;
+      document.querySelector('#loading').hidden=false;
+      setTimeout(() => {document.body.insertAdjacentHTML('beforeend', '<article><span>B</span></article>');
+        document.querySelector('#loading').hidden=true}, 500);
+    });</script>'''
+    result = run(page, body, dict(type='scroll', loading_selector='#loading'),
+                 max_items=2, content_timeout_ms=1000)
+    assert [r['title'] for r in result.records] == ['A', 'B']

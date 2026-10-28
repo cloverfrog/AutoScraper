@@ -335,3 +335,13 @@ click/scroll 可声明站点真实存在的 `loading_selector` 和 `end_selector
 Agent 开放内置 click/scroll，并通过 `explore_scroll` 在一次调用中执行多轮有界滚动、
 等待和记录数检查，返回滚动次数、初始/最终记录数及停止原因；普通页面滚动复用内置动作。
 执行器始终使用 Playwright，不在批量抓取时调用 LLM。
+
+执行器的页面滚动使用 CDP 模拟手势，指定容器使用滚轮输入，每次动作后短暂停顿。
+尚未到底且未观察到加载时继续推进，不会每滚一屏就等满内容超时；到底或观察到加载后，
+才等待记录更新。`pagination.scroll` 事件记录滚动前后位置、记录数及移动/等待阶段。
+
+Agent 对已知选择器的数量等待使用 `wait_for_selector(selector, min_count=N+1)`：
+例如 Load More 点击前已有 6 条，就等待至少 7 条。工具直接返回 `initial_count`、`count`、
+`min_count` 和状态，不调用 LLM，不受 DOM 摘要截断影响。默认 `min_count=1` 仍等待单个节点。
+正常数量超时保留实际计数；若连接或浏览器操作整体超时无法读取数量，则计数返回 null。
+替换型列表仍需检查字段内容变化，不能以数量增长作为通用推进条件。

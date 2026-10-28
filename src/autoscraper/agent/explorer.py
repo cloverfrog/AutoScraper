@@ -114,6 +114,9 @@ Exploration:
 3. For link pagination, navigate to the observed Next href and retest the selectors.
    For dynamic pagination, use click/scroll to observe behavior, or explore_scroll for bounded
    multi-round scroll/wait/count checks in one step. Verify actual records, not loading animation.
+   After a Load More click with N records observed by test_selector, use wait_for_selector
+   with the exact item selector and min_count=N+1. Do not use semantic wait_for_content to count
+   records: its DOM evidence is sampled. Read the returned actual count before submitting rules.
    For detail fields, navigate to an observed detail href and test with item_selector="html".
 
 Protocol semantics:

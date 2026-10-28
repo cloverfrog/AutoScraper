@@ -13,7 +13,8 @@ from playwright.sync_api import Locator, Page, TimeoutError as PlaywrightTimeout
 from pydantic import HttpUrl, TypeAdapter
 
 from .spec import FieldSpec, ScraperSpec
-from .progress import STATE_SCRIPT, SCROLL_SCRIPT, state_options, progressed
+from .progress import STATE_SCRIPT, state_options, progressed
+from .scrolling import scroll_step
 from autoscraper.observability.tracing import emit, operation
 
 
@@ -219,16 +220,26 @@ def advance_dynamic(page, spec, options, before, scrolls):
             return "scroll_limit", used
         try:
             if is_scroll:
-                page.evaluate(SCROLL_SCRIPT, pagination.container_selector)
+                position_before = page.evaluate(STATE_SCRIPT, options)
+                scroll_step(page, pagination.container_selector)
                 used += 1
+                position_after = page.evaluate(STATE_SCRIPT, options)
+                emit("pagination.scroll", scroll=scrolls + used,
+                     before_top=position_before["scroll_top"],
+                     after_top=position_after["scroll_top"],
+                     count=position_after["count"], bottom=position_after["bottom"],
+                     phase="waiting" if position_after["bottom"] or position_after["loading"]
+                     else "moving")
             else:
                 css(page, pagination.next_selector).click(timeout=spec.timeout_ms)
         except PlaywrightError as exc:
             raise PaginationActionError(f"Pagination action failed at {page.url}: {exc}") from exc
         # 每次动作有独立内容等待时限；翻页失败不受单条记录的 skip 策略豁免。
         deadline = monotonic() + (spec.content_timeout_ms or spec.timeout_ms) / 1000
+        loading_observed = False
         while True:
             after = page.evaluate(STATE_SCRIPT, options)
+            loading_observed = loading_observed or after["loading"]
             # 最后一批数据可能与结束标志同时到达，优先返回推进，让外层先提取这批记录。
             if not after["loading"]:
                 if progressed(before, after, getattr(pagination, "mode", "append")):
@@ -237,6 +248,10 @@ def advance_dynamic(page, spec, options, before, scrolls):
                     return None, used
                 if after["end"]:
                     return "end_marker", used
+            # 未到底且尚未观察到加载时继续短间隔推进，不能在半途等满内容超时。
+            # 一旦到底或出现加载标志，就保留完整等待时限，避免跳过慢响应。
+            if is_scroll and not after["bottom"] and not loading_observed:
+                break
             if monotonic() >= deadline:
                 break
             page.wait_for_timeout(min(50, max(1, (deadline - monotonic()) * 1000)))

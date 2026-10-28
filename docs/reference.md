@@ -22,10 +22,13 @@ agent/explorer.py → scraping/spec.py → scraping/executor.py → records → 
 
 ## 探索工具与限制
 
-基础工具包含 `navigate`、结构化 `done`、`inspect_page`、`test_selector`、`wait_for_selector`、`wait_for_content`。验证工作流额外提供 `report_unsupported`，将能力限制作为失败终态提交，不生成部分规则。前两者使用 browser-use 内置实现；DOM 工具使用当前 `BrowserSession` 的页面接口。`inspect_page` 输出 DOM 标签、class/id、链接属性与有限文本，支持 CSS 根节点缩小范围；`test_selector` 返回匹配数量和前 5 项样本，支持相对字段选择器与属性提取。
+基础工具包含 `navigate`、结构化 `done`、`click`、`scroll`、`explore_scroll`、`inspect_page`、`test_selector`、`wait_for_selector`、`wait_for_content`。验证工作流额外提供 `report_unsupported`，将能力限制作为失败终态提交，不生成部分规则。前两者使用 browser-use 内置实现；DOM 工具使用当前 `BrowserSession` 的页面接口。`inspect_page` 输出 DOM 标签、class/id、链接属性与有限文本，支持 CSS 根节点缩小范围；`test_selector` 返回匹配数量和前 5 项样本，支持相对字段选择器与属性提取。
 
-`wait_for_selector` 通过 Playwright CDP 连接定位当前 target，等待 CSS 元素 attached，
-已有元素立即返回；结束仅断开自己的连接，不关闭 Agent 浏览器。`wait_for_content` 接受
+`wait_for_selector` 通过 Playwright CDP 连接定位当前 target，等待至少 `min_count` 个 CSS 元素 attached（默认 1），
+返回 `initial_count`、`count`、数量门槛和状态；默认单节点等待还返回 DOM。
+已知选择器的 Load More 场景，点击前有 N 条时传 `min_count=N+1`，直接检查数量增长，
+不调用语义模型。正常数量超时返回实际计数；连接/操作整体超时无法获取计数时返回 null。
+结束仅断开自己的连接，不关闭 Agent 浏览器。`wait_for_content` 接受
 语义条件（最多 2000 字符）、间隔（0.1–10 秒）、检查次数（1–30），立即检查并在 DOM
 摘要变化时独立调用 LLM。所有等待受 `--content-timeout-ms`（默认 30000，最高 120000）
 及探索剩余时间限制。检查次数包含未变化的 DOM；语义调用整次任务最多 8 次，可用
@@ -91,6 +94,9 @@ DOM 样本、历史窗口与输入任务长度也有限制。计费由接口提�
 `scroll` 可声明唯一的 `container_selector`，默认滚动页面；`max_scrolls` 默认 100（1–1000），
 `no_change_limit` 默认 3（2–10）。click/scroll 可声明可见的 `loading_selector` / `end_selector`。
 
+执行器参考 browser-use：页面使用 CDP 滚动手势，CSS 容器使用滚轮输入，动作后短暂停顿。
+未到底且未观察到加载时连续推进；到底或出现加载标志后使用内容等待预算。
+`pagination.scroll` 追踪事件包含位置、记录数量和移动/等待阶段。
 顶层 `max_pages` 限制处理的列表批次，滚动动作另受 `max_scrolls` 限制。
 按钮消失/禁用为 `no_next`，结束标志为 `end_marker`；到底后连续无新增为启发式
 `no_more_content`。`scroll_limit` / `max_pages` 为预算截断，不能作为工作流完成依据。

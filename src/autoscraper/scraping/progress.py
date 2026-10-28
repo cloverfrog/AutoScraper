@@ -21,6 +21,8 @@ STATE_SCRIPT = """(o) => {
         .every((f, i) => !f.required || !!values[i]));
     return {ready, count: items.length, snapshot: JSON.stringify(snapshot),
         loading: !!visible(o.loading_selector), end: !!visible(o.end_selector),
+        scroll_top: root.scrollTop, scroll_height: root.scrollHeight,
+        client_height: root.clientHeight,
         bottom: root.scrollTop + root.clientHeight >= root.scrollHeight - 2};
 }"""
 

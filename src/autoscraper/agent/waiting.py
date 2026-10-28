@@ -17,14 +17,36 @@ class Readiness(BaseModel):
     ready: bool
 
 
-# 通过 CDP 找到 Agent 当前聚焦的页面，再用 Playwright 等待 CSS 节点。
+# 精确等待已知选择器的匹配数量；超时时仍返回实际数量，供 Agent 区分已有和缺失内容。
+# 数量检查直接来自浏览器，不依赖 DOM 摘要长度，也不消耗语义模型预算。
+async def wait_for_count(page, selector, min_count, timeout_ms):
+    from playwright.async_api import TimeoutError as PlaywrightTimeout
+
+    matches = page.locator(f"css={selector}")
+    initial_count = await matches.count()
+    status = "ready"
+    try:
+        await matches.nth(min_count - 1).wait_for(state="attached", timeout=timeout_ms)
+    except PlaywrightTimeout:
+        status = "timeout"
+    return {
+        "status": status,
+        "selector": selector,
+        "min_count": min_count,
+        "initial_count": initial_count,
+        "count": await matches.count(),
+    }
+
+
+# 通过 CDP 找到 Agent 当前聚焦的页面，再用 Playwright 等待 CSS 节点数量。
 # 按 targetId 匹配，避免误选其他标签页；退出仅释放本次 Playwright 连接。
-async def selector_wait(browser_session, selector: str, timeout_ms: int):
+async def selector_wait(browser_session, selector: str, timeout_ms: int, min_count: int = 1):
     """Attach Playwright to the focused browser-use target; stop only our connection."""
     from playwright.async_api import async_playwright
 
     if ">>" in selector or not selector.strip():
         raise ValueError("Use a nonempty CSS selector without selector chains")
+    deadline = time.monotonic() + timeout_ms / 1000
     async with async_playwright() as playwright:
         browser = await playwright.chromium.connect_over_cdp(browser_session.cdp_url)
         for context in browser.contexts:
@@ -44,10 +66,9 @@ async def selector_wait(browser_session, selector: str, timeout_ms: int):
                     )
                     if not valid:
                         raise ValueError("Invalid CSS selector")
-                    await page.locator(f"css={selector}").first.wait_for(
-                        state="attached", timeout=timeout_ms
-                    )
-                    return
+                    # 扣除连接耗时，并预留少量时间返回超时计数及释放本次连接。
+                    remaining_ms = max(1, int((deadline - time.monotonic()) * 1000) - 50)
+                    return await wait_for_count(page, selector, min_count, remaining_ms)
         raise RuntimeError("Focused browser target is unavailable")
 
 
@@ -61,21 +82,36 @@ class ContentWaiter:
         self.timeout_ms = content_timeout_ms
         self.llm = llm
 
-    # 等待已知选择器并返回 DOM 证据；将参数、选择器、超时等失败转成工具反馈。
-    async def selector(self, browser_session, selector, timeout_ms=None):
+    # 等待已知选择器数量并返回统计；默认单节点等待补充 DOM，失败则返回明确状态。
+    async def selector(self, browser_session, selector, timeout_ms=None, min_count=1):
         from playwright.async_api import Error, TimeoutError as PlaywrightTimeout
 
         limit = min(timeout_ms if timeout_ms is not None else self.timeout_ms, self.timeout_ms)
-        if limit < 1:
-            return {"status": "invalid_parameters", "message": "timeout_ms must be positive"}
+        if limit < 1 or not 1 <= min_count <= 1_000_000:
+            return {
+                "status": "invalid_parameters",
+                "message": "timeout_ms must be positive; min_count must be 1–1000000",
+            }
         start = time.monotonic()
         try:
             async with asyncio.timeout(limit / 1000):
-                await selector_wait(browser_session, selector, limit)
+                # 外层仅作为连接与浏览器操作的总时限；正常数量超时由 helper 保留计数。
+                counts = await selector_wait(browser_session, selector, limit, min_count)
+                # 数量等待只返回精确统计，避免再次读取与条件无关的全页 DOM 摘要。
+                # 默认单节点等待保留旧的 DOM 返回，供未知页面开始探索。
+                if counts["status"] == "timeout" or min_count > 1:
+                    return {
+                        **counts,
+                        "message": "Record count did not reach min_count"
+                        if counts["status"] == "timeout"
+                        else "",
+                        "elapsed_ms": int((time.monotonic() - start) * 1000),
+                    }
                 page = await browser_session.must_get_current_page()
                 dom = await page.evaluate(INSPECT_SCRIPT, "")
                 return {
-                    "status": "ready",
+                    **counts,
+                    "message": "",
                     "dom": dom[:30000],
                     "elapsed_ms": int((time.monotonic() - start) * 1000),
                 }
@@ -89,6 +125,11 @@ class ContentWaiter:
             status, message = "wait_error", str(exc)
         return {
             "status": status,
+            "selector": selector,
+            "min_count": min_count,
+            # 连接或浏览器操作整体超时时无法保证获得计数，不伪造为 0。
+            "initial_count": None,
+            "count": None,
             "message": message[:1000],
             "elapsed_ms": int((time.monotonic() - start) * 1000),
         }
