@@ -1,3 +1,5 @@
+# 手动 Responses API 探测脚本：用简单结构或真实 Agent 动作 Schema 检查服务兼容性。
+# 运行会实际请求 DeepSeek 并产生模型费用，不属于默认测试或生产任务流程。
 """Opt-in Responses API probe. Not collected by pytest or run by default."""
 
 import argparse
@@ -8,6 +10,8 @@ import os
 from openai import AsyncOpenAI
 
 
+# 读取模型和 Schema 模式，发送一次真实结构化请求，打印状态、输出及截断诊断。
+# --agent-output 使用框架动作 Schema，--flash/--no-thinking 切换对应输出结构。
 async def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", default="deepseek-flash")
@@ -23,7 +27,7 @@ async def main() -> None:
         from browser_use.agent.views import AgentOutput
         from browser_use.llm.schema import SchemaOptimizer
 
-        from autoscraper.agent_tools import build_tools
+        from autoscraper.agent.tools import build_tools
 
         actions = build_tools().registry.create_action_model()
         if args.flash:

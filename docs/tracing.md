@@ -12,8 +12,8 @@ uv run --extra agent autoscraper-agent "https://books.toscrape.com/" "前25本�
 启用核心接口。每个 `Trace` 表示一个 Run，应为每个任务创建新实例：
 
 ```python
-from autoscraper.tracing import FileSink, Trace
-from autoscraper.workflow import run_task
+from autoscraper.observability.tracing import FileSink, Trace
+from autoscraper.workflow.runner import run_task
 
 trace = Trace(FileSink(".agent-runtime/runs"))
 outcome = run_task(url, task, settings, trace=trace)
@@ -91,7 +91,7 @@ LLM `source`。同一调用的 started / finished 事件使用相同 `call_id`�
 
 ## 汇总与指标
 
-`summary.json.outcome` 来自原有 `TaskOutcome.summary()`，经过同一隐私处理，不建立
+`summary.json.outcome` 来自 `workflow/outcome.py` 的 `TaskOutcome.summary()`，经过同一隐私处理，不建立
 第二套业务状态判断；`metadata` 保存原始入口 URL、任务需求和模型（受长度限制及明确凭据替换规则约束）。`termination`
 表示追踪上下文正常返回、异常或中断；CLI 的 `exit_code` 单独保存。规则/数据落盘失败
 时保留工作流原结果，通过 `artifacts.finished` / `cli.failed` 和退出码表达产物失败。
@@ -140,8 +140,8 @@ Authorization、Cookie、api_key、password、access_token）隐藏值，普通 
 消费者应保持快速、无副作用；暂不提供异步队列、数据库或实时推送。
 
 ```bash
-uv run --extra agent pytest tests/test_tracing.py -q
-uv run --extra agent pytest tests/test_clarification.py -q
+uv run --extra agent pytest tests/observability/test_tracing.py -q
+uv run --extra agent pytest tests/agent/test_clarification.py -q
 ```
 
 前者无需真实浏览器或付费 LLM，覆盖写入失败、体积限制、隐私、并发、LLM Usage、

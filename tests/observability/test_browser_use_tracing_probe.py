@@ -1,3 +1,5 @@
+# 固定版本 browser-use 的行为探针：直接执行框架工具分发、步骤和 History 代码。
+# 浏览器基础设施及模型决策用替身代替，用于确认项目追踪回调所依赖的真实框架行为。
 """Offline component probes of browser-use 0.13.11 tracing boundaries.
 
 Real framework dispatch, step, finalization and continuation methods are exercised;
@@ -19,10 +21,11 @@ pytest.importorskip("browser_use")
 from browser_use import ActionResult, Agent, Tools
 from browser_use.agent.views import AgentHistoryList, AgentOutput, AgentState, AgentStepInfo
 
-from autoscraper.agent_tools import build_tools
-from autoscraper.clarification import ClarificationSession
+from autoscraper.agent.tools import build_tools
+from autoscraper.agent.clarification import ClarificationSession
 
 
+# 在项目工具集合上加探针动作，测试错误与取消如何穿过框架分发层。
 class ProbeTools(Tools):
     def __init__(self):
         self.clarification = ClarificationSession()
@@ -53,6 +56,7 @@ class ProbeTools(Tools):
             self.events.append(("duration", call_id, time.monotonic() - started))
 
 
+# 模拟导航事件对象，使框架分发逻辑可在无真实浏览器时运行。
 class NavigationEvent:
     def __await__(self):
         return asyncio.sleep(0).__await__()
@@ -61,6 +65,7 @@ class NavigationEvent:
         return None
 
 
+# 提供框架工具与步骤代码需要的最小浏览器替身。
 def fake_browser():
     return SimpleNamespace(
         event_bus=SimpleNamespace(dispatch=Mock(return_value=NavigationEvent())),
@@ -74,6 +79,7 @@ def fake_browser():
     )
 
 
+# 检查固定框架版本以及默认动作和项目动作的实际分发行为。
 def test_pinned_version_and_builtin_and_project_tool_dispatch():
     assert version("browser-use") == "0.13.11"
     tools = ProbeTools()
@@ -100,6 +106,7 @@ def test_pinned_version_and_builtin_and_project_tool_dispatch():
     browser.event_bus.dispatch.assert_called_once()
 
 
+# 区分工具错误、超时和取消，验证框架不会吞掉取消信号。
 @pytest.mark.parametrize("mode", ["raise", "hang", "cancel"])
 def test_tool_errors_timeout_and_cancellation(mode):
     tools = ProbeTools()
@@ -122,6 +129,7 @@ def test_tool_errors_timeout_and_cancellation(mode):
     asyncio.run(scenario())
 
 
+# 构建用于框架方法探针的 Agent 替身，避免初始化真实浏览器和模型。
 def bare_agent():
     # Avoid Agent construction's filesystem, cloud and model setup. Methods under
     # investigation below remain real; only external dependencies are supplied.
@@ -139,6 +147,7 @@ def bare_agent():
     return agent
 
 
+# 确认原始 History 含耗时元数据及工具原文，说明生产追踪必须自行筛选。
 def test_real_history_contains_metadata_and_raw_content():
     agent = bare_agent()
     agent.browser_session = None
@@ -159,6 +168,7 @@ def test_real_history_contains_metadata_and_raw_content():
     assert "RAW_SECRET" in item.state.url
 
 
+# 页面变化中断动作批次时，只应记录真正执行过的动作。
 def test_page_change_guard_only_traces_executed_actions():
     tools = ProbeTools()
     action_model = tools.registry.create_action_model()
@@ -185,6 +195,7 @@ def test_page_change_guard_only_traces_executed_actions():
     assert tools.clarification.pending is None
 
 
+# 检查规划、开始、结束回调的顺序，以及追加任务后的继续运行行为。
 def test_step_callback_order_finalization_and_followup():
     agent = bare_agent()
     events = []
@@ -234,6 +245,7 @@ def test_step_callback_order_finalization_and_followup():
     agent._handle_step_error.assert_not_called()
 
 
+# 证明步骤结束回调并非 finally，异常收尾仍需项目外层清理。
 @pytest.mark.parametrize("mode", ["timeout", "cancel", "raise"])
 def test_step_end_is_not_a_finally_hook(mode):
     agent = bare_agent()

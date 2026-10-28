@@ -1,3 +1,5 @@
+# 基础执行器与导出测试：覆盖字段提取、分页循环、记录上限、错误策略和协议解析。
+# 主要通过 Playwright 本地路由构造页面，无需外网；真实书站抓取为可选测试。
 import csv
 import json
 import os
@@ -7,11 +9,12 @@ import pytest
 from playwright.sync_api import sync_playwright
 from pydantic import ValidationError
 
-from autoscraper.executor import ScrapeError, ScraperExecutor
-from autoscraper.export import export_records
-from autoscraper.spec import ScraperSpec
+from autoscraper.scraping.executor import ScrapeError, ScraperExecutor
+from autoscraper.scraping.export import export_records
+from autoscraper.scraping.spec import ScraperSpec
 
 
+# 构造通用列表抓取规则，按用例覆盖分页、去重、字段和执行上限。
 def make_spec(**updates):
     data = dict(
         start_url="https://fixture.test/1",
@@ -34,6 +37,7 @@ def make_spec(**updates):
     return ScraperSpec.model_validate(data)
 
 
+# 为用例创建和关闭真实本地 Chromium 页面。
 @pytest.fixture
 def page():
     with sync_playwright() as p:
@@ -43,10 +47,12 @@ def page():
         browser.close()
 
 
+# 生成列表记录 HTML，便于拼接分页与重复数据场景。
 def item(name, href):
     return f'<article><h3>{name}</h3><a href="{href}">detail</a></article>'
 
 
+# 将测试 URL 映射到固定 HTML，让导航走浏览器但不访问真实网站。
 def route_pages(page, pages):
     page.route(
         "**/*",
@@ -56,6 +62,7 @@ def route_pages(page, pages):
     )
 
 
+# 验证跨页记录去重、文本空白归一化和相对链接补全。
 def test_pagination_dedupe_and_normalization(page):
     route_pages(
         page,
@@ -75,6 +82,7 @@ def test_pagination_dedupe_and_normalization(page):
     ]
 
 
+# 检查记录数、页数上限与分页循环的停止原因。
 @pytest.mark.parametrize(
     "limits,reason,count",
     [
@@ -97,6 +105,7 @@ def test_limits_and_cycle(page, limits, reason, count):
     assert result.stop_reason == reason
 
 
+# 检查字段提取失败时跳过单条或立即终止的行为。
 def test_item_errors(page):
     route_pages(page, {"https://fixture.test/1": "<article><h3>missing URL</h3></article>"})
     result = ScraperExecutor().run_page(make_spec(), page)
@@ -106,6 +115,7 @@ def test_item_errors(page):
         ScraperExecutor().run_page(make_spec(on_item_error="fail"), page)
 
 
+# 无法继续抓取的分页或提取错误应明确终止执行。
 @pytest.mark.parametrize(
     "body,match",
     [
@@ -120,12 +130,14 @@ def test_fatal_errors(page, body, match):
         ScraperExecutor().run_page(make_spec(on_item_error="fail"), page)
 
 
+# HTTP 失败响应应转换为导航错误。
 def test_http_error(page):
     page.route("**/*", lambda route: route.fulfill(status=503, body="Unavailable"))
     with pytest.raises(ScrapeError, match="HTTP 503"):
         ScraperExecutor().run_page(make_spec(), page)
 
 
+# 非法 CSS 必须报告规则错误，而不是当作没有匹配元素。
 @pytest.mark.parametrize("selector", ["[invalid", "article >> text=Book"])
 def test_invalid_selector(page, selector):
     route_pages(page, {"https://fixture.test/1": item("A", "/a")})
@@ -133,6 +145,7 @@ def test_invalid_selector(page, selector):
         ScraperExecutor().run_page(make_spec(item_selector=selector), page)
 
 
+# 无分页配置、下一页缺失或禁用时应自然结束。
 def test_no_pagination_and_disabled_next(page):
     route_pages(
         page,
@@ -147,6 +160,7 @@ def test_no_pagination_and_disabled_next(page):
     )
 
 
+# 拒绝字段、转换和去重约束等不合法的输入规则。
 @pytest.mark.parametrize(
     "updates",
     [
@@ -164,6 +178,7 @@ def test_invalid_specs(updates):
         make_spec(**updates)
 
 
+# 检查 JSON/CSV 内容、中文保存以及协议字段顺序。
 def test_exports(tmp_path):
     records = [{"title": '中文, "Book"', "url": None}]
     for suffix in ("json", "csv"):
@@ -179,6 +194,7 @@ def test_exports(tmp_path):
     assert empty.read_text().strip() == "title"
 
 
+# 可选联网测试：执行真实书站规则并检查前 100 条记录。
 @pytest.mark.live
 @pytest.mark.skipif(os.getenv("RUN_LIVE") != "1", reason="Set RUN_LIVE=1 to access website")
 def test_books_first_100():

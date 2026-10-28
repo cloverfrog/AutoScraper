@@ -1,26 +1,33 @@
+# 任务编排回归测试：覆盖独立需求、有限修复、试抓取与完整执行、失败终态和产物保护。
+# 模型以脚本候选代替；提取测试使用本地 Chromium/路由，验证真实选择器行为而不付费。
 import asyncio
 import json
 from types import SimpleNamespace
 
 import pytest
 
-from autoscraper.agent import AgentSettings, UnsupportedTaskError
-from autoscraper.executor import ScrapeResult, ScraperExecutor
-from autoscraper.spec import ScraperSpec
-from autoscraper.validation import (
+from autoscraper.agent.explorer import AgentSettings, UnsupportedTaskError
+from autoscraper.scraping.executor import ScrapeResult, ScraperExecutor
+from autoscraper.scraping.spec import ScraperSpec
+from autoscraper.workflow.validation import (
     UnsupportedResult,
-    TaskRequirements,
     ValidationSettings,
     validate_data,
     validate_spec,
 )
-from autoscraper.workflow import explicit_requirements, extract_requirements, run_task
+from autoscraper.workflow.requirements import (
+    TaskRequirements,
+    explicit_requirements,
+    extract_requirements,
+)
+from autoscraper.workflow.runner import run_task
 
 
 URL = "https://fixture.test/"
 TASK = "抓取前2本书，字段名为title、price，分别为书名、价格"
 
 
+# 提供满足两个字段、两条记录需求的最小候选规则。
 @pytest.fixture
 def candidate():
     return ScraperSpec.model_validate(
@@ -36,6 +43,7 @@ def candidate():
     )
 
 
+# 提供较小主调用预算和超时，用于稳定验证预算边界。
 @pytest.fixture
 def settings():
     return AgentSettings(
@@ -48,17 +56,19 @@ def settings():
     )
 
 
+# 替换主模型工厂，记录整次工作流共享的模型调用数。
 @pytest.fixture
 def workflow(monkeypatch):
     pytest.importorskip("browser_use")
-    import autoscraper.workflow as module
-    import autoscraper.agent_tools as tools
+    import autoscraper.workflow.runner as module
+    import autoscraper.agent.llm as models
 
     model = SimpleNamespace(calls=0)
-    monkeypatch.setattr(tools, "make_llm", lambda settings: model)
+    monkeypatch.setattr(models, "make_llm", lambda settings: model)
     return module, model
 
 
+# 保留真实提取逻辑，只替换浏览器入口并将页面路由到固定 HTML。
 @pytest.fixture
 def executor_page(monkeypatch):
     from playwright.sync_api import sync_playwright
@@ -85,6 +95,7 @@ def executor_page(monkeypatch):
     monkeypatch.setattr(ScraperExecutor, "run", run)
 
 
+# 按轮次返回指定候选或异常，并记录传给探索器的反馈和历史规则。
 def install_candidates(monkeypatch, workflow, values):
     module, model = workflow
     received = []
@@ -102,6 +113,7 @@ def install_candidates(monkeypatch, workflow, values):
     return received
 
 
+# 明确字段名与数量必须完整保留，显式参数优先于需求文本。
 def test_explicit_fields_and_count_cannot_be_dropped():
     fields, count = explicit_requirements(
         "抓取前25本书，字段名为title、price、description，分别为完整书名、价格、详情描述",
@@ -113,6 +125,7 @@ def test_explicit_fields_and_count_cannot_be_dropped():
     assert explicit_requirements(TASK, ["override"], 3) == (["override"], 3)
 
 
+# 中英文并列连接词不能导致最后一个字段漏解析。
 @pytest.mark.parametrize(
     "task",
     [
@@ -127,6 +140,7 @@ def test_explicit_conjunctions_do_not_drop_last_field(task):
     assert count == 25
 
 
+# 模型补充缺失需求时，不能覆盖已明确的记录数量。
 def test_bounded_natural_language_requirements():
     pytest.importorskip("browser_use")
 
@@ -148,6 +162,7 @@ def test_bounded_natural_language_requirements():
     assert model.calls == 1
 
 
+# 推断数量的模型输出不能改动用户明确命名的字段。
 def test_inferred_count_cannot_change_explicit_fields():
     pytest.importorskip("browser_use")
 
@@ -162,6 +177,7 @@ def test_inferred_count_cannot_change_explicit_fields():
     assert result.count == 25
 
 
+# 候选规则必须和独立需求比较，不能自己定义成功标准。
 def test_spec_validation_is_independent(candidate):
     requirements = TaskRequirements(fields=["title", "price", "description"], count=25)
     issues = validate_spec(candidate, requirements)
@@ -171,6 +187,7 @@ def test_spec_validation_is_independent(candidate):
     assert "price" in validate_spec(candidate, requirements)[0].fields
 
 
+# 检查空结果、必需字段值和数量不足等确定性数据反馈。
 @pytest.mark.parametrize(
     "rows,code",
     [
@@ -187,6 +204,7 @@ def test_data_checks(rows, code):
     assert code in [item.code for item in issues]
 
 
+# 支持的任务应通过真实提取校验并返回一致的完成状态。
 def test_supported_task(candidate, settings, workflow, monkeypatch, executor_page):
     received = install_candidates(monkeypatch, workflow, [candidate])
     result = run_task(URL, TASK, settings, execute=True)
@@ -197,6 +215,7 @@ def test_supported_task(candidate, settings, workflow, monkeypatch, executor_pag
     assert received[0]["requirements"].fields == ["title", "price"]
 
 
+# 将真实 CSS 提取失败反馈给下一轮，修复后再验证成功。
 @pytest.mark.parametrize("mode", ["fail", "skip"])
 def test_repair_real_selector_failure(
     candidate, settings, workflow, monkeypatch, executor_page, mode
@@ -213,6 +232,7 @@ def test_repair_real_selector_failure(
     assert len(result.data.records) == 2
 
 
+# 必需字段缺失应触发有限修复，不能先执行不完整规则。
 def test_missing_fields_exhaust_repair_without_execution(
     candidate, settings, workflow, monkeypatch
 ):
@@ -230,6 +250,7 @@ def test_missing_fields_exhaust_repair_without_execution(
     )
 
 
+# 协议不支持的任务应立即结束，不浪费修复预算。
 def test_known_unsupported_stops_without_repairs(settings, workflow, monkeypatch):
     received = install_candidates(
         monkeypatch,
@@ -243,9 +264,10 @@ def test_known_unsupported_stops_without_repairs(settings, workflow, monkeypatch
     assert not result.feedback[0].recoverable
 
 
+# 探索器调用 report_unsupported 后不能按成功候选继续处理。
 def test_explorer_unsupported_tool_is_a_failure_terminal(settings, monkeypatch):
     bu = pytest.importorskip("browser_use")
-    from autoscraper.agent import generate_spec
+    from autoscraper.agent.explorer import generate_spec
 
     class Browser:
         killed = False
@@ -289,6 +311,7 @@ def test_explorer_unsupported_tool_is_a_failure_terminal(settings, monkeypatch):
     assert Browser.killed
 
 
+# 独立需求已明确要求不支持能力时，无需启动浏览器探索。
 def test_explicit_unsupported_requirements_skip_browser(settings, workflow, monkeypatch):
     module, model = workflow
 
@@ -304,6 +327,7 @@ def test_explicit_unsupported_requirements_skip_browser(settings, workflow, monk
     assert result.attempts == 0
 
 
+# max_repairs=0 仍允许初次生成，但失败后不再修复。
 def test_zero_repair_limit(candidate, settings, workflow, monkeypatch):
     install_candidates(monkeypatch, workflow, [candidate])
     result = run_task(
@@ -316,6 +340,7 @@ def test_zero_repair_limit(candidate, settings, workflow, monkeypatch):
     assert result.status == "unfulfilled"
 
 
+# 需求解析和多轮探索必须共享主模型调用预算。
 def test_shared_call_budget(candidate, settings, workflow, monkeypatch):
     settings.max_steps = 1
     received = install_candidates(monkeypatch, workflow, [candidate])
@@ -325,6 +350,7 @@ def test_shared_call_budget(candidate, settings, workflow, monkeypatch):
     assert result.feedback[0].code == "budget_exhausted"
 
 
+# 只验证部分样本时可返回 validated，但不能声称已完成全部抓取。
 def test_rule_only_sampling_does_not_claim_full_task(candidate, settings, workflow, monkeypatch):
     larger = candidate.model_copy(update={"max_items": 200})
     install_candidates(monkeypatch, workflow, [larger])
@@ -341,6 +367,7 @@ def test_rule_only_sampling_does_not_claim_full_task(candidate, settings, workfl
     assert not result.summary()["task_fulfilled"]
 
 
+# 需要导出数据且试抓取未完成时，必须继续执行完整规则。
 def test_output_requires_full_execution_after_sample(candidate, settings, workflow, monkeypatch):
     larger = candidate.model_copy(update={"max_items": 200})
     install_candidates(monkeypatch, workflow, [larger])
@@ -358,6 +385,39 @@ def test_output_requires_full_execution_after_sample(candidate, settings, workfl
     assert result.summary()["task_fulfilled"]
 
 
+# 探索、试抓取和完整执行应收到同样的显示模式与路径，且不会因进入新阶段回退到默认值。
+@pytest.mark.parametrize("headless", [True, False])
+@pytest.mark.parametrize("path", [None, "C:/Custom Browser/chrome.exe"])
+def test_browser_settings_shared_across_all_stages(
+    candidate, settings, workflow, monkeypatch, headless, path
+):
+    module, _ = workflow
+    settings.headless = headless
+    settings.executable_path = path
+    exploration = []
+    execution = []
+
+    async def generate(url, task, run_settings, **kwargs):
+        exploration.append((run_settings.headless, run_settings.executable_path))
+        return candidate
+
+    def run(self, spec):
+        execution.append((spec.max_items, self.headless, self.executable_path))
+        return ScrapeResult(
+            records=[{"title": "A", "price": "1"}] * spec.max_items, stop_reason="max_items"
+        )
+
+    monkeypatch.setattr(module, "generate_spec", generate)
+    monkeypatch.setattr(ScraperExecutor, "run", run)
+    outcome = run_task(
+        URL, TASK, settings, execute=True, validation=ValidationSettings(max_items=1)
+    )
+    assert outcome.status == "success"
+    assert exploration == [(headless, path)]
+    assert execution == [(1, headless, path), (2, headless, path)]
+
+
+# 验证页数预算不足应明确报告，而不是要求 Agent 重写正确规则。
 def test_validation_budget_exhaustion_is_not_repaired(candidate, settings, workflow, monkeypatch):
     install_candidates(monkeypatch, workflow, [candidate])
     monkeypatch.setattr(
@@ -373,6 +433,67 @@ def test_validation_budget_exhaustion_is_not_repaired(candidate, settings, workf
     assert result.feedback[0].code == "validation_limit"
 
 
+# 区分验证页数截断、完整成功及完整执行失败，保护既有编排决策。
+@pytest.mark.parametrize(
+    "execute, final_stop, status, code, sample_only",
+    [
+        (False, None, "unfulfilled", "validation_limit", True),
+        (True, "max_items", "success", None, False),
+        (True, "no_next", "success", None, False),
+        (True, "max_pages", "unfulfilled", "validation_limit", True),
+        (True, "detail_limit", "unfulfilled", "validation_limit", True),
+        (True, "pagination_cycle", "unfulfilled", "selector_failure", False),
+    ],
+)
+def test_preview_page_limit_preserves_execution_decisions(
+    candidate, settings, workflow, monkeypatch, execute, final_stop, status, code, sample_only
+):
+    """区分验证预算截断与完整执行失败，防止重构改变导出或修复决策。"""
+    received = install_candidates(monkeypatch, workflow, [candidate])
+    seen = []
+    rows = [{"title": "A", "price": "1"}, {"title": "B", "price": "2"}]
+
+    def run(self, spec):
+        seen.append(spec.max_pages)
+        if len(seen) == 1:
+            return ScrapeResult(records=rows[:1], stop_reason="max_pages")
+        return ScrapeResult(records=rows, stop_reason=final_stop)
+
+    monkeypatch.setattr(ScraperExecutor, "run", run)
+    outcome = run_task(
+        URL, TASK, settings, execute=execute,
+        validation=ValidationSettings(max_pages=1, max_repairs=0),
+    )
+    assert seen == ([1, candidate.max_pages] if execute else [1])
+    assert len(received) == outcome.attempts == 1
+    assert outcome.status == status
+    assert outcome.sample_only is sample_only
+    assert [item.code for item in outcome.feedback] == ([code] if code else [])
+    assert outcome.summary()["task_fulfilled"] is (status == "success")
+
+
+# 验证预算截断只能豁免数量不足，不能掩盖真实字段缺失。
+def test_preview_page_limit_does_not_hide_missing_data(
+    candidate, settings, workflow, monkeypatch
+):
+    install_candidates(monkeypatch, workflow, [candidate])
+    seen = []
+
+    def run(self, spec):
+        seen.append(spec.max_pages)
+        return ScrapeResult(records=[{"title": "A", "price": ""}], stop_reason="max_pages")
+
+    monkeypatch.setattr(ScraperExecutor, "run", run)
+    outcome = run_task(
+        URL, TASK, settings, execute=True,
+        validation=ValidationSettings(max_pages=1, max_repairs=0),
+    )
+    assert seen == [1]
+    assert outcome.status == "unfulfilled"
+    assert [item.code for item in outcome.feedback] == ["missing_data"]
+
+
+# 需求本身不合法时直接结束，不开始浏览器探索。
 def test_bad_requirements_stop_without_exploration(settings, workflow, monkeypatch):
     result = run_task(URL, TASK, settings, count=0)
     assert result.status == "unfulfilled"
@@ -380,6 +501,7 @@ def test_bad_requirements_stop_without_exploration(settings, workflow, monkeypat
     assert result.attempts == result.llm_calls == 0
 
 
+# 不支持结果必须提供明确原因，且状态值不能冒充其他结果。
 def test_unsupported_envelope_requires_reason():
     with pytest.raises(ValueError):
         UnsupportedResult()
@@ -387,10 +509,11 @@ def test_unsupported_envelope_requires_reason():
         UnsupportedResult(status="candidate", reason="unsupported")
 
 
+# 回归保护：CLI 不能把缺少必需字段的候选当作正式规则保存。
 def test_issue_regression_cli_does_not_save_partial_spec(
     candidate, workflow, monkeypatch, tmp_path, capsys
 ):
-    import autoscraper.agent_cli as cli
+    import autoscraper.cli.agent as cli
 
     install_candidates(monkeypatch, workflow, [candidate])
     monkeypatch.setenv("AUTOSCRAPER_API_KEY", "fake")
@@ -419,11 +542,12 @@ def test_issue_regression_cli_does_not_save_partial_spec(
     assert data_path.read_text() == "existing data"
 
 
+# 各种失败终态都应保留原有已验证规则和数据。
 @pytest.mark.parametrize("status,exit_code", [("unsupported", 3), ("unfulfilled", 1)])
 def test_failed_cli_preserves_existing_files(monkeypatch, tmp_path, status, exit_code):
-    import autoscraper.agent_cli as cli
-    from autoscraper.validation import Feedback
-    from autoscraper.workflow import TaskOutcome
+    import autoscraper.cli.agent as cli
+    from autoscraper.workflow.validation import Feedback
+    from autoscraper.workflow.outcome import TaskOutcome
 
     paths = [tmp_path / "rule.json", tmp_path / "data.json", tmp_path / "data.csv"]
     for path in paths:
@@ -461,8 +585,9 @@ def test_failed_cli_preserves_existing_files(monkeypatch, tmp_path, status, exit
     assert all(path.read_text(encoding="utf-8") == "previous successful output" for path in paths)
 
 
+# 一层详情能力应被需求解析和探索提示词识别为受支持能力。
 def test_detail_requirements_and_agent_prompt():
-    from autoscraper.agent import build_task
+    from autoscraper.agent.explorer import build_task
 
     assert "detail_pages" not in str(TaskRequirements.model_json_schema())
     prompt = build_task(URL, "Get descriptions from detail pages")
@@ -471,6 +596,7 @@ def test_detail_requirements_and_agent_prompt():
     assert 'item_selector="html"' in prompt
 
 
+# 在列表候选上增加详情描述字段和独立详情页预算。
 def detail_candidate(candidate):
     data = candidate.model_dump()
     data.update(
@@ -484,6 +610,7 @@ def detail_candidate(candidate):
     return ScraperSpec.model_validate(data)
 
 
+# 必需详情字段应纳入与列表字段相同的独立校验。
 def test_detail_field_validation(candidate):
     spec = detail_candidate(candidate)
     requirements = TaskRequirements(fields=["title", "description"], count=2)
@@ -492,6 +619,7 @@ def test_detail_field_validation(candidate):
     assert validate_spec(spec, requirements)[0].fields == ["description"]
 
 
+# 真实详情选择器失败应可反馈、修复，并完成合并字段抓取。
 @pytest.mark.parametrize("mode", ["fail", "skip"])
 def test_detail_selector_repair_and_full_workflow(candidate, settings, workflow, monkeypatch, mode):
     from playwright.sync_api import sync_playwright
@@ -534,6 +662,7 @@ def test_detail_selector_repair_and_full_workflow(candidate, settings, workflow,
     assert all(row["description"] == "Full text" for row in outcome.data.records)
 
 
+# 详情试抓取预算耗尽是范围限制，不是可恢复的选择器问题。
 def test_detail_preview_budget_is_nonrecoverable(candidate, settings, workflow, monkeypatch):
     spec = detail_candidate(candidate)
     install_candidates(monkeypatch, workflow, [spec])
@@ -563,6 +692,7 @@ def test_detail_preview_budget_is_nonrecoverable(candidate, settings, workflow, 
     assert not outcome.feedback[0].recoverable
 
 
+# 详情样本通过后，需要数据输出时继续完整详情抓取。
 def test_detail_full_execution_after_sample(candidate, settings, workflow, monkeypatch):
     spec = detail_candidate(candidate)
     install_candidates(monkeypatch, workflow, [spec])
@@ -587,6 +717,7 @@ def test_detail_full_execution_after_sample(candidate, settings, workflow, monke
     assert outcome.summary()["task_fulfilled"]
 
 
+# 列表、分页或详情导航失败都不能误触发 CSS 规则修复。
 @pytest.mark.parametrize("stage", ["listing", "pagination", "detail"])
 @pytest.mark.parametrize("mode", ["fail", "skip"])
 @pytest.mark.parametrize("failure", ["timeout", "proxy", "http"])
@@ -655,8 +786,9 @@ def test_navigation_failure_does_not_repair(
         assert outcome.data.errors[0] == feedback.message
 
 
+# 完整执行阶段导航失败应保留候选并准确标记失败阶段。
 def test_navigation_failure_in_full_execution(candidate, settings, workflow, monkeypatch):
-    from autoscraper.executor import NavigationError
+    from autoscraper.scraping.executor import NavigationError
 
     received = install_candidates(monkeypatch, workflow, [candidate])
     seen = []
@@ -678,8 +810,9 @@ def test_navigation_failure_in_full_execution(candidate, settings, workflow, mon
     assert not outcome.feedback[0].recoverable
 
 
+# 导航反馈应保留有助定位原因的完整诊断。
 def test_navigation_feedback_preserves_full_diagnostic():
-    from autoscraper.executor import ScrapeFailure
+    from autoscraper.scraping.executor import ScrapeFailure
 
     message = "Navigation failed: " + "x" * 2100 + " net::ERR_NAME_NOT_RESOLVED at " + URL
     result = ScrapeResult(
@@ -692,12 +825,13 @@ def test_navigation_feedback_preserves_full_diagnostic():
     assert not issues[0].recoverable
 
 
+# 试抓取或完整执行内容超时时停止修复，并保留可诊断状态。
 @pytest.mark.parametrize("stage", ["preview", "full"])
 @pytest.mark.parametrize("error_name", ["ContentTimeout", "NavigationTimeout"])
 def test_wait_timeouts_stop_without_repair(
     candidate, settings, workflow, monkeypatch, stage, error_name
 ):
-    import autoscraper.executor as executor
+    import autoscraper.scraping.executor as executor
 
     received = install_candidates(monkeypatch, workflow, [candidate])
     calls = []
@@ -721,13 +855,14 @@ def test_wait_timeouts_stop_without_repair(
     assert outcome.summary()["agent_status"] == "completed"
 
 
+# CLI 超时时另存未验证候选，避免覆盖正式规则与数据。
 @pytest.mark.parametrize("stage", ["validation", "execution"])
 def test_timeout_cli_keeps_candidate_without_overwriting_outputs(
     candidate, monkeypatch, tmp_path, capsys, stage
 ):
-    import autoscraper.agent_cli as cli
-    from autoscraper.validation import Feedback
-    from autoscraper.workflow import TaskOutcome
+    import autoscraper.cli.agent as cli
+    from autoscraper.workflow.validation import Feedback
+    from autoscraper.workflow.outcome import TaskOutcome
 
     spec_path = tmp_path / "rule.json"
     data_path = tmp_path / "data.json"
@@ -772,6 +907,7 @@ def test_timeout_cli_keeps_candidate_without_overwriting_outputs(
     assert data_path.read_text() == "previous data"
 
 
+# 缩短试抓取导航时限时，仍保留用户设置的内容等待上限。
 def test_validation_keeps_user_content_timeout(candidate, settings, workflow, monkeypatch):
     settings.content_timeout_ms = 30000
     install_candidates(monkeypatch, workflow, [candidate])
@@ -791,6 +927,7 @@ def test_validation_keeps_user_content_timeout(candidate, settings, workflow, mo
     assert seen[0].content_timeout_ms == outcome.spec.content_timeout_ms == 30000
 
 
+# 未配置验证导航时限时沿用候选规则的导航超时。
 def test_validation_inherits_rule_navigation_timeout(candidate, settings, workflow, monkeypatch):
     candidate.timeout_ms = 30000
     settings.content_timeout_ms = 30000
@@ -811,12 +948,13 @@ def test_validation_inherits_rule_navigation_timeout(candidate, settings, workfl
     assert seen[0].content_timeout_ms == 30000
 
 
+# CLI 未传验证导航超时参数时保留 None，传入时正确转交。
 @pytest.mark.parametrize(
     "flags, expected", [([], None), (["--validation-timeout-ms", "5000"], 5000)]
 )
 def test_agent_cli_navigation_timeout_is_optional(monkeypatch, tmp_path, flags, expected):
-    import autoscraper.agent_cli as cli
-    from autoscraper.workflow import TaskOutcome
+    import autoscraper.cli.agent as cli
+    from autoscraper.workflow.outcome import TaskOutcome
 
     seen = []
     monkeypatch.setenv("AUTOSCRAPER_API_KEY", "fake")
@@ -834,6 +972,7 @@ def test_agent_cli_navigation_timeout_is_optional(monkeypatch, tmp_path, flags, 
     assert seen == [expected]
 
 
+# 语义等待模型在多轮修复中保持同一实例和独立预算。
 def test_wait_model_budget_shared_across_repairs(candidate, settings, workflow, monkeypatch):
     broken = candidate.model_copy(deep=True)
     broken.fields.pop("price")

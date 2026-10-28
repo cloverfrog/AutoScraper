@@ -31,6 +31,13 @@ uv run --extra agent autoscraper-agent "https://books.toscrape.com/" "抓取前2
 | `validated` | 不导出数据，只生成已试跑验证的规则 | 0 |
 | `unsupported` | 当前协议无法满足必需字段/能力 | 3 |
 | `unfulfilled` | 验证不通过、修复耗尽或预算/模型错误 | 1 |
+| `needs_clarification` | 等待用户补充任务意图，没有默认选择 | 4 |
+
+内部状态使用 `workflow/outcome.py` 的 `TaskStatus` 和 `TaskStage` 类型，分别约束
+任务结果及 `exploration` / `validation` / `execution` 阶段；执行器的停止原因使用
+`scraping/executor.py` 的 `ScrapeStopReason`。这些 `Literal` 类型供编辑器和静态类型
+检查使用，不增加运行时校验，也不改变 JSON 字段、字符串取值、退出码或完成条件。
+停止原因的空字符串仍是原有初始值；`failure_stage` 未标记时仍为 `null`。
 
 `spec_valid` 仅表示存在通过 Pydantic 的规则；`execution_success` 表示执行器返回且无提取错误；`task_fulfilled` 还要求需求和数据检查通过，并且不是部分样本。三者可能不同。
 
@@ -82,7 +89,7 @@ DOM 摘要不变时跳过模型调用；LLM 失败报告 `llm_error`，不冒充
 
 ## 测试
 
-`tests/test_workflow.py` 使用固定模型候选和真实离线 Playwright 页面，覆盖支持任务、遗漏字段、选择器失败后的修复与重验、次数/调用预算、unsupported 立即停止、样本与全量结果区分、失败时保留文件。默认测试不调用真实 LLM。
+`tests/workflow/test_workflow.py` 使用固定模型候选和真实离线 Playwright 页面，覆盖支持任务、遗漏字段、选择器失败后的修复与重验、次数/调用预算、unsupported 立即停止、样本与全量结果区分、失败时保留文件。默认测试不调用真实 LLM。
 
 ## 验证记录（2026-10-21）
 

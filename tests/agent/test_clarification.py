@@ -1,22 +1,25 @@
+# 需求澄清测试：覆盖终端回答、无回答暂停、动作批次停止和原 Agent 继续执行。
+# 同时验证问答历史与预算共享、人工等待不占探索超时，以及待澄清时不覆盖产物。
 """Clarification pauses execution, preserves answers, and never assumes a default."""
 
 import asyncio
 import io
 import json
 import time
+from importlib import import_module
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
 
-from autoscraper.agent import AgentSettings, generate_spec
-from autoscraper.agent_cli import ask_user
-from autoscraper.clarification import (
+from autoscraper.agent.explorer import AgentSettings, generate_spec
+from autoscraper.cli.agent import ask_user
+from autoscraper.agent.clarification import (
     ClarificationRequest,
     ClarificationRequired,
     ClarificationSession,
 )
-from autoscraper.validation import TaskRequirements
+from autoscraper.workflow.requirements import TaskRequirements
 
 
 URL = "https://fixture.test/scroll"
@@ -34,11 +37,13 @@ RULE = {
 }
 
 
+# 可控制 isatty 的输入流替身，用于区分交互与非交互终端。
 class Terminal(io.StringIO):
     def isatty(self):
         return True
 
 
+# 终端处理器应正确解释选项编号和自由回答，不默认选择无效输入。
 @pytest.mark.parametrize(
     "text, expected",
     [
@@ -57,6 +62,7 @@ def test_cli_answers(monkeypatch, capsys, text, expected):
     assert REQUEST.explanation in captured.err
 
 
+# 非交互输入应返回待澄清，不消费其他管道内容。
 def test_non_terminal_does_not_consume_stdin(monkeypatch):
     stream = io.StringIO("yes\n")
     monkeypatch.setattr("sys.stdin", stream)
@@ -64,6 +70,7 @@ def test_non_terminal_does_not_consume_stdin(monkeypatch):
     assert stream.tell() == 0
 
 
+# 空回答保留原问题，不能伪造已完成澄清。
 @pytest.mark.parametrize("answer", [None, "", "  "])
 def test_no_answer_remains_pending(answer):
     session = ClarificationSession(handler=lambda request: answer, pending=REQUEST)
@@ -73,6 +80,7 @@ def test_no_answer_remains_pending(answer):
     assert session.history == []
 
 
+# EOF 或用户中断回答时仍返回待澄清状态。
 def test_interrupt_remains_pending():
     def interrupted(request):
         raise KeyboardInterrupt
@@ -83,9 +91,10 @@ def test_interrupt_remains_pending():
     assert session.pending == REQUEST
 
 
+# 调用 ask_user 后必须停止同批后续动作，避免回答前执行替代方案。
 def test_real_browser_use_action_batch_stops_at_question():
     bu = pytest.importorskip("browser_use")
-    from autoscraper.agent_tools import build_tools
+    from autoscraper.agent.tools import build_tools
 
     session = ClarificationSession()
     tools = build_tools(clarification=session)
@@ -121,6 +130,7 @@ def test_real_browser_use_action_batch_stops_at_question():
     assert agent._log_action.await_count == 1  # No queued navigate after the question.
 
 
+# 有答案时复用原 Agent 继续，无答案时保留请求并清理浏览器。
 @pytest.mark.parametrize("answer", ["允许传统分页入口", "必须使用原入口", None])
 def test_generation_resumes_same_agent_or_returns_pending(monkeypatch, answer):
     bu = pytest.importorskip("browser_use")
@@ -161,7 +171,7 @@ def test_generation_resumes_same_agent_or_returns_pending(monkeypatch, answer):
     monkeypatch.setattr(bu, "Agent", Agent)
     monkeypatch.setattr(bu, "BrowserSession", Browser)
     settings = AgentSettings(api_key="fake", model="test", base_url="https://llm.test", max_steps=4)
-    from autoscraper.agent import UnsupportedTaskError
+    from autoscraper.agent.explorer import UnsupportedTaskError
 
     async def run():
         return await generate_spec(
@@ -189,8 +199,11 @@ def test_generation_resumes_same_agent_or_returns_pending(monkeypatch, answer):
     assert captured["killed"]
 
 
+# 人工回答耗时即使超过探索预算，也不应消耗有效探索时间。
 def test_human_wait_excluded_from_timeout(monkeypatch):
     bu = pytest.importorskip("browser_use")
+    # 在替换 BrowserSession 前加载工具，避免单独运行时缓存替身作为参数注解。
+    import_module("autoscraper.agent.tools")
     captured = {}
 
     def answer(request):
@@ -244,16 +257,18 @@ def test_human_wait_excluded_from_timeout(monkeypatch):
         )
     )
     assert str(result.start_url) == RULE["start_url"]
-    assert session.waiting_seconds >= 1.1
+    # 验证人工等待超过任务预算；不要求 Windows 计时结果精确达到 sleep 的参数。
+    assert session.waiting_seconds > settings.timeout_seconds
 
 
+# 多轮修复应共享问答、调用预算和人工等待累计值。
 @pytest.mark.parametrize("mode", ["answer", "pending", "budget"])
 def test_workflow_shares_answers_budget_and_waiting_time(monkeypatch, mode):
     pytest.importorskip("browser_use")
-    import autoscraper.agent_tools as helpers
-    import autoscraper.workflow as workflow
-    from autoscraper.executor import ScrapeResult
-    from autoscraper.spec import ScraperSpec
+    import autoscraper.agent.llm as helpers
+    import autoscraper.workflow.runner as workflow
+    from autoscraper.scraping.executor import ScrapeResult
+    from autoscraper.scraping.spec import ScraperSpec
 
     model = SimpleNamespace(calls=0)
     wait_model = SimpleNamespace(calls=0)
@@ -323,10 +338,11 @@ def test_workflow_shares_answers_budget_and_waiting_time(monkeypatch, mode):
         assert len(executions) == 1 and len(received) == 2
 
 
+# 待澄清退出时返回问题和退出码 4，并保留已有规则与数据。
 @pytest.mark.parametrize("non_interactive", [False, True])
 def test_cli_pending_preserves_existing_outputs(monkeypatch, capsys, tmp_path, non_interactive):
-    import autoscraper.agent_cli as cli
-    from autoscraper.workflow import TaskOutcome
+    import autoscraper.cli.agent as cli
+    from autoscraper.workflow.outcome import TaskOutcome
 
     rule = tmp_path / "rule.json"
     data = tmp_path / "data.json"
@@ -365,6 +381,7 @@ def test_cli_pending_preserves_existing_outputs(monkeypatch, capsys, tmp_path, n
     assert sorted(p.name for p in tmp_path.iterdir()) == ["data.json", "rule.json"]
 
 
+# 用真实本地 Chromium 与脚本模型验证框架的暂停/继续和不支持终态。
 @pytest.mark.parametrize("mode", ["clarification", "unsupported"])
 def test_real_agent_continues_with_browser_and_history(monkeypatch, tmp_path, mode):
     """Exercise pinned browser-use run/add_new_task with real local Chromium, no paid LLM."""
@@ -376,9 +393,9 @@ def test_real_agent_continues_with_browser_and_history(monkeypatch, tmp_path, mo
     from browser_use.llm.views import ChatInvokeCompletion
     from playwright.sync_api import sync_playwright
 
-    from autoscraper.agent_tools import make_llm
-    from autoscraper.openai_responses import ChatOpenAIResponses
-    from autoscraper.tracing import FileSink, Trace, labels
+    from autoscraper.agent.llm import make_llm
+    from autoscraper.agent.responses import ChatOpenAIResponses
+    from autoscraper.observability.tracing import FileSink, Trace, labels
 
     visits = []
 
@@ -494,8 +511,8 @@ def test_real_agent_continues_with_browser_and_history(monkeypatch, tmp_path, mo
     sink = FileSink(tmp_path / "runs")
     try:
         if mode == "unsupported":
-            from autoscraper.workflow import run_task
-            monkeypatch.setattr("autoscraper.agent_tools.make_llm", lambda settings: model)
+            from autoscraper.workflow.runner import run_task
+            monkeypatch.setattr("autoscraper.agent.llm.make_llm", lambda settings: model)
             outcome = run_task(url, "前2条，字段名为quote", settings, trace=Trace(sink))
             assert outcome.status == "unsupported"
             summary = json.loads((sink.directory / "summary.json").read_text())

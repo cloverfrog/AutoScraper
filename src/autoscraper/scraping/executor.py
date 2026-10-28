@@ -1,3 +1,6 @@
+# 确定性抓取执行器：读取 ScraperSpec，用 Playwright 按 CSS 规则提取数据。
+# 执行顺序是列表导航 → 逐条提取 → 可选详情补充 → 去重 → 下一页，整个过程不调用 LLM。
+# 导航/内容等待失败与规则错误分别报告，供工作流决定是否值得让 Agent 修复。
 """Deterministic CSS-only execution. Never evaluates rule-provided code."""
 
 from dataclasses import dataclass, field
@@ -9,41 +12,50 @@ from playwright.sync_api import Locator, Page, TimeoutError as PlaywrightTimeout
 from pydantic import HttpUrl, TypeAdapter
 
 from .spec import FieldSpec, ScraperSpec
-from .tracing import emit, operation
+from autoscraper.observability.tracing import emit, operation
 
 
+# 抓取致命错误的基类；工作流捕获后转换为结构化验证反馈。
 class ScrapeError(RuntimeError):
     """Fatal navigation, selector, pagination or extraction error."""
 
 
+# 单条记录的提取失败；由 on_item_error 决定跳过该条还是终止抓取。
 class ItemError(ScrapeError):
     """An individual item could not be extracted."""
 
 
+# 导航失败，保留目标 URL；网络或 HTTP 错误不能直接证明 CSS 规则有误。
 class NavigationError(ItemError):
     """A navigation failed, without evidence that extraction selectors are wrong."""
 
     code = "navigation_failure"
 
+    # 保存失败 URL 并附加可读诊断，供异常转换和最终报告使用。
     def __init__(self, url: str, message: str):
         self.url = url
         super().__init__(f"Navigation failed at {url}: {message}")
 
 
+# 导航超过时限，与内容未出现的超时分开标记。
 class NavigationTimeout(NavigationError):
     code = "navigation_timeout"
 
 
+# 页面或详情字段在等待期限内未出现；工作流不会据此要求重写选择器。
 class ContentTimeout(ItemError):
     """Missing content within the deadline is not evidence of invalid CSS."""
 
     code = "content_timeout"
 
+    # 保留内容等待失败的位置，避免只剩一段无法定位的异常文本。
     def __init__(self, url: str, message: str):
         self.url = url
         super().__init__(message)
 
 
+# 等待第一个匹配节点挂载到 DOM；只要求 attached，不要求节点可见。
+# timeout_ms=None 时沿用页面默认超时，超时后转为业务异常 ContentTimeout。
 def wait_for_content(locator: Locator, url: str, timeout_ms: int | None):
     try:
         locator.first.wait_for(state="attached", timeout=timeout_ms)
@@ -51,6 +63,7 @@ def wait_for_content(locator: Locator, url: str, timeout_ms: int | None):
         raise ContentTimeout(url, f"Content did not appear at {url}: {exc}") from exc
 
 
+# 结构化的单条错误诊断，和 errors 中的兼容文本一起返回。
 @dataclass
 class ScrapeFailure:
     """Typed diagnostic accompanying a legacy string in ScrapeResult.errors."""
@@ -60,6 +73,20 @@ class ScrapeFailure:
     url: str
 
 
+# 执行器停止原因的静态取值约束；保留空字符串作为初始值，避免改变异常路径的报告。
+# 此处只限制类型提示，不增加运行时校验，也不改变已有 JSON 中的字符串值。
+ScrapeStopReason = Literal[
+    "",                 # 尚未正常记录停止原因，例如执行中途发生异常。
+    "max_items",        # 已达到记录数量上限。
+    "max_pages",        # 列表页访问预算耗尽。
+    "detail_limit",     # 详情导航尝试预算耗尽。
+    "pagination_cycle",  # 下一页链接或重定向重复访问已处理页面。
+    "no_next",          # 下一页链接缺失或已禁用。
+    "no_pagination",    # 规则未声明分页，当前列表页处理完毕。
+]
+
+
+# 执行结果：记录、错误、访问计数和停止原因；有数据并不等于任务完整完成。
 @dataclass
 class ScrapeResult:
     records: list[dict[str, str | None]] = field(default_factory=list)
@@ -67,10 +94,13 @@ class ScrapeResult:
     pages_visited: int = 0
     detail_pages_visited: int = 0
     duplicates: int = 0
-    stop_reason: str = ""
+    # max_items/no_next/no_pagination 为数量或自然结束；max_pages/detail_limit 为预算截断。
+    # pagination_cycle 表示重复分页链接，工作流将其视为规则错误。
+    stop_reason: ScrapeStopReason = ""
     error_details: list[ScrapeFailure] = field(default_factory=list)
 
 
+# 导航到 DOMContentLoaded，并在操作边界区分超时、浏览器错误和 HTTP 失败。
 def navigate(page: Page, url: str, timeout_ms: int):
     """Classify errors at the operation boundary, not by matching error text."""
     try:
@@ -84,6 +114,7 @@ def navigate(page: Page, url: str, timeout_ms: int):
     return response
 
 
+# 基于当前页面补全相对链接，并验证目标是合法 HTTP(S) URL。
 def http_url(base: str, value: str) -> str:
     try:
         if urlsplit(value).scheme in {"http", "https"}:
@@ -97,20 +128,23 @@ def http_url(base: str, value: str) -> str:
     return url
 
 
+# 统一限定 CSS 引擎，拒绝通过 Playwright 的 >> 链切换到其他选择器语法。
 def css(root: Page | Locator, selector: str) -> Locator:
-    # Do not allow Playwright selector chains to switch away from the CSS engine.
+    # 阻止 Playwright 选择器链切换引擎，确保协议始终按 CSS 解释。
     if ">>" in selector:
         raise ScrapeError("Selector chains are not supported; use a CSS selector")
     return root.locator(f"css={selector}")
 
 
+# 在给定记录或详情页面内提取字段：每个字段至多匹配一个元素。
+# 必填值缺失/为空或匹配歧义会报错；可选值缺失记为 None，文本统一压缩空白。
 def extract_fields(
     item: Page | Locator, fields: dict[str, FieldSpec], base_url: str, *, wait: bool = False
 ) -> dict[str, str | None]:
     record = {}
     for name, rule in fields.items():
         matches = css(item, rule.selector)
-        count = matches.count()  # Invalid CSS is a fatal rule error, even for optional fields.
+        count = matches.count()  # 即使字段可选，CSS 语法非法也属于致命规则错误。
         if wait and rule.required and count == 0:
             wait_for_content(matches, base_url, None)
         if matches.count() > 1:
@@ -134,10 +168,12 @@ def extract_fields(
     return record
 
 
+# 提取列表记录的字段；详情字段由后续独立页面补充。
 def extract_item(item: Locator, spec: ScraperSpec, base_url: str) -> dict[str, str | None]:
     return extract_fields(item, spec.fields, base_url)
 
 
+# 打开一条详情链接，按重定向后的 URL 处理相对链接，并等待必填字段。
 def extract_detail(page: Page, url: str, spec: ScraperSpec) -> dict[str, str | None]:
     navigate(page, url, spec.timeout_ms)
     http_url(page.url, page.url)
@@ -147,7 +183,15 @@ def extract_detail(page: Page, url: str, spec: ScraperSpec) -> dict[str, str | N
         raise ContentTimeout(url, f"Detail field extraction timed out: {exc}") from exc
 
 
+# 规则执行入口；run 自行管理浏览器，run_page 可复用调用方已有页面。
 class ScraperExecutor:
+    # 浏览器启动配置属于本次运行，不写入可复用的 ScraperSpec。
+    # 默认无头运行；工作流会传入与 Agent 探索相同的配置。
+    def __init__(self, *, headless: bool = True, executable_path: str | None = None):
+        self.headless = headless
+        self.executable_path = executable_path
+
+    # 执行规则并记录总体追踪指标；真正的浏览器创建与回收交给 _run。
     def run(self, spec: ScraperSpec) -> ScrapeResult:
         with operation("executor", start_url=str(spec.start_url)) as details:
             result = self._run(spec)
@@ -157,9 +201,12 @@ class ScraperExecutor:
                            error_codes=[error.code for error in result.error_details])
             return result
 
+    # 创建浏览器和列表页面，执行结束或异常退出时统一关闭浏览器。
     def _run(self, spec: ScraperSpec) -> ScrapeResult:
         with sync_playwright() as playwright:
-            browser = playwright.chromium.launch(headless=False)
+            browser = playwright.chromium.launch(
+                headless=self.headless, executable_path=self.executable_path
+            )
             try:
                 context = browser.new_context()
                 page = context.new_page()
@@ -167,6 +214,8 @@ class ScraperExecutor:
             finally:
                 browser.close()
 
+    # 串行处理列表、详情和分页，维护页面循环检测、记录去重及两类访问预算。
+    # 调用方拥有列表 Page，本函数只负责关闭自己创建的详情 Page。
     def run_page(self, spec: ScraperSpec, page: Page) -> ScrapeResult:
         """Accept a caller-owned page; detail rules need an explicit BrowserContext."""
         result = ScrapeResult()
@@ -177,10 +226,12 @@ class ScraperExecutor:
         detail_page = None
         try:
             if spec.detail:
+                # 详情使用同一 BrowserContext 的独立 Page，保留会话且不打断列表页面。
                 detail_page = page.context.new_page()
                 detail_page.set_default_timeout(spec.content_timeout_ms or spec.timeout_ms)
 
             while result.pages_visited < spec.max_pages:
+                # 同时记住请求 URL 和重定向后的 URL，忽略 fragment 后检测分页循环。
                 identity = urldefrag(next_url).url
                 if identity in seen_pages:
                     result.stop_reason = "pagination_cycle"
@@ -200,6 +251,7 @@ class ScraperExecutor:
                         item = items.nth(index)
                         record = extract_item(item, spec, page.url)
                         keys = spec.dedupe_by or list(spec.all_fields)
+                        # 若去重键已完全包含在列表字段里，可提前跳过，节省详情页访问预算。
                         if all(key in record for key in keys):
                             if tuple(record[key] for key in keys) in seen_records:
                                 result.duplicates += 1
@@ -215,6 +267,7 @@ class ScraperExecutor:
                             if result.detail_pages_visited >= spec.detail.max_pages:
                                 result.stop_reason = "detail_limit"
                                 return result
+                            # 先扣预算再导航；失败的详情请求也计入尝试次数。
                             result.detail_pages_visited += 1
                             record.update(extract_detail(detail_page, detail_url, spec))
                     except ItemError as exc:
@@ -239,6 +292,7 @@ class ScraperExecutor:
                         )
                         continue
                     keys = spec.dedupe_by or list(spec.all_fields)
+                    # 去重键含详情字段时，只能在合并后判重；仅完整记录才加入结果集合。
                     identity_record = tuple(record[key] for key in keys)
                     if identity_record in seen_records:
                         result.duplicates += 1
@@ -251,6 +305,7 @@ class ScraperExecutor:
                 if spec.pagination is None:
                     result.stop_reason = "no_pagination"
                     break
+                # 分页只读取唯一锚点的 href，不点击按钮或执行站点提供的 JavaScript。
                 button = css(page, spec.pagination.next_selector)
                 if button.count() == 0:
                     result.stop_reason = "no_next"

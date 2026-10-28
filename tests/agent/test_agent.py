@@ -1,21 +1,25 @@
+# Agent 与模型适配测试：覆盖输出解析、DOM 工具、调用预算、探索清理和 CLI 保存。
+# 大部分使用模拟模型或本地 Chromium；真实模型测试需显式开启 RUN_LLM。
 import asyncio
 import json
 import os
+from importlib import import_module
 from types import SimpleNamespace
 
 import pytest
 
-from autoscraper.agent import (
+from autoscraper.agent.explorer import (
     AgentError,
     AgentSettings,
     build_task,
     generate_spec,
     parse_spec_output,
 )
-from autoscraper.agent_cli import main, settings_from_env
-from autoscraper.executor import ScraperExecutor
+from autoscraper.cli.agent import main, settings_from_env
+from autoscraper.scraping.executor import ScraperExecutor
 
 
+# 供解析、执行和 CLI 测试复用的最小合法规则。
 @pytest.fixture
 def rule():
     return {
@@ -27,6 +31,7 @@ def rule():
     }
 
 
+# 验证纯 JSON 和单个代码块都能解析成协议模型。
 @pytest.mark.parametrize("fenced", [False, True])
 def test_parse_output(rule, fenced):
     text = json.dumps(rule)
@@ -34,6 +39,7 @@ def test_parse_output(rule, fenced):
     assert spec.fields["title"].selector == "h2"
 
 
+# 拒绝缺失、超长及不符合约定格式的模型输出。
 @pytest.mark.parametrize(
     "text",
     [
@@ -53,6 +59,7 @@ def test_reject_output(text):
         parse_spec_output(text)
 
 
+# 验证不受协议支持的扩展字段不会被静默接受。
 def test_reject_protocol_extensions(rule):
     with pytest.raises(AgentError, match="Invalid ScraperSpec"):
         parse_spec_output(json.dumps({**rule, "script": "alert(1)"}))
@@ -61,6 +68,7 @@ def test_reject_protocol_extensions(rule):
         parse_spec_output(json.dumps(rule))
 
 
+# 检查环境变量读取、默认值和显式覆盖的优先级。
 def test_env_settings(monkeypatch):
     monkeypatch.delenv("AUTOSCRAPER_API_KEY", raising=False)
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
@@ -74,6 +82,7 @@ def test_env_settings(monkeypatch):
     assert "test-secret" not in repr(settings)
 
 
+# 提示词应说明通用协议，不写死示例站点选择器。
 def test_prompt_has_protocol_without_site_selectors():
     task = build_task("https://books.toscrape.com/", "Get 25 titles")
     assert "Get 25 titles" in task
@@ -83,6 +92,7 @@ def test_prompt_has_protocol_without_site_selectors():
         build_task("file:///tmp/data", "Get titles")
 
 
+# 验证 Agent 格式的规则可直接交给独立执行器使用。
 def test_generated_rule_with_existing_executor(rule):
     from playwright.sync_api import sync_playwright
 
@@ -104,9 +114,10 @@ def test_generated_rule_with_existing_executor(rule):
     assert result.records == [{"title": "Generated rule works"}]
 
 
+# DOM 工具应相对每条记录测试字段，并按字面读取属性名。
 def test_dom_helpers_use_relative_css_and_literal_attributes():
     pytest.importorskip("browser_use")
-    from autoscraper.agent_tools import INSPECT_SCRIPT, SELECTOR_SCRIPT
+    from autoscraper.agent.dom import INSPECT_SCRIPT, SELECTOR_SCRIPT
     from playwright.sync_api import sync_playwright
 
     with sync_playwright() as p:
@@ -140,6 +151,7 @@ def test_dom_helpers_use_relative_css_and_literal_attributes():
             browser.close()
 
 
+# 创建带有多种匹配情况的本地页面，用于真实执行选择器测试脚本。
 @pytest.fixture
 def selector_page():
     pytest.importorskip("browser_use")
@@ -159,12 +171,14 @@ def selector_page():
             browser.close()
 
 
+# 在测试页面中执行项目固定的选择器检查脚本。
 def evaluate_selector(page, item, field="", attribute=""):
-    from autoscraper.agent_tools import SELECTOR_SCRIPT
+    from autoscraper.agent.dom import SELECTOR_SCRIPT
 
     return page.evaluate(f"(args) => ({SELECTOR_SCRIPT})(...args)", [item, field, attribute])
 
 
+# 无效的列表或字段 CSS 必须准确标明出错参数。
 @pytest.mark.parametrize(
     "item,field,parameter,count",
     [
@@ -190,6 +204,7 @@ def test_selector_invalid_css(selector_page, item, field, parameter, count):
     assert result["all_items_tested"] is False
 
 
+# 区分字段零匹配、唯一匹配和多匹配，保留每条样本的结果。
 @pytest.mark.parametrize(
     "field,status,matches,sample_statuses",
     [
@@ -215,6 +230,7 @@ def test_selector_field_cardinality(selector_page, field, status, matches, sampl
         assert [sample["values"] for sample in result["samples"]] == [["One"], ["Three"]]
 
 
+# 列表选择器无结果时返回明确状态，而不是误报成功。
 def test_selector_no_items(selector_page):
     result = evaluate_selector(selector_page, ".missing", "p")
     assert result["status"] == "no_items"
@@ -222,6 +238,7 @@ def test_selector_no_items(selector_page):
     assert result["samples"] == []
 
 
+# 检查采样范围、是否遍历全部记录和样本值长度上限。
 def test_selector_sample_scope_and_value_limits(selector_page):
     selector_page.set_content(
         '<article><p title="'
@@ -241,9 +258,11 @@ def test_selector_sample_scope_and_value_limits(selector_page):
     assert result["samples"][1]["values"] == [None]
 
 
+# 工具应原样传递待测试参数，并保留运行错误供 Agent 处理。
 def test_selector_tool_passes_exact_inputs_and_keeps_runtime_errors():
     pytest.importorskip("browser_use")
-    from autoscraper.agent_tools import SELECTOR_SCRIPT, build_tools
+    from autoscraper.agent.dom import SELECTOR_SCRIPT
+    from autoscraper.agent.tools import build_tools
 
     action = build_tools().registry.registry.actions["test_selector"].function
     raw = '{"status":"invalid_css","item_selector":"article"}'
@@ -275,16 +294,18 @@ def test_selector_tool_passes_exact_inputs_and_keeps_runtime_errors():
         asyncio.run(action(browser_session=BrokenSession(), item_selector="article"))
 
 
+# 提示词要求测试最终提交的原样选择器，避免测试与提交不一致。
 def test_prompt_requires_exact_selector_tests():
     task = build_task("https://fixture.test/", "Get titles")
     assert "Retest changed selectors verbatim" in task
     assert "Never claim failed or untested rules are verified" in task
 
 
+# 输出 Schema 由框架注入，任务提示词不再重复整份 Schema。
 def test_browser_use_supplies_schema_without_manual_duplicate():
     bu = pytest.importorskip("browser_use")
-    from autoscraper.agent_tools import build_tools
-    from autoscraper.spec import ScraperSpec
+    from autoscraper.agent.tools import build_tools
+    from autoscraper.scraping.spec import ScraperSpec
 
     task = build_task("https://fixture.test/", "Get titles")
     # Contract with pinned browser-use: removing our copy must not remove the
@@ -301,11 +322,13 @@ def test_browser_use_supplies_schema_without_manual_duplicate():
     assert "detail" in done_schema["$defs"]["ScraperSpec"]["properties"]
 
 
+# 初始探索和修复都应保留任务约束、历史候选及剩余等待预算。
 @pytest.mark.parametrize("repair", [False, True])
 def test_exploration_prompt_preserves_task_context(monkeypatch, rule, repair):
     bu = pytest.importorskip("browser_use")
-    from autoscraper.spec import ScraperSpec
-    from autoscraper.validation import Feedback, TaskRequirements
+    from autoscraper.scraping.spec import ScraperSpec
+    from autoscraper.workflow.validation import Feedback
+    from autoscraper.workflow.requirements import TaskRequirements
 
     captured = {}
 
@@ -363,10 +386,13 @@ def test_exploration_prompt_preserves_task_context(monkeypatch, rule, repair):
     assert captured["killed"]
 
 
+# 覆盖成功、非法输出、未完成和超时退出，确认浏览器总会清理。
 @pytest.mark.parametrize("outcome", ["success", "invalid", "unfinished", "timeout"])
 def test_runner_limits_validation_cleanup(monkeypatch, rule, outcome):
     bu = pytest.importorskip("browser_use")
-    import autoscraper.agent_tools as helpers
+    import autoscraper.agent.llm as helpers
+    # 先加载工具模块，避免 BrowserSession 替身被缓存为工具参数注解。
+    import_module("autoscraper.agent.tools")
 
     class Browser:
         killed = False
@@ -412,11 +438,13 @@ def test_runner_limits_validation_cleanup(monkeypatch, rule, outcome):
     assert Browser.killed
 
 
+# 检查受限工具集合和模型调用硬上限，禁止越过预算继续请求。
 def test_tools_and_llm_budget(monkeypatch):
     pytest.importorskip("browser_use")
     from browser_use.llm.views import ChatInvokeCompletion
-    from autoscraper.agent_tools import build_tools, make_llm
-    from autoscraper.openai_responses import ChatOpenAIResponses
+    from autoscraper.agent.tools import build_tools
+    from autoscraper.agent.llm import make_llm
+    from autoscraper.agent.responses import ChatOpenAIResponses
 
     assert set(build_tools().registry.registry.actions) == {
         "navigate",
@@ -456,12 +484,13 @@ def test_tools_and_llm_budget(monkeypatch):
         asyncio.run(llm.ainvoke([]))
 
 
+# 检查消息、JSON Schema 和输出参数如何映射到 Responses 请求。
 def test_openai_responses_structured_request(monkeypatch):
     pytest.importorskip("browser_use")
     from browser_use.llm.messages import SystemMessage, UserMessage
     from pydantic import BaseModel
 
-    from autoscraper.openai_responses import ChatOpenAIResponses
+    from autoscraper.agent.responses import ChatOpenAIResponses
 
     class Output(BaseModel):
         answer: str
@@ -509,9 +538,10 @@ def test_openai_responses_structured_request(monkeypatch):
     assert "tools" not in captured
 
 
+# 自定义兼容接口地址仍应使用项目的 Responses 适配器。
 def test_custom_endpoint_uses_responses_adapter():
     pytest.importorskip("browser_use")
-    from autoscraper.agent_tools import LimitedChatOpenAI, make_llm
+    from autoscraper.agent.llm import LimitedChatOpenAI, make_llm
 
     settings = AgentSettings(api_key="fake", model="compatible", base_url="https://llm.example/v1")
     llm = make_llm(settings)
@@ -519,11 +549,12 @@ def test_custom_endpoint_uses_responses_adapter():
     assert str(llm.base_url) == "https://llm.example/v1"
 
 
+# CLI 成功时应保存规则并导出工作流返回的数据。
 def test_cli_save_and_execute(monkeypatch, rule, tmp_path):
-    import autoscraper.agent_cli as cli
-    from autoscraper.executor import ScrapeResult
-    from autoscraper.validation import TaskRequirements
-    from autoscraper.workflow import TaskOutcome
+    import autoscraper.cli.agent as cli
+    from autoscraper.scraping.executor import ScrapeResult
+    from autoscraper.workflow.requirements import TaskRequirements
+    from autoscraper.workflow.outcome import TaskOutcome
 
     monkeypatch.setenv("AUTOSCRAPER_API_KEY", "fake")
     monkeypatch.setattr(
@@ -555,6 +586,7 @@ def test_cli_save_and_execute(monkeypatch, rule, tmp_path):
     assert json.loads(output.read_text()) == [{"title": "works"}]
 
 
+# 规则和数据路径冲突必须在付费模型调用前被拒绝。
 def test_cli_rejects_collision_before_llm(monkeypatch, tmp_path):
     path = str(tmp_path / "same.json")
     monkeypatch.setattr(
@@ -572,11 +604,12 @@ def test_cli_rejects_collision_before_llm(monkeypatch, tmp_path):
     assert main() == 1
 
 
+# 可选付费端到端测试：真实探索 Books to Scrape 并验证生成规则。
 @pytest.mark.llm
 @pytest.mark.skipif(os.getenv("RUN_LLM") != "1", reason="Set RUN_LLM=1 for paid LLM test")
 def test_real_books_agent(tmp_path):
     """No reference selectors/spec supplied to the model; prove actual end-to-end extraction."""
-    from autoscraper.agent import save_spec
+    from autoscraper.agent.explorer import save_spec
 
     settings = settings_from_env(max_steps=10, timeout_seconds=240)
     spec = asyncio.run(

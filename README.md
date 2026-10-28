@@ -51,7 +51,9 @@ $env:AUTOSCRAPER_BROWSER_PATH = uv run --extra agent python -c "from playwright.
 uv run --extra agent autoscraper-agent "https://books.toscrape.com/" "抓取前25本书，字段名为title、price、url，分别为完整书名、价格、绝对详情链接" --spec-output output/books-agent.json --output output/books.json --output output/books.csv --headed
 ```
 
-`--headed` 显示 Agent 探索浏览器；去掉后使用无头模式。此命令会调用 LLM，产生 API 费用。
+`--headed` 显示探索、试抓取和正式抓取的浏览器；去掉后所有阶段均使用无头模式。
+`--browser-path` 或 `AUTOSCRAPER_BROWSER_PATH` 指定的可执行文件也用于所有阶段。
+此命令会调用 LLM，产生 API 费用。
 
 规则会先校验必需字段、数量并试跑提取；可恢复的错误默认最多修复 2 次。验证通过后得到：
 
@@ -80,6 +82,10 @@ uv run --extra agent autoscraper-agent "https://books.toscrape.com/" "抓取前2
 ```bash
 uv run autoscraper output/books-agent.json --output output/books.json --output output/books.csv
 ```
+
+独立执行器也默认无头运行，可加 `--headed` 显示浏览器，并通过 `--browser-path` 指定
+可执行文件；未传路径时读取 `AUTOSCRAPER_BROWSER_PATH`，再回退到 Playwright 默认浏览器。
+这些启动选项不保存到规则 JSON 中。
 
 也可直接使用仓库中已验证的 Agent 规则快照：
 
@@ -114,7 +120,7 @@ Agent 工作流判定为验证失败，不覆盖已有输出。只运行 Executo
 | --- | --- | --- |
 | `--spec-output` | 规则输出路径，必填 | — |
 | `--output` | 数据输出路径，可重复指定 CSV / JSON | 不抓取数据 |
-| `--headed` | 显示探索浏览器 | 无头模式 |
+| `--headed` | 显示探索、试抓取和正式抓取浏览器 | 无头模式 |
 | `--model` | LLM 模型名 | `deepseek-flash` |
 | `--base-url` | 模型接口地址 | `https://api.deepseek.com` |
 | `--max-steps` | 需求解析、探索、修复共享的 LLM 调用上限 | 12 |
@@ -212,7 +218,7 @@ uv run --extra agent pytest -m llm
 真实 DeepSeek 修复测试默认跳过，需单独启用（会产生 API 费用）：
 
 ```bash
-RUN_LIVE_REPAIR=1 uv run --extra agent pytest tests/test_live_repair.py -v
+RUN_LIVE_REPAIR=1 uv run --extra agent pytest tests/workflow/test_live_repair.py -v
 ```
 
 PowerShell 先执行 `$env:RUN_LIVE_REPAIR = "1"`，再运行上述 pytest 命令。
@@ -221,6 +227,38 @@ PowerShell 先执行 `$env:RUN_LIVE_REPAIR = "1"`，再运行上述 pytest 命�
 最终通过 Playwright 检查跨两页的 25 条书籍数据。候选规则、损坏规则和验证报告保存在 pytest 临时目录中。
 
 ## 项目结构与当前范围
+
+源码按职责分组，包根目录只保留公共入口 `__init__.py`：
+
+```text
+src/autoscraper/
+├── agent/          # 浏览器探索、工具、模型适配和需求澄清
+│   ├── explorer.py
+│   ├── tools.py
+│   ├── dom.py
+│   ├── waiting.py
+│   ├── llm.py
+│   ├── responses.py
+│   └── clarification.py
+├── scraping/       # 抓取协议、确定性执行和数据导出
+│   ├── spec.py
+│   ├── executor.py
+│   └── export.py
+├── workflow/       # 任务编排与独立验证
+│   ├── runner.py
+│   ├── requirements.py
+│   ├── outcome.py
+│   └── validation.py
+├── cli/            # 两个命令行入口
+│   ├── scraper.py
+│   └── agent.py
+└── observability/  # 执行追踪与日志
+    └── tracing.py
+```
+
+测试分别放在 `tests/agent/`、`tests/scraping/`、`tests/workflow/` 和
+`tests/observability/`，运行 `pytest` 仍会统一发现全部测试。
+CLI 命令名称保持为 `autoscraper` 和 `autoscraper-agent`。
 
 ```text
 自然语言需求 → 独立需求约束 → Agent 生成规则 → 验证 / 反馈修复 → Executor → CSV / JSON

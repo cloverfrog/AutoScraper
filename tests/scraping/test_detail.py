@@ -1,3 +1,5 @@
+# 单层详情抓取测试：用本地页面覆盖列表与详情合并、失败、去重、跳转和独立访问预算。
+# 同时检查 v1/v2 协议约束和两个 CLI 的详情字段导出；真实网站测试需显式开启。
 """Offline v2 listing/detail integration tests using real Chromium and fixed routes."""
 
 import csv
@@ -8,14 +10,16 @@ import pytest
 from playwright.sync_api import sync_playwright
 from pydantic import ValidationError
 
-from autoscraper.executor import ScrapeError, ScraperExecutor
-from autoscraper.spec import ScraperSpec
-from autoscraper.validation import TaskRequirements, validate_data, validate_spec
+from autoscraper.scraping.executor import ScrapeError, ScraperExecutor
+from autoscraper.scraping.spec import ScraperSpec
+from autoscraper.workflow.validation import validate_data, validate_spec
+from autoscraper.workflow.requirements import TaskRequirements
 
 
 BASE = "https://fixture.test/catalogue/"
 
 
+# 构造带列表字段和详情描述字段的 v2 规则，允许各用例覆盖参数。
 def detail_spec(**updates):
     data = {
         "version": "2",
@@ -50,6 +54,7 @@ def detail_spec(**updates):
     return ScraperSpec.model_validate(data)
 
 
+# 生成一条带详情链接的列表 HTML，用作本地网页夹具。
 def card(number, href=None):
     href = href if href is not None else f"book-{number}/index.html"
     return (
@@ -58,10 +63,12 @@ def card(number, href=None):
     )
 
 
+# 生成详情文档的字段内容，供重定向、缺失和重复场景复用。
 def description(number):
     return f'<div id="product_description"></div><p> Description   {number} </p>'
 
 
+# 提供本地浏览器与页面路由，模拟多页列表和详情响应。
 @pytest.fixture
 def site():
     with sync_playwright() as p:
@@ -87,6 +94,7 @@ def site():
         browser.close()
 
 
+# 验证跨列表页抓取并合并 25 条完整详情记录。
 def test_25_books_across_listing_pages(site):
     page, routes, requests = site
     routes[BASE + "page-1.html"] = "".join(card(i) for i in range(1, 21)) + (
@@ -116,6 +124,7 @@ def test_25_books_across_listing_pages(site):
     assert validate_data(result, requirements) == []
 
 
+# 检查单条详情失败在 skip 和 fail 策略下的不同处理。
 @pytest.mark.parametrize("mode", ["fail", "skip"])
 @pytest.mark.parametrize(
     "failure",
@@ -173,6 +182,7 @@ def test_detail_item_errors(site, mode, failure):
     assert page.context.pages == [page]
 
 
+# 非法 CSS 属于规则错误，不能被单条跳过策略掩盖。
 @pytest.mark.parametrize("selector", ["[invalid", "p >> text=x"])
 def test_invalid_detail_css_fails_even_with_skip(site, selector):
     page, routes, _ = site
@@ -184,10 +194,11 @@ def test_invalid_detail_css_fails_even_with_skip(site, selector):
     assert page.context.pages == [page]
 
 
+# 详情相对链接应使用重定向后地址，可选字段缺失允许为空。
 def test_redirect_base_and_optional_field(site):
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
     from threading import Thread
-    from autoscraper.spec import FieldSpec
+    from autoscraper.scraping.spec import FieldSpec
 
     page, _, _ = site
     page.context.unroute("**/*")
@@ -234,6 +245,7 @@ def test_redirect_base_and_optional_field(site):
         thread.join(timeout=2)
 
 
+# 详情导航失败也必须消耗详情访问预算。
 @pytest.mark.parametrize("failed_first", [False, True])
 def test_attempt_budget_includes_failed_navigation(site, failed_first):
     page, routes, requests = site
@@ -253,6 +265,7 @@ def test_attempt_budget_includes_failed_navigation(site, failed_first):
     assert issues[0].recoverable is False
 
 
+# 根据去重键是否含详情字段，验证提前去重与合并后去重。
 @pytest.mark.parametrize("keys,expected_visits", [(["url"], 1), (["description"], 2), ([], 2)])
 def test_dedupe_before_or_after_detail(site, keys, expected_visits):
     page, routes, _ = site
@@ -264,6 +277,7 @@ def test_dedupe_before_or_after_detail(site, keys, expected_visits):
     assert result.detail_pages_visited == expected_visits
 
 
+# 检查详情版本、字段重名和去重字段等跨字段协议约束。
 @pytest.mark.parametrize(
     "change",
     [
@@ -284,10 +298,11 @@ def test_protocol_constraints(change):
         detail_spec(**change)
 
 
+# 独立执行器和 Agent CLI 导出都应包含合并后的详情字段。
 def test_both_cli_exports_include_detail_fields(monkeypatch, tmp_path, capsys):
-    from autoscraper import cli, agent_cli
-    from autoscraper.executor import ScrapeResult
-    from autoscraper.workflow import TaskOutcome
+    from autoscraper.cli import scraper as cli, agent as agent_cli
+    from autoscraper.scraping.executor import ScrapeResult
+    from autoscraper.workflow.outcome import TaskOutcome
 
     spec = detail_spec(max_items=1)
     record = {"title": "A", "price": "£1", "url": "https://fixture.test/a", "description": "正文"}
@@ -324,14 +339,20 @@ def test_both_cli_exports_include_detail_fields(monkeypatch, tmp_path, capsys):
         assert list(csv.DictReader(f)) == [record]
 
 
+# 执行器创建的列表页与详情页应共享同一浏览器上下文。
 def test_executor_run_creates_shared_context(monkeypatch):
     from playwright.sync_api import Browser, BrowserType
 
     launch = BrowserType.launch
     new_context = Browser.new_context
 
-    def headless_launch(self, **kwargs):
-        return launch(self, **{**kwargs, "headless": True})
+    with sync_playwright() as playwright:
+        executable_path = playwright.chromium.executable_path
+    launches = []
+
+    def configured_launch(self, **kwargs):
+        launches.append(kwargs)
+        return launch(self, **kwargs)
 
     def routed_context(self, **kwargs):
         context = new_context(self, **kwargs)
@@ -344,13 +365,15 @@ def test_executor_run_creates_shared_context(monkeypatch):
         )
         return context
 
-    monkeypatch.setattr(BrowserType, "launch", headless_launch)
+    monkeypatch.setattr(BrowserType, "launch", configured_launch)
     monkeypatch.setattr(Browser, "new_context", routed_context)
-    result = ScraperExecutor().run(detail_spec(max_items=1))
+    result = ScraperExecutor(executable_path=executable_path).run(detail_spec(max_items=1))
+    assert launches == [{"headless": True, "executable_path": executable_path}]
     assert result.records[0]["description"] == "Description 1"
     assert result.detail_pages_visited == 1
 
 
+# 可选联网测试：在真实 Books to Scrape 上抓取 25 条详情记录。
 @pytest.mark.live
 @pytest.mark.skipif(os.getenv("RUN_LIVE") != "1", reason="Set RUN_LIVE=1 to access Books to Scrape")
 def test_live_books_25_details():
@@ -374,6 +397,7 @@ def test_live_books_25_details():
     )
 
 
+# 拒绝非 HTTP(S) 或格式损坏的详情链接。
 @pytest.mark.parametrize(
     "value",
     [
@@ -386,12 +410,13 @@ def test_live_books_25_details():
     ],
 )
 def test_detail_url_rejects_non_http_and_malformed_values(value):
-    from autoscraper.executor import ItemError, http_url
+    from autoscraper.scraping.executor import ItemError, http_url
 
     with pytest.raises(ItemError):
         http_url(BASE, value)
 
 
+# 检查相对链接、绝对链接等详情 URL 的补全规则。
 @pytest.mark.parametrize(
     "value,expected",
     [
@@ -402,15 +427,16 @@ def test_detail_url_rejects_non_http_and_malformed_values(value):
     ],
 )
 def test_detail_url_resolution(value, expected):
-    from autoscraper.executor import http_url
+    from autoscraper.scraping.executor import http_url
 
     assert http_url(BASE + "page.html", value) == expected
 
 
+# 独立执行器达到详情上限时仍可导出部分数据，并以退出码 2 标记。
 def test_detail_limit_cli_reports_partial_result(monkeypatch, tmp_path, capsys):
-    from autoscraper import cli
-    from autoscraper.executor import ScrapeResult
-    from autoscraper.workflow import TaskOutcome
+    from autoscraper.cli import scraper as cli
+    from autoscraper.scraping.executor import ScrapeResult
+    from autoscraper.workflow.outcome import TaskOutcome
 
     spec = detail_spec()
     result = ScrapeResult(stop_reason="detail_limit", detail_pages_visited=25)

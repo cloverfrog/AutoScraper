@@ -10,7 +10,7 @@
 
 ```bash
 uv sync --extra agent --locked
-uv run --extra agent pytest tests/test_browser_use_tracing_probe.py -q
+uv run --extra agent pytest tests/observability/test_browser_use_tracing_probe.py -q
 ```
 
 验证结果：10 项通过。测试中的记录器仅保存合成输入，不具备生产所需的脱敏、
@@ -52,14 +52,14 @@ uv run --extra agent pytest tests/test_browser_use_tracing_probe.py -q
 脱敏和大小限制策略。不要直接调用原始 History 导出方法后假设文件已安全。
 
 组件测试通过真实 `add_new_task()` 后再次执行 `_execute_step()` 验证计数延续。
-另外，在现有 `tests/test_clarification.py::test_real_agent_continues_with_browser_and_history`
+另外，在现有 `tests/agent/test_clarification.py::test_real_agent_continues_with_browser_and_history`
 中补充步骤回调断言：使用本机 HTTP 页面、真实 Chromium 和脚本化 LLM 响应，经过导航、
 页面检查、澄清、回答和恢复完成，实际调用两次 `Agent.run()`。确认两次 task ID 相同，
 第二次从第 4 步继续，保留前 3 条 History，4 个步骤均按 start / plan / end 顺序触发。
 回答由测试处理器提供，不是真实人工输入。
 
 ```bash
-uv run --extra agent pytest tests/test_browser_use_tracing_probe.py tests/test_clarification.py -q
+uv run --extra agent pytest tests/observability/test_browser_use_tracing_probe.py tests/agent/test_clarification.py -q
 ```
 
 上述组合回归需安装 Chromium，并允许本机回环 HTTP 服务及浏览器进程；LLM 不联网。
