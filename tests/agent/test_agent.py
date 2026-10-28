@@ -327,7 +327,8 @@ def test_browser_use_supplies_schema_without_manual_duplicate():
 def test_exploration_prompt_preserves_task_context(monkeypatch, rule, repair):
     bu = pytest.importorskip("browser_use")
     from autoscraper.scraping.spec import ScraperSpec
-    from autoscraper.workflow.validation import Feedback, TaskRequirements
+    from autoscraper.workflow.validation import Feedback
+    from autoscraper.workflow.requirements import TaskRequirements
 
     captured = {}
 
@@ -552,7 +553,7 @@ def test_custom_endpoint_uses_responses_adapter():
 def test_cli_save_and_execute(monkeypatch, rule, tmp_path):
     import autoscraper.cli.agent as cli
     from autoscraper.scraping.executor import ScrapeResult
-    from autoscraper.workflow.validation import TaskRequirements
+    from autoscraper.workflow.requirements import TaskRequirements
     from autoscraper.workflow.outcome import TaskOutcome
 
     monkeypatch.setenv("AUTOSCRAPER_API_KEY", "fake")

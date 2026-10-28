@@ -1,11 +1,31 @@
-# 独立需求解析：先保留文本和参数中明确的字段/数量，再由模型补充缺失部分。
+# 用户需求定义与独立解析：先保留明确的字段/数量，再由模型补充缺失部分。
 # 这里只解析用户意图，不读取生成的抓取规则；模型由工作流传入，调用预算不在此重置。
-"""Extract task requirements independently of generated scraping rules."""
+"""Define and extract task requirements independently of generated scraping rules."""
 
 import json
 import re
+from typing import Literal
 
-from .validation import TaskRequirements
+from pydantic import Field, field_validator
+
+from autoscraper.scraping.spec import NonEmpty, ProtocolModel
+
+
+# 独立于生成规则的用户约束：必需字段、目标数量和明确要求的不支持能力。
+class TaskRequirements(ProtocolModel):
+    fields: list[NonEmpty] = Field(min_length=1, max_length=50)
+    count: int | None = Field(default=None, ge=1, le=1_000_000)
+    unsupported_capabilities: list[Literal["javascript_pagination", "infinite_scroll", "login"]] = (
+        Field(default_factory=list)
+    )
+
+    # 拒绝空白或重复字段名，保证后续逐字段校验有确定含义。
+    @field_validator("fields")
+    @classmethod
+    def unique_fields(cls, values):
+        if any(not value.strip() for value in values) or len(set(values)) != len(values):
+            raise ValueError("Requested field names must be nonblank and unique")
+        return values
 
 
 # 从有限的中英文表达中保留明确字段名与数量；显式参数优先于文本推断。

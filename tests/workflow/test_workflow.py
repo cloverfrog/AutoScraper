@@ -11,12 +11,15 @@ from autoscraper.scraping.executor import ScrapeResult, ScraperExecutor
 from autoscraper.scraping.spec import ScraperSpec
 from autoscraper.workflow.validation import (
     UnsupportedResult,
-    TaskRequirements,
     ValidationSettings,
     validate_data,
     validate_spec,
 )
-from autoscraper.workflow.requirements import explicit_requirements, extract_requirements
+from autoscraper.workflow.requirements import (
+    TaskRequirements,
+    explicit_requirements,
+    extract_requirements,
+)
 from autoscraper.workflow.runner import run_task
 
 

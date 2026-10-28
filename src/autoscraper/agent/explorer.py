@@ -14,7 +14,8 @@ from pydantic import BaseModel, Field, HttpUrl, SecretStr
 
 from .clarification import ClarificationSession
 from autoscraper.scraping.spec import ScraperSpec
-from autoscraper.workflow.validation import Feedback, TaskRequirements, UnsupportedResult
+from autoscraper.workflow.validation import Feedback, UnsupportedResult
+from autoscraper.workflow.requirements import TaskRequirements
 
 
 # 探索层统一异常，表示 Agent 无法在能力或预算范围内生成候选规则。

@@ -21,6 +21,7 @@ if component == 'outcome':
 else:
     module.explicit_requirements('first 2 records, fields named title', None, None)
     assert 'playwright.sync_api' not in sys.modules
+    assert 'autoscraper.workflow.validation' not in sys.modules
 assert 'autoscraper.workflow.runner' not in sys.modules
 assert 'autoscraper.agent.explorer' not in sys.modules
 assert 'autoscraper.agent.llm' not in sys.modules

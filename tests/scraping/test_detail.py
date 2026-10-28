@@ -12,7 +12,8 @@ from pydantic import ValidationError
 
 from autoscraper.scraping.executor import ScrapeError, ScraperExecutor
 from autoscraper.scraping.spec import ScraperSpec
-from autoscraper.workflow.validation import TaskRequirements, validate_data, validate_spec
+from autoscraper.workflow.validation import validate_data, validate_spec
+from autoscraper.workflow.requirements import TaskRequirements
 
 
 BASE = "https://fixture.test/catalogue/"

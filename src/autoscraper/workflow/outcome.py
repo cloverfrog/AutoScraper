@@ -7,7 +7,8 @@ from typing import Literal
 
 from autoscraper.scraping.executor import ScrapeResult
 from autoscraper.scraping.spec import ScraperSpec
-from .validation import Feedback, TaskRequirements
+from .validation import Feedback
+from .requirements import TaskRequirements
 
 
 # 业务任务状态：供编辑器和静态类型检查使用，序列化时仍是原来的字符串。

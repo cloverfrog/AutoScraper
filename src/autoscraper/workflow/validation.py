@@ -7,29 +7,13 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Literal
 
-from pydantic import Field, field_validator
+from pydantic import Field
 
 from autoscraper.scraping.spec import NonEmpty, ProtocolModel, ScraperSpec
+from .requirements import TaskRequirements
 
 if TYPE_CHECKING:
     from autoscraper.scraping.executor import ScrapeResult
-
-
-# 独立于生成规则的用户约束：必需字段、目标数量和明确要求的不支持能力。
-class TaskRequirements(ProtocolModel):
-    fields: list[NonEmpty] = Field(min_length=1, max_length=50)
-    count: int | None = Field(default=None, ge=1, le=1_000_000)
-    unsupported_capabilities: list[Literal["javascript_pagination", "infinite_scroll", "login"]] = (
-        Field(default_factory=list)
-    )
-
-    # 拒绝空白或重复字段名，保证后续逐字段校验有确定含义。
-    @field_validator("fields")
-    @classmethod
-    def unique_fields(cls, values):
-        if any(not value.strip() for value in values) or len(set(values)) != len(values):
-            raise ValueError("Requested field names must be nonblank and unique")
-        return values
 
 
 # 提供给调用方和下一轮 Agent 的结构化反馈；recoverable 表示是否值得修复规则。

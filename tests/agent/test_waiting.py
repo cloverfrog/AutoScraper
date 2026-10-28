@@ -20,7 +20,8 @@ from autoscraper.scraping.executor import (
     navigate,
 )
 from autoscraper.scraping.spec import ScraperSpec
-from autoscraper.workflow.validation import TaskRequirements, validate_data
+from autoscraper.workflow.validation import validate_data
+from autoscraper.workflow.requirements import TaskRequirements
 
 
 # 可脚本化的语义模型替身，记录调用次数并模拟任务级调用上限。

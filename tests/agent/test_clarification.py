@@ -19,7 +19,7 @@ from autoscraper.agent.clarification import (
     ClarificationRequired,
     ClarificationSession,
 )
-from autoscraper.workflow.validation import TaskRequirements
+from autoscraper.workflow.requirements import TaskRequirements
 
 
 URL = "https://fixture.test/scroll"
