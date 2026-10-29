@@ -50,7 +50,9 @@ def provider(monkeypatch):
     return create
 
 
-@pytest.mark.parametrize("invalid", ['{"count":', '{"count":"bad"}', "", None])
+@pytest.mark.parametrize(
+    "invalid", ['{"count":', '{"count":"bad"}', '{"count":25}\n{"count":25}', "", None]
+)
 @pytest.mark.parametrize("source", ["main", "requirements", "wait"])
 def test_regeneration_logs_failure_and_counts_each_request(provider, tmp_path, invalid, source):
     provider.side_effect = [response(invalid), response()]
