@@ -2,6 +2,8 @@
 # 复用基础抓取测试的浏览器与路由夹具，以真实页面行为验证等待逻辑。
 """Offline browser regressions for append, replacement and scroll termination."""
 
+from html import escape
+
 import pytest
 from pydantic import ValidationError
 
@@ -151,7 +153,7 @@ def test_duplicate_batches_advance_but_are_deduplicated(page):
     result = run(page, body, dict(type="click", next_selector="button"))
     assert result.pages_visited == 2
     assert len(result.records) == 1
-    assert result.duplicates == 2
+    assert result.duplicates == 1
 
 
 # 拒绝旧格式、未知类型、跨类型字段和无效阈值，防止静默忽略规则。
@@ -385,5 +387,150 @@ def test_pending_duplicate_batch_preserves_dedupe(listing_page, monkeypatch):
     assert [r["title"] for r in result.records] == ["A"]
     assert result.pages_visited == 2
     assert result.detail_pages_visited == 1
-    assert result.duplicates == 2
+    assert result.duplicates == 1
     assert result.stop_reason == "end_marker"
+
+
+# 两条不同记录的预算恰好为二，空去重键和详情字段去重都不能重复访问旧前缀。
+# 替换和链接分页也使用相同夹具，确保新增游标不会跳过下一页的第一个记录。
+@pytest.mark.parametrize("kind", ["append", "scroll", "replace", "link"])
+@pytest.mark.parametrize("keys", [[], ["description"]])
+def test_dynamic_detail_budget_covers_distinct_records(listing_page, kind, keys):
+    first = '<article style="height:900px"><span>A</span><a href="/a">Detail</a></article>'
+    second = '<article><span>B</span><a href="/b">Detail</a></article>'
+    update = (
+        (
+            "document.querySelector('main').innerHTML = "
+            if kind == "replace"
+            else "document.querySelector('main').innerHTML += "
+        )
+        + repr(second)
+        + ";document.querySelector('#end').hidden=false"
+    )
+    body = "<!doctype html><main>" + first + '</main><i id="end" hidden>End</i>'
+    if kind == "link":
+        body += '<a id="next" href="/2">Next</a>'
+        pagination = dict(type="link", next_selector="#next")
+    elif kind == "scroll":
+        body += (
+            "<script>window.addEventListener('scroll', () => {"
+            + update
+            + "}, {once:true})</script>"
+        )
+        pagination = dict(type="scroll", end_selector="#end")
+    else:
+        body += '<button id="next" onclick="' + escape(update, quote=True) + '">Next</button>'
+        pagination = dict(type="click", mode=kind, next_selector="#next", end_selector="#end")
+    pages = {
+        "https://fixture.test/1": body,
+        "https://fixture.test/2": second,
+        "https://fixture.test/a": "<p>Description A</p>",
+        "https://fixture.test/b": "<p>Description B</p>",
+    }
+    requests = []
+
+    # 记录实际网络访问，避免只检查结果去重而漏掉重复详情请求。
+    def serve(route):
+        requests.append(route.request.url)
+        route.fulfill(content_type="text/html; charset=utf-8", body=pages[route.request.url])
+
+    listing_page.context.route("**/*", serve)
+    spec = rule(
+        pagination,
+        version="2",
+        dedupe_by=keys,
+        max_items=2,
+        timeout_ms=1000,
+        content_timeout_ms=1000,
+        detail={"url_selector": "a", "fields": {"description": {"selector": "p"}}, "max_pages": 2},
+    )
+    result = ScraperExecutor().run_page(spec, listing_page)
+    assert [record["title"] for record in result.records] == ["A", "B"]
+    assert result.detail_pages_visited == result.pages_visited == 2
+    assert result.stop_reason == "max_items" and not result.errors
+    assert requests.count("https://fixture.test/a") == requests.count("https://fixture.test/b") == 1
+    assert result.duplicates == 0
+
+
+# 详情提取期间自动到达的数据仍只处理新后缀，结束标志和按钮状态不能提前终止。
+@pytest.mark.parametrize("terminal", ["marker", "disabled", "missing"])
+def test_pending_append_with_default_dedupe_uses_each_detail_once(
+    listing_page, monkeypatch, terminal
+):
+    result = pending_batch_during_detail(
+        listing_page,
+        monkeypatch,
+        terminal,
+        dedupe_by=[],
+        detail={"url_selector": "a", "fields": {"description": {"selector": "p"}}, "max_pages": 2},
+    )
+    assert [record["title"] for record in result.records] == ["A", "B"]
+    assert result.detail_pages_visited == 2 and result.duplicates == 0
+    assert result.stop_reason == ("end_marker" if terminal == "marker" else "no_next")
+
+
+# 新追加节点中的重复数据仍参与正常去重；旧节点则不会被重新计入重复数或详情预算。
+def test_new_appended_duplicate_still_uses_full_record_dedupe(listing_page):
+    appended = '<article><span>A</span><a href="/a">Detail</a></article><article><span>B</span><a href="/b">Detail</a></article>'
+    update = (
+        "document.querySelector('main').insertAdjacentHTML('beforeend', "
+        + repr(appended)
+        + ");this.remove()"
+    )
+    body = '<main><article><span>A</span><a href="/a">Detail</a></article></main>'
+    body += '<button onclick="' + escape(update, quote=True) + '">More</button>'
+    route_pages(
+        listing_page.context,
+        {
+            "https://fixture.test/1": body,
+            "https://fixture.test/a": "<p>A</p>",
+            "https://fixture.test/b": "<p>B</p>",
+        },
+    )
+    result = ScraperExecutor().run_page(
+        rule(
+            dict(type="click", next_selector="button"),
+            version="2",
+            max_items=2,
+            detail={
+                "url_selector": "a",
+                "fields": {"description": {"selector": "p"}},
+                "max_pages": 3,
+            },
+        ),
+        listing_page,
+    )
+    assert [record["title"] for record in result.records] == ["A", "B"]
+    assert result.detail_pages_visited == 3 and result.duplicates == 1
+    assert result.stop_reason == "max_items"
+
+
+# 已按 skip 处理的旧节点不应在下一批重复失败；失败访问仍正常扣一次详情预算。
+def test_skipped_append_prefix_is_not_retried(listing_page):
+    body = """<main><article><span>A</span><a href="/a">Detail</a></article></main>
+    <button onclick="document.querySelector('main').insertAdjacentHTML('beforeend',
+    '<article><span>B</span><a href=/b>Detail</a></article>');this.remove()">More</button>"""
+    route_pages(
+        listing_page.context,
+        {
+            "https://fixture.test/1": body,
+            "https://fixture.test/a": "<p></p>",
+            "https://fixture.test/b": "<p>Description B</p>",
+        },
+    )
+    result = ScraperExecutor().run_page(
+        rule(
+            dict(type="click", next_selector="button"),
+            version="2",
+            on_item_error="skip",
+            detail={
+                "url_selector": "a",
+                "fields": {"description": {"selector": "p"}},
+                "max_pages": 2,
+            },
+        ),
+        listing_page,
+    )
+    assert [record["title"] for record in result.records] == ["B"]
+    assert result.detail_pages_visited == 2 and len(result.errors) == 1
+    assert result.stop_reason == "no_next"

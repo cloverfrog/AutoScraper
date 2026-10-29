@@ -317,6 +317,9 @@ class ScraperExecutor:
                     options = state_options(spec)
                 except ValueError as exc:
                     raise ScrapeError(str(exc)) from exc
+            # 追加和滚动保留旧节点，记录已经处理的前缀；替换和链接分页每批仍从头提取。
+            append_only = options is not None and getattr(spec.pagination, "mode", "append") == "append"
+            processed_count = 0
             if spec.detail:
                 # 详情使用同一 BrowserContext 的独立 Page，保留会话且不打断列表页面。
                 detail_page = page.context.new_page()
@@ -342,7 +345,8 @@ class ScraperExecutor:
                 # 范围与比较基线来自同一份提取前快照，不能将提取期间到达的数据算作已处理。
                 batch_state = page.evaluate(STATE_SCRIPT, options) if options else None
                 batch_count = batch_state["count"] if batch_state is not None else items.count()
-                for index in range(batch_count):
+                start_index = processed_count if append_only else 0
+                for index in range(start_index, batch_count):
                     detail_url = None
                     try:
                         item = items.nth(index)
@@ -399,6 +403,10 @@ class ScraperExecutor:
                     if len(result.records) >= spec.max_items:
                         result.stop_reason = "max_items"
                         return result
+                if append_only:
+                    # 去重或按策略跳过的节点也已处理，不应在下一批隐式重试或再扣详情预算。
+                    # 只推进到提取前的数量，提取期间自动到达的新节点留给下一批核对。
+                    processed_count = batch_count
                 if spec.pagination is None:
                     result.stop_reason = "no_pagination"
                     break
