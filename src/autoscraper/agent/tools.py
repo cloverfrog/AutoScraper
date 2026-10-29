@@ -52,6 +52,7 @@ class TracedTools(Tools):
         name, inputs = next(iter(params.items()))
         if checks and name == "done" and inputs.get("success") is not False and inputs.get("data"):
             candidate = ScraperSpec.model_validate(inputs["data"])
+            listing = await self._refresh_listing(candidate, kwargs.get("browser_session"))
             control = await self._refresh_control(candidate, kwargs.get("browser_session"))
             refreshed = await self._refresh_progress(candidate, kwargs.get("browser_session"))
             issues = checks.check(candidate)
@@ -60,6 +61,7 @@ class TracedTools(Tools):
                 feedback=[issue.model_dump() for issue in issues],
                 progression=refreshed,
                 control=control,
+                listing=listing,
             )
             checks.last_issues = issues
             if issues:
@@ -76,7 +78,7 @@ class TracedTools(Tools):
         if checks and name in {"navigate", "click", "scroll", "explore_scroll"}:
             url = await kwargs["browser_session"].get_current_page_url()
             if name in {"click", "scroll"}:
-                checks.begin_action(name, url)
+                await self._begin_action(name, url, kwargs["browser_session"])
         result = await super().act(action, **kwargs)
         if checks and not result.error:
             if name == "navigate":
@@ -108,6 +110,54 @@ class TracedTools(Tools):
             checks.pending = None
         return result
 
+    # 对当前页面上已经认识的记录根重新计数，再冻结动作基线，避免旧测试数量过期。
+    # 只读取固定脚本，不增加模型调用，也不寻找新的选择器。
+    async def _begin_action(self, kind, url, browser_session):
+        page = await browser_session.must_get_current_page()
+        selectors = [item for test_url, item in self.submission.counts if test_url == page_key(url)]
+        for selector in selectors:
+            result = json.loads(await page.evaluate(SELECTOR_SCRIPT, selector, "", ""))
+            self.submission.remember_count(url, selector, result.get("count"))
+        self.submission.begin_action(kind, url)
+        emit(
+            "pagination.baseline",
+            type=kind,
+            url=url,
+            counts={
+                selector: self.submission.counts[(page_key(url), selector)]
+                for selector in selectors
+            },
+        )
+
+    # 提交时自动检查最终列表规则，允许模型漏掉改后重测，但不替模型修正规则。
+    # 仅使用当前列表页；详情字段仍要求在观察过的详情页上有独立测试证据。
+    async def _refresh_listing(self, candidate, browser_session):
+        if not browser_session:
+            return None
+        if page_key(await browser_session.get_current_page_url()) != self.submission.actual_url(
+            candidate.start_url
+        ):
+            return {"skipped": "not_on_listing_page"}
+        page = await browser_session.must_get_current_page()
+        data = json.loads(
+            await page.evaluate(
+                BATCH_SELECTOR_SCRIPT,
+                candidate.item_selector,
+                {name: field.model_dump() for name, field in candidate.fields.items()},
+            )
+        )
+        for result in data["results"].values():
+            self.submission.remember(result, result["field_selector"], result["attribute"])
+        if candidate.detail:
+            link = json.loads(
+                await page.evaluate(
+                    SELECTOR_SCRIPT, candidate.item_selector, candidate.detail.url_selector, "href"
+                )
+            )
+            self.submission.remember(link, candidate.detail.url_selector, "href")
+            data["detail_link"] = link
+        return data
+
     # 分页控件只需精确 CSS 计数，提交时自动完成这类确定性检查，节省模型调用。
     # 只在当前列表页取证；无匹配或多匹配仍拒绝，不替模型寻找或修正选择器。
     async def _refresh_control(self, candidate, browser_session):
@@ -128,51 +178,35 @@ class TracedTools(Tools):
         self.submission.remember(result, "", attribute)
         return result
 
-    # 模型可能漏掉计划中的等待。只对动作前已通过的同一列表规则自动复核，
-    # 不替模型猜选择器或改数据来源；未推进时使用有界数量等待，仍不调用 LLM。
+    # 提交时字段复核已登记最新数量；追加模式只需对比独立的动作前数量，必要时有界等待。
+    # 替换模式的推进只由同一字段的前后内容比较登记，不能借数量变化或新字段代替。
     async def _refresh_progress(self, candidate, browser_session):
         checks = self.submission
         pagination = candidate.pagination
         if not browser_session or not checks.pending or not pagination:
             return None
-        kind, url, previous = checks.pending
+        kind, url, _, previous_counts = checks.pending
         if kind != pagination.type or url != checks.actual_url(candidate.start_url):
             return None
         mode = getattr(pagination, "mode", "append")
         if (url, candidate.item_selector, kind, mode) in checks.advances:
-            return None
+            return {
+                "source": "previously_observed_progress",
+                "mode": mode,
+                "count": checks.counts.get((url, candidate.item_selector)),
+            }
         if page_key(await browser_session.get_current_page_url()) != url:
             return None
-        # 只有动作前的精确字段证据全部有效，才允许自动刷新；改过的选择器必须先测试。
-        prior = [
-            previous.get((url, candidate.item_selector, field.selector, field.attribute or ""))
-            for field in candidate.fields.values()
-        ]
-        if not all(
-            checks.passed(result, field.required)
-            for result, field in zip(prior, candidate.fields.values())
-        ):
-            return {"skipped": "listing_fields_not_verified_before_action"}
-        page = await browser_session.must_get_current_page()
-        data = json.loads(
-            await page.evaluate(
-                BATCH_SELECTOR_SCRIPT,
-                candidate.item_selector,
-                {name: field.model_dump() for name, field in candidate.fields.items()},
-            )
-        )
-        for result in data["results"].values():
-            checks.remember(result, result["field_selector"], result["attribute"])
-        count = next(iter(data["results"].values()))["count"]
-        if mode == "append" and (url, candidate.item_selector, kind, mode) not in checks.advances:
+        before = previous_counts.get((url, candidate.item_selector))
+        if mode == "append" and before is not None:
             waited = await self.content_waiter.selector(
                 browser_session,
                 candidate.item_selector,
-                min_count=max(r["count"] for r in prior) + 1,
+                min_count=before + 1,
             )
             checks.remember_wait(waited)
             return waited
-        return {"url": url, "count": count, "source": "deterministic_field_recheck"}
+        return {"skipped": "no_matching_action_baseline"}
 
 
 # 创建探索工具集合：保留导航和分页动作，再注册 DOM 检查、有界等待与澄清工具。

@@ -79,15 +79,14 @@ def remember(page, checks, item="article", field="p", attribute=""):
 
 
 def candidate(**updates):
-    return ScraperSpec.model_validate(
-        dict(
-            start_url="https://fixture.test/",
-            item_selector="article",
-            fields={"description": {"selector": "p"}},
-            max_items=2,
-            **updates,
-        )
+    data = dict(
+        start_url="https://fixture.test/",
+        item_selector="article",
+        fields={"description": {"selector": "p"}},
+        max_items=2,
     )
+    data.update(updates)
+    return ScraperSpec.model_validate(data)
 
 
 # 用户字段可以直接放在详情中；详情测试必须来自观察过的详情链接，而非列表页。
@@ -218,15 +217,23 @@ def test_invalid_css_after_click_is_recorded_as_failed_evidence(page):
 
 # 真实动作分发链：模型只点击后就 done 时，程序自动复核已知数量，不采信模型记忆。
 @pytest.mark.parametrize(
-    "delay, control, accepted",
+    "delay, control, tested, final, on_detail, accepted",
     [
-        (0, "button.more", True),
-        (1200, "button.more", True),
-        (0, "button.missing", False),
-        (0, "button", False),
+        (0, "button.more", "p", "p", False, True),
+        (1200, "button.more", "p", "p", False, True),
+        (0, "button.missing", "p", "p", False, False),
+        (0, "button", "p", "p", False, False),
+        (0, "button.more", ".old", "p", False, True),
+        (0, "button.more", "p", ".missing", False, False),
+        (0, "button.more", "p", "p,b", False, False),
+        (0, "button.more", "p", "i.empty", False, False),
+        (0, "button.more", "p", "[", False, False),
+        (0, "button.more", ".old", "p", True, False),
     ],
 )
-def test_done_rechecks_pending_click_before_accepting(delay, control, accepted, monkeypatch):
+def test_done_rechecks_pending_click_before_accepting(
+    delay, control, tested, final, on_detail, accepted, monkeypatch
+):
     pytest.importorskip("browser_use")
     from browser_use import ActionResult
     from playwright.async_api import async_playwright
@@ -240,9 +247,9 @@ def test_done_rechecks_pending_click_before_accepting(delay, control, accepted, 
                 await page.route(
                     "**/*",
                     lambda route: route.fulfill(
-                        body=f"""<article><p>A</p></article><button>Close</button>
+                        body=f"""<article><p>A</p><b>Other</b><i class=empty></i></article><button>Close</button>
                     <button class="more" onclick="setTimeout(() => document.body.insertAdjacentHTML('beforeend',
-                    '<article><p>B</p></article>'), {delay})">More</button>"""
+                    '<article><p>B</p><b>Other</b><i class=empty></i></article>'), {delay})">More</button>"""
                     ),
                 )
                 await page.goto("https://fixture.test/")
@@ -295,17 +302,20 @@ def test_done_rechecks_pending_click_before_accepting(delay, control, accepted, 
                     {
                         "test_fields": {
                             "item_selector": "article",
-                            "fields": {"description": {"selector": "p"}},
+                            "fields": {"description": {"selector": tested}},
                         }
                     }
                 )
                 # 故意省略按钮测试和数量等待，覆盖模型漏调工具后的自动复核。
                 await act({"click": {"index": 1}})
+                if on_detail:
+                    await page.goto("https://fixture.test/detail")
                 result = await act(
                     {
                         "done": {
                             "data": candidate(
-                                pagination={"type": "click", "next_selector": control}
+                                fields={"description": {"selector": final}},
+                                pagination={"type": "click", "next_selector": control},
                             ).model_dump(mode="json")
                         }
                     }
@@ -314,11 +324,129 @@ def test_done_rechecks_pending_click_before_accepting(delay, control, accepted, 
                 if not accepted:
                     assert json.loads(result.extracted_content)["status"] == "candidate_rejected"
                 assert (
-                    "https://fixture.test/",
-                    "article",
-                    "click",
-                    "append",
-                ) in tools.submission.advances
+                    (
+                        "https://fixture.test/",
+                        "article",
+                        "click",
+                        "append",
+                    )
+                    in tools.submission.advances
+                ) == (not on_detail)
+            finally:
+                await browser.close()
+
+    asyncio.run(run())
+
+
+# 批量字段的数量能作为独立计数/等待的基线，不再要求字段参数完全相同。
+@pytest.mark.parametrize("kind", ["click", "scroll"])
+@pytest.mark.parametrize("source", ["selector", "fields", "wait"])
+def test_count_progress_does_not_depend_on_field_parameters(page, kind, source):
+    checks = SubmissionChecks()
+    page.set_content("<article><p>A</p></article>" * 6)
+    remember(page, checks)
+    checks.begin_action(kind, page.url)
+    page.set_content("<article><p>A</p></article>" * 12)
+    if source == "wait":
+        checks.remember_wait(
+            {"url": page.url, "selector": "article", "count": 12, "status": "ready"}
+        )
+    else:
+        remember(page, checks, field="" if source == "selector" else ":scope")
+    assert (page.url, "article", kind, "append") in checks.advances
+    assert checks.counts[(page.url, "article")] == 12
+
+
+# 不同页面和不同记录根不能混用数量；字段参数变化则不影响同一列表的数量比较。
+@pytest.mark.parametrize(
+    "other_url, other_selector",
+    [
+        ("https://fixture.test/other", "article"),
+        ("https://fixture.test/", "section"),
+    ],
+)
+def test_count_evidence_stays_on_its_page_and_item(page, other_url, other_selector):
+    checks = SubmissionChecks()
+    remember(page, checks)
+    checks.begin_action("click", page.url)
+    checks.remember_count(other_url, other_selector, 12)
+    assert not checks.advances
+
+
+# 最近一次数量覆盖旧数量，动作快照保持不变，不取不同字段测试中的历史最大值。
+def test_count_baseline_uses_latest_observation(page):
+    checks = SubmissionChecks()
+    page.set_content("<article><p>A</p></article>" * 12)
+    remember(page, checks)
+    page.set_content("<article><p>A</p></article>" * 6)
+    remember(page, checks, field="")
+    checks.begin_action("click", page.url)
+    checks.remember_count(page.url, "article", 12)
+    assert (page.url, "article", "click", "append") in checks.advances
+
+
+# 替换模式需要同一字段内容前后变化；单独数量和未经测过的新字段均不能证明替换。
+def test_replace_progress_requires_matching_field_values(page):
+    checks = SubmissionChecks()
+    remember(page, checks)
+    checks.begin_action("click", page.url)
+    checks.remember_count(page.url, "article", 12)
+    assert (page.url, "article", "click", "replace") not in checks.advances
+    page.set_content("<article><p>B</p><span>New</span></article>")
+    remember(page, checks, field="span")
+    assert (page.url, "article", "click", "replace") not in checks.advances
+    remember(page, checks)
+    assert (page.url, "article", "click", "replace") in checks.advances
+
+
+# 复核替换后的详情链接仍保留原先实际观察过的详情目标，详情测试不能来自任意 URL。
+def test_detail_evidence_survives_listing_link_recheck(page):
+    checks = SubmissionChecks()
+    spec = candidate(
+        version="2",
+        fields={"title": {"selector": "p"}},
+        detail={"url_selector": "a", "fields": {"description": {"selector": "p"}}},
+    )
+    remember(page, checks)
+    remember(page, checks, field="a", attribute="href")
+    page.goto("https://fixture.test/detail")
+    remember(page, checks, item="html")
+    page.goto("https://fixture.test/")
+    page.set_content('<article><p>B</p><a href="/other-detail">Detail</a></article>')
+    remember(page, checks)
+    remember(page, checks, field="a", attribute="href")
+    assert checks.check(spec) == []
+
+
+# 动作前 DOM 已自行增长时重新计数，不能把旧测试的数量误认成这次点击造成的增长。
+def test_action_baseline_refreshes_stale_counts():
+    pytest.importorskip("browser_use")
+    from playwright.async_api import async_playwright
+    from autoscraper.agent.tools import build_tools
+
+    async def run():
+        async with async_playwright() as p:
+            browser = await p.chromium.launch()
+            try:
+                page = await browser.new_page()
+                await page.set_content("<article><p>A</p></article>" * 2)
+                tools = build_tools(check_submission=True)
+                tools.submission.remember_count(page.url, "article", 1)
+
+                class Session:
+                    async def must_get_current_page(self):
+                        return self
+
+                    async def evaluate(self, script, *args):
+                        return json.dumps(
+                            await page.evaluate("(args) => (" + script + ")(...args)", list(args))
+                        )
+
+                await tools._begin_action("click", page.url, Session())
+                tools.submission.remember_count(page.url, "article", 2)
+                assert not tools.submission.advances
+                tools.submission.remember_count(page.url, "article", 3)
+                assert (page.url, "article", "click", "append") in tools.submission.advances
             finally:
                 await browser.close()
 

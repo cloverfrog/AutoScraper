@@ -53,7 +53,8 @@ LLM `source`。同一调用的 started / finished 事件使用相同 `call_id`�
 - `run.started/finished/failed`、`workflow.started/finished/result`。
 - `requirements.started/finished`、`attempt.started/finished`、`repair.started/finished`。
 - `step.started/planned/finished`、`tool.started/finished`、`llm.started/finished`。
-- `submission.checked`：提交前检查反馈、分页控件自动测试和记录推进复核结果。
+- `pagination.baseline`：点击/滚动前重新读取并固定的各记录选择器数量。
+- `submission.checked`：提交前检查反馈、最终列表字段/详情链接/分页控件自动测试和记录推进复核结果。
 - `spec.candidate`、`validation.started/finished/feedback`、`validation_extraction.started/finished`。
 - `clarification.started/answer/finished`、`execution.started/finished`。
 - `executor.started/finished/result`、`artifacts.started/finished`、`cli.result/failed`。

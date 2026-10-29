@@ -149,9 +149,12 @@ Protocol semantics:
   dedupe_by uses required stable identifier fields, otherwise [].
 
 Completion:
-Submit only exact selectors that passed on the correct listing/detail URL. done is checked
-against tool evidence and authoritative requirements; candidate_rejected keeps this session open
-so you can retest and correct it. For click/scroll pagination verify record progression first.
+Submit selectors derived from observed DOM, and inspect sample values for their meaning.
+On the listing page, done automatically tests the FINAL listing fields/detail href and pagination
+control without LLM calls; changed selectors need not consume a separate test step. Detail fields
+still need tests on an observed detail URL. done checks evidence and authoritative requirements;
+candidate_rejected keeps this session open so you can correct it. For click/scroll pagination
+verify record progression first. Record counts use URL + item selector, independently of fields.
 One successful progression is enough; do not click/scroll until the entire requested count is
 collected during exploration. The Executor performs bulk extraction.
 Inspect listing/detail evidence before declaring required fields unavailable. Submit the candidate

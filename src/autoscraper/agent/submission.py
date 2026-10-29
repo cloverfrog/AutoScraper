@@ -13,19 +13,33 @@ def page_key(url):
     return urldefrag(str(url)).url
 
 
-# 记录每个 URL/记录根/字段/属性的最近一次测试，以及动作前后的增长证据。
+# 字段测试与记录计数分别保存：计数不依赖字段参数，替换模式仍比较同一字段的值。
 class SubmissionChecks:
     def __init__(self, requirements=None):
         self.requirements = requirements
         self.tests = {}
+        self.counts = {}
+        self.links = {}
         self.aliases = {}
         self.pending = None
         self.advances = set()
         self.last_issues = []
 
-    # 动作开始前保存测试结果，后续测试只能与这份动作前证据比较。
+    # 动作前固定字段和数量快照；后续工具结果不能覆盖用于比较的基线。
     def begin_action(self, kind, url):
-        self.pending = (kind, page_key(url), dict(self.tests))
+        self.pending = (kind, page_key(url), dict(self.tests), dict(self.counts))
+
+    # 数量来自真实 DOM，可由字段测试、单独计数或数量等待提供，不要求字段参数一致。
+    def remember_count(self, url, item_selector, count):
+        if not url or not item_selector or not isinstance(count, int) or count < 0:
+            return
+        key = (page_key(url), item_selector)
+        self.counts[key] = count
+        if self.pending:
+            kind, action_url, _, previous = self.pending
+            before = previous.get(key)
+            if action_url == key[0] and before is not None and count > before:
+                self.advances.add((key[0], item_selector, kind, "append"))
 
     # 单字段与批量结果走同一条登记路径；失败覆盖旧成功，避免旧证据掩盖新失败。
     def remember(self, result, field_selector="", attribute=""):
@@ -33,26 +47,27 @@ class SubmissionChecks:
             return
         key = (page_key(result["url"]), result["item_selector"], field_selector, attribute or "")
         self.tests[key] = result
+        self.remember_count(result["url"], result["item_selector"], result.get("count"))
+        # 保留曾测试通过的详情目标，替换列表后复核新链接不会抹掉先前详情页的有效证据。
+        if attribute == "href" and self.passed(result):
+            self.links.setdefault(key, set()).update(
+                urljoin(result["url"], value)
+                for sample in result["samples"]
+                for value in sample["values"]
+                if value
+            )
         if self.pending:
-            kind, url, previous = self.pending
+            kind, url, previous, _ = self.pending
             old = previous.get(key)
-            if url == key[0] and old and (result.get("count") or 0) > 0:
-                if result["count"] > (old.get("count") or 0):
-                    self.advances.add((url, key[1], kind, "append"))
+            if url == key[0] and self.passed(old) and self.passed(result):
                 if result.get("samples") != old.get("samples"):
                     self.advances.add((url, key[1], kind, "replace"))
 
     # 数量等待可能开始时数据已增长，必须对比点击前测试数量，而非等待工具初始数量。
     def remember_wait(self, result):
-        if not self.pending or result.get("status") != "ready" or result.get("count") is None:
+        if result.get("status") not in {"ready", "timeout"}:
             return
-        kind, url, previous = self.pending
-        if page_key(result.get("url", "")) != url:
-            return
-        selector = result.get("selector")
-        counts = [r.get("count") or 0 for key, r in previous.items() if key[:2] == (url, selector)]
-        if counts and result["count"] > max(counts):
-            self.advances.add((url, selector, kind, "append"))
+        self.remember_count(result.get("url"), result.get("selector"), result.get("count"))
 
     # 导航实际 URL 与请求 URL 关联，支持正常重定向；不将任意详情页当作列表页证据。
     def actual_url(self, url):
@@ -103,12 +118,12 @@ class SubmissionChecks:
         for field in spec.fields.values():
             require(url, spec.item_selector, field.selector, field.attribute, field.required)
         if spec.detail:
-            links = require(url, spec.item_selector, spec.detail.url_selector, "href")
+            require(url, spec.item_selector, spec.detail.url_selector, "href")
             detail_urls = {
-                self.actual_url(urljoin(url, value))
-                for sample in (links or {}).get("samples", [])
-                for value in sample.get("values", [])
-                if value
+                self.actual_url(value)
+                for value in self.links.get(
+                    (url, spec.item_selector, spec.detail.url_selector, "href"), ()
+                )
             }
             # 详情字段必须在某个已观察到的详情链接目标上全部通过，不能混用不同页面证据。
             verified = any(
