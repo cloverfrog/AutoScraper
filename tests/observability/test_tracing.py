@@ -312,10 +312,9 @@ def test_workflow_repair_and_feedback_share_run(monkeypatch, settings, spec):
     failed = next(e for e in memory.events if e["event_type"] == "validation.feedback")
     assert failed["attempt"] == 1
     assert failed["payload"]["feedback"][0]["fields"] == ["title"]
-    assert (
-        failed["payload"]["feedback"][0]["message"]
-        == "Include every requested field and mark it required"
-    )
+    message = failed["payload"]["feedback"][0]["message"]
+    assert "Preserve every requested field name" in message
+    assert "detail.fields.description" in message
     assert memory.summary_data["outcome"]["requirements"]["fields"] == ["title"]
 
 

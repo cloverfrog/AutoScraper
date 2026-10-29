@@ -53,6 +53,7 @@ LLM `source`。同一调用的 started / finished 事件使用相同 `call_id`�
 - `run.started/finished/failed`、`workflow.started/finished/result`。
 - `requirements.started/finished`、`attempt.started/finished`、`repair.started/finished`。
 - `step.started/planned/finished`、`tool.started/finished`、`llm.started/finished`。
+- `submission.checked`：提交前检查反馈、分页控件自动测试和记录推进复核结果。
 - `spec.candidate`、`validation.started/finished/feedback`、`validation_extraction.started/finished`。
 - `clarification.started/answer/finished`、`execution.started/finished`。
 - `executor.started/finished/result`、`artifacts.started/finished`、`cli.result/failed`。
@@ -79,10 +80,13 @@ LLM `source`。同一调用的 started / finished 事件使用相同 `call_id`�
 页面 URL/标题、报告的总节点数、实际返回节点数、前 8 个节点及最多 12 个链接/按钮等
 控件样本。样本保留标签、属性和短文本；样本中未出现某元素，不等于整个页面没有。
 原始 inspection 根选择器保留在工具输入中，可用于判断检查范围。
+输出还保留匹配根总数、采样根数、截断标记和无匹配时的 `fallback_root`，
+避免将首个按钮或部分 DOM 当成完整页面。`test_fields` 按字段保留同样的测试诊断。
 
-例如 load-more 场景，应能依次看到：按钮样本没有 href；选择器测试只匹配 1 条；
-模型摘要判断请求的 2 条无法通过当前分页协议取得；report_unsupported 和最终汇总
-保留这个原因。模型陈述和工具观测分开记录，以便检查判断依据。
+例如 load-more 场景，应能依次看到：按钮的实际 CSS；列表字段和详情字段分别在对应
+URL 上通过测试；点击前后的真实数量；`submission.checked.feedback` 为空后生成候选。
+若提交被拒，`candidate_rejected` 保留具体原因，当前会话可继续修正；采样检查之后仍由
+Executor 独立验证。模型陈述和工具观测分开记录，以便检查判断依据。
 
 普通框架 INFO 不重复落盘。WARNING/ERROR 作为 `framework.log` 进入 events.jsonl，
 保存消息和可用的异常栈；操作抛出的异常也在对应 finished/failed 事件中保留消息、

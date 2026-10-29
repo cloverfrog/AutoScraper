@@ -12,9 +12,11 @@ from browser_use import ActionResult, Tools
 from browser_use.browser.session import BrowserSession
 
 from .clarification import ClarificationRequest, ClarificationSession
-from .dom import INSPECT_SCRIPT, SELECTOR_SCRIPT
+from .dom import INSPECT_SCRIPT, SELECTOR_SCRIPT, BATCH_SELECTOR_SCRIPT
+from .submission import SubmissionChecks, page_key
+from autoscraper.scraping.spec import FieldSpec, ScraperSpec
 from .waiting import ContentWaiter
-from autoscraper.observability.tracing import current_trace, operation, summarize_tool_output
+from autoscraper.observability.tracing import current_trace, operation, summarize_tool_output, emit
 
 
 # 为 browser-use 工具分发增加追踪，保留原工具执行和返回语义。
@@ -22,10 +24,10 @@ class TracedTools(Tools):
     # 记录工具输入及经过摘要处理的反馈；未启用追踪时直接调用框架实现。
     async def act(self, action, **kwargs):
         if current_trace() is None:
-            return await super().act(action, **kwargs)
+            return await self._perform(action, **kwargs)
         params = action.model_dump(exclude_unset=True, mode="json")
         with operation("tool", tool=next(iter(params), "unknown"), inputs=params) as details:
-            result = await super().act(action, **kwargs)
+            result = await self._perform(action, **kwargs)
             details.update(
                 outcome="error" if result.error else "returned",
                 error=result.error,
@@ -36,6 +38,142 @@ class TracedTools(Tools):
             )
             return result
 
+    # 提交前检查发生在真实 done 动作之前，拒绝后保留同一 Agent/浏览器继续修复。
+    # 反馈作为普通工具结果返回，不用 error 消耗框架的连续失败上限。
+    async def _perform(self, action, **kwargs):
+        checks = getattr(self, "submission", None)
+        params = {
+            name: value
+            for name, value in action.model_dump(exclude_unset=True, mode="json").items()
+            if value is not None
+        }
+        if not params:
+            return await super().act(action, **kwargs)
+        name, inputs = next(iter(params.items()))
+        if checks and name == "done" and inputs.get("success") is not False and inputs.get("data"):
+            candidate = ScraperSpec.model_validate(inputs["data"])
+            control = await self._refresh_control(candidate, kwargs.get("browser_session"))
+            refreshed = await self._refresh_progress(candidate, kwargs.get("browser_session"))
+            issues = checks.check(candidate)
+            emit(
+                "submission.checked",
+                feedback=[issue.model_dump() for issue in issues],
+                progression=refreshed,
+                control=control,
+            )
+            checks.last_issues = issues
+            if issues:
+                return ActionResult(
+                    extracted_content=json.dumps(
+                        {
+                            "status": "candidate_rejected",
+                            "feedback": [issue.model_dump() for issue in issues],
+                        },
+                        ensure_ascii=False,
+                    )
+                )
+        url = ""
+        if checks and name in {"navigate", "click", "scroll", "explore_scroll"}:
+            url = await kwargs["browser_session"].get_current_page_url()
+            if name in {"click", "scroll"}:
+                checks.begin_action(name, url)
+        result = await super().act(action, **kwargs)
+        if checks and not result.error:
+            if name == "navigate":
+                actual = await kwargs["browser_session"].get_current_page_url()
+                checks.aliases[page_key(inputs["url"])] = page_key(actual)
+            try:
+                data = json.loads(result.extracted_content or "null")
+            except (ValueError, TypeError):
+                data = None
+            if isinstance(data, dict):
+                if name == "test_selector":
+                    checks.remember(
+                        data, inputs.get("field_selector", ""), inputs.get("attribute", "")
+                    )
+                elif name == "test_fields":
+                    for field in data.get("results", {}).values():
+                        checks.remember(
+                            field, field.get("field_selector", ""), field.get("attribute", "")
+                        )
+                elif name == "wait_for_selector":
+                    checks.remember_wait(data)
+                elif name == "explore_scroll" and data.get("count", 0) > data.get(
+                    "initial_count", 0
+                ):
+                    checks.advances.add(
+                        (checks.actual_url(url), inputs["item_selector"], "scroll", "append")
+                    )
+        elif checks and name in {"click", "scroll"}:
+            checks.pending = None
+        return result
+
+    # 分页控件只需精确 CSS 计数，提交时自动完成这类确定性检查，节省模型调用。
+    # 只在当前列表页取证；无匹配或多匹配仍拒绝，不替模型寻找或修正选择器。
+    async def _refresh_control(self, candidate, browser_session):
+        pagination = candidate.pagination
+        if not browser_session or not pagination or pagination.type not in {"click", "link"}:
+            return None
+        url = self.submission.actual_url(candidate.start_url)
+        if page_key(await browser_session.get_current_page_url()) != url:
+            return None
+        attribute = "href" if pagination.type == "link" else ""
+        previous = self.submission.result(url, pagination.next_selector, "", attribute)
+        if self.submission.passed(previous, pagination.type == "link"):
+            return None
+        page = await browser_session.must_get_current_page()
+        result = json.loads(
+            await page.evaluate(SELECTOR_SCRIPT, pagination.next_selector, "", attribute)
+        )
+        self.submission.remember(result, "", attribute)
+        return result
+
+    # 模型可能漏掉计划中的等待。只对动作前已通过的同一列表规则自动复核，
+    # 不替模型猜选择器或改数据来源；未推进时使用有界数量等待，仍不调用 LLM。
+    async def _refresh_progress(self, candidate, browser_session):
+        checks = self.submission
+        pagination = candidate.pagination
+        if not browser_session or not checks.pending or not pagination:
+            return None
+        kind, url, previous = checks.pending
+        if kind != pagination.type or url != checks.actual_url(candidate.start_url):
+            return None
+        mode = getattr(pagination, "mode", "append")
+        if (url, candidate.item_selector, kind, mode) in checks.advances:
+            return None
+        if page_key(await browser_session.get_current_page_url()) != url:
+            return None
+        # 只有动作前的精确字段证据全部有效，才允许自动刷新；改过的选择器必须先测试。
+        prior = [
+            previous.get((url, candidate.item_selector, field.selector, field.attribute or ""))
+            for field in candidate.fields.values()
+        ]
+        if not all(
+            checks.passed(result, field.required)
+            for result, field in zip(prior, candidate.fields.values())
+        ):
+            return {"skipped": "listing_fields_not_verified_before_action"}
+        page = await browser_session.must_get_current_page()
+        data = json.loads(
+            await page.evaluate(
+                BATCH_SELECTOR_SCRIPT,
+                candidate.item_selector,
+                {name: field.model_dump() for name, field in candidate.fields.items()},
+            )
+        )
+        for result in data["results"].values():
+            checks.remember(result, result["field_selector"], result["attribute"])
+        count = next(iter(data["results"].values()))["count"]
+        if mode == "append" and (url, candidate.item_selector, kind, mode) not in checks.advances:
+            waited = await self.content_waiter.selector(
+                browser_session,
+                candidate.item_selector,
+                min_count=max(r["count"] for r in prior) + 1,
+            )
+            checks.remember_wait(waited)
+            return waited
+        return {"url": url, "count": count, "source": "deterministic_field_recheck"}
+
 
 # 创建探索工具集合：保留导航和分页动作，再注册 DOM 检查、有界等待与澄清工具。
 # 闭包共享等待器和澄清会话；工具说明中的英文字符串会实际发送给模型。
@@ -45,8 +183,11 @@ def build_tools(
     content_timeout_ms: int = 30000,
     wait_llm=None,
     clarification: ClarificationSession | None = None,
+    check_submission: bool = False,
+    requirements=None,
 ) -> Tools:
     tools = TracedTools()
+    tools.submission = SubmissionChecks(requirements) if check_submission else None
     # 只开放导航与分页探索相关动作；继续禁止输入、文件和任意代码执行。
     for name in list(tools.registry.registry.actions):
         if name not in {"navigate", "done", "click", "scroll"}:
@@ -168,7 +309,9 @@ def build_tools(
 
     # 读取当前页面或指定 CSS 根节点的 DOM 摘要，限制返回长度以控制上下文大小。
     @tools.action(
-        description="Inspect DOM tags, classes and attributes. Optional CSS root narrows output."
+        description="Inspect DOM tags, classes and attributes for ALL matching CSS roots "
+        "(up to 50). Reports root_count, sampled_roots and truncation. Use root=button to "
+        "inspect all buttons; do not infer absence from a truncated sample."
     )
     async def inspect_page(
         browser_session: BrowserSession, root_selector: str = ""
@@ -200,7 +343,37 @@ def build_tools(
             )
         )
 
+    # 一次调用测试同一页面上的多字段，复用单字段的匹配和样本语义，减少探索 Step。
+    # 详情页用 html 根；详情链接可作为额外的 attribute/href 规则一起检查。
+    @tools.action(
+        description="Test up to 50 named FieldSpec rules on the current page in ONE call. "
+        "Returns current URL and per-field counts, exact selectors, values and status. "
+        "Use listing item selector for listing fields/detail href, html for detail fields. "
+        "Do not test listing rules while on a detail page or rename requested fields."
+    )
+    async def test_fields(
+        browser_session: BrowserSession, item_selector: str, fields: dict[str, FieldSpec]
+    ) -> ActionResult:
+        if not 1 <= len(fields) <= 50:
+            return ActionResult(
+                extracted_content=json.dumps(
+                    {"status": "invalid_parameters", "message": "Use 1–50 fields"}
+                )
+            )
+        page = await browser_session.must_get_current_page()
+        return ActionResult(
+            extracted_content=await page.evaluate(
+                BATCH_SELECTOR_SCRIPT,
+                item_selector,
+                {
+                    name: FieldSpec.model_validate(field).model_dump()
+                    for name, field in fields.items()
+                },
+            )
+        )
+
     waiter = ContentWaiter(content_timeout_ms, wait_llm)
+    tools.content_waiter = waiter
 
     # 已知 CSS 直接等待 min_count 条记录；点击追加前记录为 N 时，传 N+1 验证增长。
     # 返回真实初始/最终数量，语义等待不参与这种已知条件的判断。

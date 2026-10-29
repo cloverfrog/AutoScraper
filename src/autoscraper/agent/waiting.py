@@ -32,6 +32,7 @@ async def wait_for_count(page, selector, min_count, timeout_ms):
     return {
         "status": status,
         "selector": selector,
+        "url": page.url,
         "min_count": min_count,
         "initial_count": initial_count,
         "count": await matches.count(),

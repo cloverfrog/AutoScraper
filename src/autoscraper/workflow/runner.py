@@ -119,8 +119,24 @@ def run_task(
         # 首次生成也算一次尝试，因此总尝试数为 max_repairs + 1。
         previous_spec = None
         for attempt in range(policy.max_repairs + 1):
-            with (labels(attempt=attempt + 1), operation("attempt"),
-                  operation("repair") if attempt else nullcontext()):
+            # 新浏览器至少需要导航、测试和提交三次机会；不足时保留失败现场，避免空跑修复。
+            # 预算反馈放在前面，同时保留此前的具体原因，不用泛化错误覆盖诊断。
+            if attempt and settings.max_steps - llm.calls < 3:
+                outcome.feedback = [
+                    Feedback(
+                        code="budget_exhausted",
+                        recoverable=False,
+                        message="Insufficient shared LLM budget for navigation, testing and submission; "
+                        "repair was not started",
+                    ),
+                    *outcome.feedback,
+                ]
+                return outcome
+            with (
+                labels(attempt=attempt + 1),
+                operation("attempt"),
+                operation("repair") if attempt else nullcontext(),
+            ):
                 seconds = remaining()
                 stage: TaskStage = "exploration"
                 outcome.failure_stage = None

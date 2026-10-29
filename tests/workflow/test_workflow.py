@@ -993,3 +993,15 @@ def test_wait_model_budget_shared_across_repairs(candidate, settings, workflow, 
     assert received[0]["wait_llm"] is received[1]["wait_llm"]
     assert received[0]["wait_llm"] is not workflow[1]
     assert outcome.summary()["wait_llm_calls"] == 0
+
+
+# 剩余调用不足以导航、测试和提交时不创建修复轮，保留最初的缺字段诊断。
+def test_repair_is_not_started_with_only_one_call_remaining(candidate, settings, workflow, monkeypatch):
+    settings.max_steps = 2
+    received = install_candidates(monkeypatch, workflow, [candidate])
+    result = run_task(URL, "前2本，字段名为title、price、description", settings)
+    assert len(received) == result.attempts == result.llm_calls == 1
+    assert result.feedback[0].code == "budget_exhausted"
+    assert result.feedback[1].code == "missing_required_field"
+    assert "description" in result.feedback[1].fields
+    assert len(result.history) == 1

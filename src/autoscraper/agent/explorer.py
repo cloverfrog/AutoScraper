@@ -103,10 +103,17 @@ answer; if the required plan cannot fit the protocol, report_unsupported instead
 relaxing it. Allowing an alternative does not establish equivalent content or order.
 
 Exploration:
-1. Infer selectors from inspect_page DOM evidence. For loading content, use wait_for_selector
+1. Start with inspect_page(root_selector="") to see page structure and actual button/link classes.
+   Infer selectors from its DOM evidence. A missing root also returns a body sample; use that
+   evidence to fix selectors instead of guessing multiple roots. For loading content, use wait_for_selector
    when CSS is known, otherwise wait_for_content with explicit success_criteria; never poll
    inspect_page. Readiness is only a hint to begin testing.
-2. Test the record selector, every field, detail link and Next href with test_selector.
+2. Prefer test_fields to test ALL fields on the CURRENT page in one call. Also test the
+   detail link as an extra attribute/href rule in that batch. Test pagination controls at PAGE
+   scope with test_selector(item_selector=the exact control CSS, field_selector=""); for links
+   use attribute="href". Inspect all buttons via inspect_page(root_selector="button") to obtain
+   actual classes instead of guessing. Batch independent inspections/tests in up to 3 actions
+   per response. test_selector remains available for individual checks.
    Check echoed inputs and sample values. On failure, compare with observed DOM before fixing;
    retry unchanged inputs only with new evidence. Retest changed selectors verbatim and submit
    those exact strings. Never claim failed or untested rules are verified, including in memory;
@@ -124,7 +131,10 @@ Protocol semantics:
 - Fields are relative to each record and match one element. Set attribute only for extract=attribute;
   use transform=absolute_url for URL attributes. Preserve required fields; never omit or substitute.
 - Detail extraction requires version="2": detail.url_selector uniquely matches a listing href;
-  detail.fields are relative to the detail document with names distinct from listing fields.
+  detail.fields are relative to the detail document. Preserve user-requested names there:
+  if the user asks for description from details, use detail.fields.description, not
+  detail_description, and omit the short listing description. Only avoid duplicating a name
+  already present in listing fields.
   Only one detail page per record; detail.max_pages budgets navigation attempts, including failures.
 - pagination requires explicit type: link, click or scroll. link.next_selector matches one href.
   click.next_selector matches one actionable Next/Load More control; mode=append (default) waits
@@ -139,6 +149,11 @@ Protocol semantics:
   dedupe_by uses required stable identifier fields, otherwise [].
 
 Completion:
+Submit only exact selectors that passed on the correct listing/detail URL. done is checked
+against tool evidence and authoritative requirements; candidate_rejected keeps this session open
+so you can retest and correct it. For click/scroll pagination verify record progression first.
+One successful progression is enough; do not click/scroll until the entire requested count is
+collected during exploration. The Executor performs bulk extraction.
 Inspect listing/detail evidence before declaring required fields unavailable. Submit the candidate
 with done using the supplied ScraperSpec schema, without scraped data or executable code.
 If requirements cannot fit the protocol, use report_unsupported when available, otherwise report
@@ -202,16 +217,19 @@ async def generate_spec(
         keep_alive=True,
     )
     try:
+        exploration_tools = build_tools(
+            allow_unsupported=requirements is not None,
+            content_timeout_ms=settings.content_timeout_ms,
+            wait_llm=wait_llm,
+            clarification=clarification,
+            check_submission=True,
+            requirements=requirements,
+        )
         agent = Agent(
             task=prompt,
             llm=llm if llm is not None else make_llm(settings),
             browser_session=browser,
-            tools=build_tools(
-                allow_unsupported=requirements is not None,
-                content_timeout_ms=settings.content_timeout_ms,
-                wait_llm=wait_llm,
-                clarification=clarification,
-            ),
+            tools=exploration_tools,
             output_model_schema=ScraperSpec,
             use_vision=False,
             # 关闭额外规划、评判和思考字段，减少提示词及输出结构的复杂度。
@@ -270,6 +288,13 @@ async def generate_spec(
                 except (ValueError, TypeError):
                     pass  # 非不支持结果交给下方常规协议解析器统一报告格式错误。
             if history.is_successful() is not True:
+                # 证据门槛拒绝后耗尽步骤时，保留具体失败原因，而不是只剩泛化 Agent 失败。
+                checks = getattr(exploration_tools, "submission", None)
+                if checks and checks.last_issues:
+                    raise InvalidSpecError(
+                        "Submission rejected: "
+                        + "; ".join(issue.message for issue in checks.last_issues)[:4000]
+                    )
                 raise AgentError("Agent did not finish successfully within its limits")
             return parse_spec_output(final).model_copy(
                 update={"content_timeout_ms": settings.content_timeout_ms}

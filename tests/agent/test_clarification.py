@@ -469,18 +469,20 @@ def test_real_agent_continues_with_browser_and_history(monkeypatch, tmp_path, mo
                 actions = [{"test_selector": {"item_selector": "article", "field_selector": "p"}}]
             else:
                 actions = [{"ask_user": REQUEST.model_dump()}, {"navigate": {"url": rule["start_url"]}}]
-        else:
+        elif mode == "unsupported":
             assert len(calls) == 4
-            if mode == "unsupported":
-                memory = "Verified 1 recycled record, need 2; complex virtual lists are outside the protocol."
-                actions = [{"report_unsupported": {"reason": memory, "fields": ["quote"]}}]
-            else:
-                # The follow-up request contains the user's response and initial task.
-                text = "\n".join(str(message.content) for message in messages)
-                assert "允许传统分页入口" in text
-                assert url in text
-                assert "retain-observation" in text
-                actions = [{"done": {"data": rule}}]
+            memory = "Verified 1 recycled record, need 2; complex virtual lists are outside the protocol."
+            actions = [{"report_unsupported": {"reason": memory, "fields": ["quote"]}}]
+        elif len(calls) == 4:
+            # 澄清后先导航到获准入口，再用该页面的实际证据提交规则。
+            text = "\n".join(str(message.content) for message in messages)
+            assert "允许传统分页入口" in text and url in text and "retain-observation" in text
+            actions = [{"navigate": {"url": rule["start_url"]}}]
+        elif len(calls) == 5:
+            actions = [{"test_fields": {"item_selector": "article", "fields": {"quote": {"selector": "p"}}}}]
+        else:
+            assert len(calls) == 6
+            actions = [{"done": {"data": rule}}]
         return ChatInvokeCompletion(
             completion=output_format.model_validate(
                 {"memory": memory, "action": actions}
@@ -495,7 +497,7 @@ def test_real_agent_continues_with_browser_and_history(monkeypatch, tmp_path, mo
         api_key="fake",
         model="test",
         base_url="https://llm.test",
-        max_steps=5,
+        max_steps=7,
         executable_path=executable_path,
         timeout_seconds=60,
     )
@@ -536,22 +538,23 @@ def test_real_agent_continues_with_browser_and_history(monkeypatch, tmp_path, mo
             assert runs[0][0] == runs[1][0]
             assert runs[0][1:] == (1, 0)
             assert runs[1][1:] == (4, 3)
-        assert model.calls == 4
+        step_count = 4 if mode == "unsupported" else 6
+        assert model.calls == step_count
         assert trace == [
-            (kind, step) for step in range(1, 5) for kind in ("start", "plan", "end")
+            (kind, step) for step in range(1, step_count + 1) for kind in ("start", "plan", "end")
         ]
         events = [json.loads(line) for line in
                   (sink.directory / "events.jsonl").read_text().splitlines()]
         steps = [event for event in events if event["event_type"] == "step.started"]
-        assert [event["step"] for event in steps] == [1, 2, 3, 4]
+        assert [event["step"] for event in steps] == list(range(1, step_count + 1))
         tools = [event for event in events if event["event_type"] == "tool.started"]
         assert [event["payload"]["tool"] for event in tools] == (
             ["navigate", "inspect_page", "test_selector", "report_unsupported"]
-            if mode == "unsupported" else ["navigate", "inspect_page", "ask_user", "done"]
+            if mode == "unsupported" else ["navigate", "inspect_page", "ask_user", "navigate", "test_fields", "done"]
         )
         assert all(event["attempt"] == 1 for event in steps + tools)
         histories = (sink.directory / "history/attempt-1.jsonl").read_text().splitlines()
-        assert len(histories) == 4
+        assert len(histories) == step_count
         assert "retain-observation" in "\n".join(histories)
         if mode == "unsupported":
             finished = [event for event in events if event["event_type"] == "tool.finished"]

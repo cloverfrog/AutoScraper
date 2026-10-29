@@ -98,7 +98,9 @@ def validate_spec(spec: ScraperSpec, requirements: TaskRequirements) -> list[Fee
             Feedback(
                 code="missing_required_field",
                 fields=missing,
-                message="Include every requested field and mark it required",
+                message="Preserve every requested field name and mark it required in fields or detail.fields. "
+                        "For detailed description use detail.fields.description; do not rename it "
+                        "to detail_description or substitute a short listing description",
             )
         )
     if requirements.count is not None and spec.max_items != requirements.count:
