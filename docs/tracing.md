@@ -53,6 +53,12 @@ LLM `source`。同一调用的 started / finished 事件使用相同 `call_id`�
 - `run.started/finished/failed`、`workflow.started/finished/result`。
 - `requirements.started/finished`、`attempt.started/finished`、`repair.started/finished`。
 - `step.started/planned/finished`、`tool.started/finished`、`llm.started/finished`。
+- `llm.output_invalid`：每次结构化输出 JSON/Schema 校验失败立即记录，重试成功后仍保留。
+  payload 包含模型、从 1 开始的 `attempt`、从 0 开始的 `retry_index`、异常类型和消息、
+  `raw_output`、原始字符数 `raw_output_chars` 和 `raw_output_truncated`。
+  原始输出沿用明确凭据清理和 4096 字符限制，事件总负载限制还可能进一步截断
+  （`payload.truncated`）。日志不是完整响应存档，也不提供通用页面敏感信息识别。
+  重试的每个实际请求各自记录 `llm.started/finished`、来源和 token 用量；预算拒绝不计请求。
 - `pagination.baseline`：点击/滚动前重新读取并固定的各记录选择器数量。
 - `submission.checked`：提交前检查反馈、最终列表字段/详情链接/分页控件自动测试和记录推进复核结果。
 - `spec.candidate`、`validation.started/finished/feedback`、`validation_extraction.started/finished`。

@@ -8,7 +8,7 @@ from typing import Any, Literal, TypeVar, overload
 
 import httpx
 from openai import APIConnectionError, APIStatusError, AsyncOpenAI, RateLimitError
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from browser_use.llm.base import BaseChatModel
 from browser_use.llm.exceptions import (
@@ -21,9 +21,13 @@ from browser_use.llm.openai.responses_serializer import ResponsesAPIMessageSeria
 from browser_use.llm.schema import SchemaOptimizer
 from browser_use.llm.views import ChatInvokeCompletion, ChatInvokeUsage
 
-from autoscraper.observability.tracing import capture_usage, traced_llm
+from autoscraper.observability.tracing import capture_usage, emit, traced_llm
 
 T = TypeVar("T", bound=BaseModel)
+
+
+class StructuredOutputError(ModelProviderError):
+    """Only a completed response that failed structured-output validation."""
 
 
 # 实现 browser-use 的聊天模型接口，将底层调用路由到兼容 Responses 的服务。
@@ -36,6 +40,7 @@ class ChatOpenAIResponses(BaseChatModel):
     base_url: str | httpx.URL | None = None
     timeout: float | httpx.Timeout | None = None
     max_retries: int = 0
+    structured_output_retries: int = 2
     max_output_tokens: int | None = 4096
     temperature: float | None = 0
     top_p: float | None = None
@@ -115,7 +120,6 @@ class ChatOpenAIResponses(BaseChatModel):
 
     # 将消息和可选 Pydantic 输出模型转成 Responses 请求，再解析文本或结构化结果。
     # 上方重载只描述返回类型；此处实际发送请求、记录用量并转换 API 异常。
-    @traced_llm
     async def ainvoke(
         self,
         messages: list[BaseMessage],
@@ -148,6 +152,22 @@ class ChatOpenAIResponses(BaseChatModel):
                 }
             }
 
+        for attempt in range(1, self.structured_output_retries + 2):
+            # 在追踪开始前扣预算；被预算拒绝的调用不算一次实际请求。
+            self._before_request()
+            try:
+                return await self._invoke_once(messages, params, output_format, attempt)
+            except StructuredOutputError:
+                if attempt > self.structured_output_retries:
+                    raise
+        raise AssertionError("Structured output retry loop did not execute")
+
+    def _before_request(self) -> None:
+        """Hook for task-wide request budgets, including regeneration attempts."""
+
+    # 每个真实请求各自追踪，避免重试覆盖前一次失败响应的 token 用量。
+    @traced_llm
+    async def _invoke_once(self, messages, params, output_format, attempt):
         try:
             response = await self.get_client().responses.create(**params)
             usage = self._usage(response)
@@ -159,14 +179,24 @@ class ChatOpenAIResponses(BaseChatModel):
                     usage=usage,
                     stop_reason=response.status,
                 )
-            if not response.output_text:
-                raise ModelProviderError(
-                    message="Responses API returned no structured output text",
-                    status_code=500,
+            raw_output = response.output_text or ""
+            try:
+                completion = output_format.model_validate_json(raw_output)
+            except ValidationError as exc:
+                emit(
+                    "llm.output_invalid",
                     model=self.name,
+                    attempt=attempt,
+                    retry_index=attempt - 1,
+                    exception=type(exc).__name__,
+                    message=str(exc),
+                    raw_output=raw_output,
+                    raw_output_chars=len(raw_output),
+                    raw_output_truncated=len(raw_output) > 4096,
                 )
+                raise StructuredOutputError(message=str(exc), model=self.name) from exc
             return ChatInvokeCompletion(
-                completion=output_format.model_validate_json(response.output_text),
+                completion=completion,
                 usage=usage,
                 stop_reason=response.status,
             )

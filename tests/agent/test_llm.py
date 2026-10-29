@@ -66,7 +66,7 @@ def test_failed_main_calls_exhaust_only_main_budget(monkeypatch):
         calls.append(self)
         raise RuntimeError("provider unavailable")
 
-    monkeypatch.setattr(ChatOpenAIResponses, "ainvoke", fail)
+    monkeypatch.setattr(ChatOpenAIResponses, "_invoke_once", fail)
     settings = AgentSettings(
         model="fixture", api_key="fake", base_url="https://llm.test",
         max_steps=1, max_wait_llm_calls=1,

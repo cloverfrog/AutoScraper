@@ -17,11 +17,10 @@ class LimitedChatOpenAI(ChatOpenAIResponses):
     trace_source: str | None = None
 
     # 请求发出前检查并递增计数；失败请求也消耗预算，避免无限重试造成额外费用。
-    async def ainvoke(self, messages, output_format=None, **kwargs):
+    def _before_request(self) -> None:
         if self.calls >= self.max_calls:
             raise RuntimeError("LLM call budget exhausted")
         self.calls += 1
-        return await super().ainvoke(messages, output_format=output_format, **kwargs)
 
 
 # 按统一供应商参数构造受限模型；禁用 SDK 自动重试，让调用预算可预测。
