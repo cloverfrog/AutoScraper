@@ -26,6 +26,7 @@ class Feedback(ProtocolModel):
         "navigation_failure",
         "navigation_timeout",
         "content_timeout",
+        "pagination_action_failure",
         "empty_extraction",
         "missing_data",
         "insufficient_items",
@@ -97,7 +98,9 @@ def validate_spec(spec: ScraperSpec, requirements: TaskRequirements) -> list[Fee
             Feedback(
                 code="missing_required_field",
                 fields=missing,
-                message="Include every requested field and mark it required",
+                message="Preserve every requested field name and mark it required in fields or detail.fields. "
+                        "For detailed description use detail.fields.description; do not rename it "
+                        "to detail_description or substitute a short listing description",
             )
         )
     if requirements.count is not None and spec.max_items != requirements.count:
@@ -140,7 +143,7 @@ def validate_preview_data(
                 )
             )
     complete = len(result.records) >= spec.max_items or result.stop_reason in {
-        "no_next", "no_pagination"
+        "no_next", "no_pagination", "end_marker", "no_more_content"
     }
     return issues, complete
 
@@ -151,7 +154,7 @@ def validate_execution_data(
 ) -> tuple[list[Feedback], bool]:
     """完整执行受预算截断时不能宣称完成，即使已有记录满足字段和数量校验。"""
     issues = validate_data(result, requirements)
-    complete = result.stop_reason not in {"max_pages", "detail_limit"}
+    complete = result.stop_reason not in {"max_pages", "detail_limit", "scroll_limit"}
     if not complete and not issues:
         issues.append(
             Feedback(
@@ -169,6 +172,9 @@ def validate_data(
     result: ScrapeResult, requirements: TaskRequirements, *, expected_count: int | None = None
 ) -> list[Feedback]:
     issues = []
+    if result.stop_reason == "scroll_limit":
+        issues.append(Feedback(code="validation_limit", recoverable=False,
+                               message="Scroll action budget exhausted"))
     if result.stop_reason == "detail_limit":
         issues.append(
             Feedback(

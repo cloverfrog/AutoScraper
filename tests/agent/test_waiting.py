@@ -139,10 +139,10 @@ def test_selector_wait_is_bounded_and_returns_dom(monkeypatch, outcome):
 
     seen = []
 
-    async def wait(session, selector, timeout_ms):
+    async def wait(session, selector, timeout_ms, min_count):
         seen.append((selector, timeout_ms))
-        if outcome == "timeout":
-            raise PlaywrightTimeout("not attached")
+        return dict(status=outcome, selector=selector, min_count=min_count,
+                    initial_count=0, count=1 if outcome == "ready" else 0)
 
     monkeypatch.setattr(agent_waiting, "selector_wait", wait)
     result = asyncio.run(
@@ -284,10 +284,18 @@ def test_selector_wait_attaches_focused_cdp_target_and_preserves_browser():
                 await selector_wait(focus, ".quote", 3000)
                 assert await page.locator(".quote").inner_text() == "Ready"
                 assert browser.is_connected()
+                # 同一聚焦页追加记录后，工具应返回实际数量而非依赖全页摘要推断。
+                from autoscraper.agent.waiting import ContentWaiter
+                await page.evaluate("() => setTimeout(() => document.body.insertAdjacentHTML('beforeend', '<p class=quote>Second</p>'), 200)")
+                result = await ContentWaiter(3000).selector(focus, ".quote", min_count=2)
+                assert result["status"] == "ready"
+                assert result["count"] == 2
+                assert result["min_count"] == 2
                 with pytest.raises(ValueError, match="Invalid CSS"):
                     await selector_wait(focus, "[", 100)
-                with pytest.raises(PlaywrightTimeout):
-                    await selector_wait(focus, ".not-present", 50)
+                result = await selector_wait(focus, ".not-present", 200)
+                assert result["status"] == "timeout"
+                assert result["count"] == 0
             finally:
                 await browser.close()
 
@@ -341,7 +349,7 @@ def test_content_wait_applies_after_every_pagination_navigation(page):
 
     page.route("**/*", serve)
     result = ScraperExecutor().run_page(
-        rule(max_items=2, pagination={"next_selector": ".next"}), page
+        rule(max_items=2, pagination={"type": "link", "next_selector": ".next"}), page
     )
     assert result.records == [{"quote": "A"}, {"quote": "B"}]
     assert result.pages_visited == 2
@@ -406,3 +414,45 @@ def test_executor_cli_reports_error_code_and_preserves_output(
     assert main() == 1
     assert json.loads(capsys.readouterr().err)["code"] == code
     assert output.read_text() == "previous data"
+
+
+# 已知记录数量由真实浏览器查询，页面前部的大量无关节点不能截断统计。
+@pytest.mark.parametrize("append", [True, False])
+def test_record_count_wait_reports_growth_or_timeout_without_llm(append):
+    from playwright.async_api import async_playwright
+    from autoscraper.agent.waiting import wait_for_count
+
+    async def run():
+        async with async_playwright() as p:
+            browser = await p.chromium.launch()
+            try:
+                page = await browser.new_page()
+                await page.set_content("<nav>" + "<a>Link</a>" * 300 + "</nav><article>A</article>")
+                if append:
+                    await page.evaluate("() => setTimeout(() => document.body.insertAdjacentHTML('beforeend', '<article>B</article>'), 200)")
+                result = await wait_for_count(page, "article", 2, 600 if append else 80)
+                assert result["initial_count"] == 1
+                assert result["count"] == (2 if append else 1)
+                assert result["min_count"] == 2
+                assert result["status"] == ("ready" if append else "timeout")
+            finally:
+                await browser.close()
+
+    asyncio.run(run())
+
+
+# Agent 工具必须将精确数量门槛传给等待器，而不转交语义模型猜测。
+def test_selector_tool_passes_min_count(monkeypatch):
+    pytest.importorskip("browser_use")
+    from autoscraper.agent.tools import build_tools
+    from autoscraper.agent.waiting import ContentWaiter
+    import json
+
+    async def selector(self, browser_session, selector, timeout_ms, min_count):
+        assert (selector, min_count) == ("article", 7)
+        return dict(status="ready", initial_count=6, count=12, min_count=7)
+
+    monkeypatch.setattr(ContentWaiter, "selector", selector)
+    action = build_tools().registry.registry.actions["wait_for_selector"].function
+    result = asyncio.run(action(browser_session=object(), selector="article", min_count=7))
+    assert json.loads(result.extracted_content)["count"] == 12

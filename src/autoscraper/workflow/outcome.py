@@ -58,7 +58,7 @@ class TaskOutcome:
             "spec_valid": self.spec is not None,
             "execution_success": self.data is not None
             and not self.data.errors
-            and self.data.stop_reason != "detail_limit",
+            and self.data.stop_reason not in {"detail_limit", "max_pages", "scroll_limit"},
             "task_fulfilled": self.status in {"success", "validated"} and not self.sample_only,
             "fulfillment_basis": "clarified_task" if self.clarifications else "original_task",
             "sample_only": self.sample_only,

@@ -36,6 +36,30 @@ class MemorySink:
         self.summary_data = data
 
 
+# CLI 即使遗漏 --runs-dir 也只能写测试临时目录；显式目录仍按命令参数生效。
+@pytest.mark.parametrize("explicit_directory", [False, True])
+def test_cli_log_directory_isolation(
+    tmp_path, monkeypatch, isolated_run_logs, explicit_directory
+):
+    from autoscraper.cli import agent as cli
+
+    explicit_root = tmp_path / "explicit-runs"
+    arguments = [
+        "autoscraper-agent", "https://fixture.test/", "titles",
+        "--spec-output", str(tmp_path / "rule.json"),
+    ]
+    if explicit_directory:
+        arguments.extend(["--runs-dir", str(explicit_root)])
+    monkeypatch.setattr("sys.argv", arguments)
+    monkeypatch.setattr(cli, "_execute", lambda args, trace: 0)
+
+    assert cli.main() == 0
+    expected_root = explicit_root if explicit_directory else isolated_run_logs
+    summaries = list(expected_root.glob("*/summary.json"))
+    assert len(summaries) == 1
+    assert json.loads(summaries[0].read_text(encoding="utf-8"))["exit_code"] == 0
+
+
 # 为追踪测试提供固定模型配置和可识别的测试密钥。
 @pytest.fixture
 def settings():
@@ -288,10 +312,9 @@ def test_workflow_repair_and_feedback_share_run(monkeypatch, settings, spec):
     failed = next(e for e in memory.events if e["event_type"] == "validation.feedback")
     assert failed["attempt"] == 1
     assert failed["payload"]["feedback"][0]["fields"] == ["title"]
-    assert (
-        failed["payload"]["feedback"][0]["message"]
-        == "Include every requested field and mark it required"
-    )
+    message = failed["payload"]["feedback"][0]["message"]
+    assert "Preserve every requested field name" in message
+    assert "detail.fields.description" in message
     assert memory.summary_data["outcome"]["requirements"]["fields"] == ["title"]
 
 

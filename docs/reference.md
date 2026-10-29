@@ -22,10 +22,13 @@ agent/explorer.py → scraping/spec.py → scraping/executor.py → records → 
 
 ## 探索工具与限制
 
-基础工具包含 `navigate`、结构化 `done`、`inspect_page`、`test_selector`、`wait_for_selector`、`wait_for_content`。验证工作流额外提供 `report_unsupported`，将能力限制作为失败终态提交，不生成部分规则。前两者使用 browser-use 内置实现；DOM 工具使用当前 `BrowserSession` 的页面接口。`inspect_page` 输出 DOM 标签、class/id、链接属性与有限文本，支持 CSS 根节点缩小范围；`test_selector` 返回匹配数量和前 5 项样本，支持相对字段选择器与属性提取。
+基础工具包含 `navigate`、结构化 `done`、`click`、`scroll`、`explore_scroll`、`inspect_page`、`test_selector`、`wait_for_selector`、`wait_for_content`。验证工作流额外提供 `report_unsupported`，将能力限制作为失败终态提交，不生成部分规则。前两者使用 browser-use 内置实现；DOM 工具使用当前 `BrowserSession` 的页面接口。`inspect_page` 输出 DOM 标签、class/id、链接属性与有限文本，支持 CSS 根节点缩小范围；`test_selector` 返回匹配数量和前 5 项样本，支持相对字段选择器与属性提取。
 
-`wait_for_selector` 通过 Playwright CDP 连接定位当前 target，等待 CSS 元素 attached，
-已有元素立即返回；结束仅断开自己的连接，不关闭 Agent 浏览器。`wait_for_content` 接受
+`wait_for_selector` 通过 Playwright CDP 连接定位当前 target，等待至少 `min_count` 个 CSS 元素 attached（默认 1），
+返回 `initial_count`、`count`、数量门槛和状态；默认单节点等待还返回 DOM。
+已知选择器的 Load More 场景，点击前有 N 条时传 `min_count=N+1`，直接检查数量增长，
+不调用语义模型。正常数量超时返回实际计数；连接/操作整体超时无法获取计数时返回 null。
+结束仅断开自己的连接，不关闭 Agent 浏览器。`wait_for_content` 接受
 语义条件（最多 2000 字符）、间隔（0.1–10 秒）、检查次数（1–30），立即检查并在 DOM
 摘要变化时独立调用 LLM。所有等待受 `--content-timeout-ms`（默认 30000，最高 120000）
 及探索剩余时间限制。检查次数包含未变化的 DOM；语义调用整次任务最多 8 次，可用
@@ -84,9 +87,27 @@ DOM 样本、历史窗口与输入任务长度也有限制。计费由接口提�
 
 `transform: "absolute_url"` 使用当前页面最终 URL 解析相对链接，只接受 HTTP(S)。`required` 默认 true；可选字段缺失输出 null。未知协议字段、未知版本、无效数量及无效去重字段会在执行前被拒绝。CSS 语法在浏览器执行时验证。
 
-`pagination.next_selector` 是页面范围的 Next 链接选择器。第一阶段要求唯一匹配、具有 href，按链接导航；不支持依赖 JavaScript 点击的分页或无限滚动。缺少/禁用 Next 正常结束，重复页面 URL 终止循环，顶层 `max_pages` 限制列表访问页数。列表未出现按超时失败，以免规则失效时静默输出空数据。
+`pagination` 使用显式 `type` 判别：`link` / `click` / `scroll`，旧 JSON 需迁移。
+`link` 的 `next_selector` 唯一匹配具有 href 的 Next 链接，保留 URL 循环检测。
+`click` 的 `next_selector` 匹配按钮，`mode` 为 `append`（默认）或 `replace`；
+追加模式等待记录数增加，替换模式等待声明的列表字段内容更新。
+`scroll` 可声明唯一的 `container_selector`，默认滚动页面；`max_scrolls` 默认 100（1–1000），
+`no_change_limit` 默认 3（2–10）。click/scroll 可声明可见的 `loading_selector` / `end_selector`。
+
+执行器参考 browser-use：页面使用 CDP 滚动手势，CSS 容器使用滚轮输入，动作后短暂停顿。
+未到底且未观察到加载时连续推进；到底或出现加载标志后使用内容等待预算。
+`pagination.scroll` 追踪事件包含位置、记录数量和移动/等待阶段。
+顶层 `max_pages` 限制处理的列表批次，滚动动作另受 `max_scrolls` 限制。
+按钮消失/禁用为 `no_next`，结束标志为 `end_marker`；到底后连续无新增为启发式
+`no_more_content`。`scroll_limit` / `max_pages` 为预算截断，不能作为工作流完成依据。
+按钮仍可用却无内容更新、加载持续未完成按内容超时处理，动作失败单独报告。
+数量不足仍由验证器报告。列表未出现按超时失败。
 
 `max_items` 限制成功且去重后的记录数，达到上限立即停止。`dedupe_by` 指定必填字段组成去重键，留空则按整条记录去重；保留首次出现的记录。
+
+追加和滚动分页只提取尚未处理的新节点，已处理的旧前缀不会再次访问详情、记录错误或计入重复数。
+新追加节点中的重复数据仍按 `dedupe_by` 判重；替换和链接分页每批重新提取。
+按 `on_item_error=skip` 跳过的节点也视为已处理，不会在后续追加批次中自动重试。
 
 缺失必填字段、多匹配字段或不支持的字段 URL 按 `on_item_error` 跳过并记录错误，或立即失败。列表导航错误、列表 HTTP 4xx/5xx、无效选择器、异常分页立即失败，不自动重试。结果包含记录、错误、访问页数、重复条数和停止原因。CLI 成功退出 0；跳过错误并导出部分数据退出 2；致命错误退出 1 且不导出本次部分数据。导出文件存在时会覆盖；多个导出文件不保证事务性。
 

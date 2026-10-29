@@ -65,9 +65,22 @@ uv run --extra agent autoscraper-agent "https://books.toscrape.com/" "抓取前2
 
 换网站时，替换命令里的 URL 和自然语言需求即可。
 
-列表字段和一层详情页字段均可抓取；登录、无限滚动等超出当前协议的场景，会返回 `status: "unsupported"` 并以退出码 3 结束，不再静默省略字段。其他验证失败返回 `unfulfilled` / 退出码 1，保留已有规则和数据文件。运行时导航或内容超时时，还会另存未验证的候选规则。具体反馈见终端最后一条 JSON。
+列表字段和一层详情页字段均可抓取；登录、复杂虚拟列表等超出当前协议的场景，会返回 `status: "unsupported"` 并以退出码 3 结束，不再静默省略字段。其他验证失败返回 `unfulfilled` / 退出码 1，保留已有规则和数据文件。运行时导航或内容超时时，还会另存未验证的候选规则。具体反馈见终端最后一条 JSON。
 
 需要精确固定字段和数量时，可在上述命令中加 `--fields title price --count 25`。否则会先独立解析自然语言需求，再生成和验证规则。
+
+探索时，`inspect_page` 会采样所有匹配根节点（最多 50 个），报告总数及截断情况；
+无匹配时附上页面采样，并优先展示按钮和链接，便于依据实际 DOM 修正规则。
+`test_fields` 可一次检查当前页的多个字段，减少逐字段调用。提交规则前，程序核对字段名、
+精确选择器和测试所在 URL，避免将详情页测试当作列表证据。详情描述保留请求的
+`description` 等字段名，放在 `detail.fields` 中即可。
+
+提交时自动检查当前列表页上的最终字段、详情链接和分页控件，漏掉改后重测无需额外模型调用；
+详情字段仍需对应详情页的测试证据。记录数按 URL 与记录选择器独立保存，点击/滚动前重新
+计数并固定基线，字段测试、单独计数和数量等待可共同确认追加增长；替换模式仍比较字段内容。
+必要时使用有界数量等待。这些检查不调用 LLM；失败会把具体反馈返回当前 Agent 会话继续修正。
+采样检查不保证字段语义或全量正确，
+后续仍会独立试抓取。共享预算不足 3 次模型调用时不再启动新的修复浏览器，并保留原失败原因。
 
 ## 只生成规则 / 重复抓取
 
@@ -152,7 +165,7 @@ Agent 执行轨迹默认保存至 `.agent-runtime/runs/<开始时间>_<run_id>/`
 ## 任务需求澄清
 
 当不同的合理理解会实质改变数据来源、范围、筛选条件等目标，且已有上下文无法判断
-用户意图时，Agent 可以调用 `ask_user`。例如原入口依赖当前不支持的无限滚动，
+用户意图时，Agent 可以调用 `ask_user`。例如原入口依赖当前不支持的复杂虚拟列表，
 但另一个传统分页入口可能提供所需数据：Agent 应先说明页面证据、替代方案及数据/顺序
 尚未证明等价，再询问用户。普通导航、重定向、分页和详情访问不因 URL 不同就触发提问。
 
@@ -194,6 +207,9 @@ $env:UV_CACHE_DIR = "$PWD\.uv-cache"
 ## 测试
 
 默认测试不调用真实 LLM：
+
+测试中的默认运行日志自动写入 pytest 临时目录，不会混入项目的
+`.agent-runtime/runs/`；显式指定的其他日志目录仍按用例配置生效。
 
 ```bash
 uv run --extra agent pytest
@@ -307,3 +323,42 @@ uv run --extra agent autoscraper-agent "https://quotes.toscrape.com/js-delayed/"
 ```bash
 uv run autoscraper output/quotes.unvalidated.json --output output/quotes-data.json --navigation-timeout-ms 60000
 ```
+
+## 动态分页
+
+`pagination` 必须显式声明 `type`；旧的仅含 `next_selector` 的规则需迁移，
+例如 `{"type":"link","next_selector":"li.next a"}`。协议版本 1/2 的列表/详情含义不变。
+
+Load More 使用 `{"type":"click","next_selector":"button.more","mode":"append"}`；
+同 URL 替换列表使用 `mode: "replace"`，执行器比较声明的列表字段值确认更新。
+无限滚动使用 `{"type":"scroll","max_scrolls":100,"no_change_limit":3}`，
+可通过 `container_selector` 指定唯一的滚动容器。虚拟列表暂不支持。
+
+click/scroll 可声明站点真实存在的 `loading_selector` 和 `end_selector`，均按可见状态判断。
+追加列表以记录数增长确认推进；加载标志消失不等于结束。
+`max_pages` 统计已处理列表批次（含初始批次），`max_scrolls` 独立限制滚动动作总数。
+每次等待受 `content_timeout_ms`（默认 `timeout_ms`）限制。
+
+停止原因：`no_next` 为按钮消失/禁用，`end_marker` 为显式结束；
+`no_more_content` 是到底后连续多轮无新增的启发式结束，可能遗漏延迟很长的数据。
+`scroll_limit` / `max_pages` 是预算截断，不能作为完整完成。
+仍可用的按钮没有更新记录会报告 `content_timeout`，点击/滚动动作失败会报告
+`pagination_action_failure`。数量不足始终另由验证器判定。
+
+Agent 开放内置 click/scroll，并通过 `explore_scroll` 在一次调用中执行多轮有界滚动、
+等待和记录数检查，返回滚动次数、初始/最终记录数及停止原因；普通页面滚动复用内置动作。
+执行器始终使用 Playwright，不在批量抓取时调用 LLM。
+
+执行器的页面滚动使用 CDP 模拟手势，指定容器使用滚轮输入，每次动作后短暂停顿。
+尚未到底且未观察到加载时继续推进，不会每滚一屏就等满内容超时；到底或观察到加载后，
+才等待记录更新。`pagination.scroll` 事件记录滚动前后位置、记录数及移动/等待阶段。
+
+Agent 对已知选择器的数量等待使用 `wait_for_selector(selector, min_count=N+1)`：
+例如 Load More 点击前已有 6 条，就等待至少 7 条。工具直接返回 `initial_count`、`count`、
+`min_count` 和状态，不调用 LLM，不受 DOM 摘要截断影响。默认 `min_count=1` 仍等待单个节点。
+正常数量超时保留实际计数；若连接或浏览器操作整体超时无法读取数量，则计数返回 null。
+替换型列表仍需检查字段内容变化，不能以数量增长作为通用推进条件。
+
+动态分页在每批提取前保存记录数量（替换模式保存字段快照），提取后先核对列表变化。
+详情访问等慢操作期间自动到达的新批次，会先补提取，再判断结束标志或按钮状态；
+补提取仍消耗 `max_pages`，并遵守记录数和详情预算。`pagination.reconcile` 记录这类批次变化。

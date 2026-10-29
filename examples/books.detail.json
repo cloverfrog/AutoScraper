@@ -19,6 +19,7 @@
     }
   },
   "pagination": {
+    "type": "link",
     "next_selector": "li.next a"
   },
   "dedupe_by": [

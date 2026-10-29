@@ -86,7 +86,21 @@ def summarize_tool_output(content):
             for node in nodes
             if str(node.get("tag", "")).lower() in {"a", "button", "input", "select"}
         ]
-        data = {key: data[key] for key in ("url", "title", "error", "total_nodes") if key in data}
+        data = {
+            key: data[key]
+            for key in (
+                "url",
+                "title",
+                "error",
+                "total_nodes",
+                "root_selector",
+                "root_count",
+                "sampled_roots",
+                "fallback_root",
+                "truncated",
+            )
+            if key in data
+        }
         data.update(
             observed_nodes=len(nodes),
             observed_controls=len(controls),

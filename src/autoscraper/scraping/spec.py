@@ -32,9 +32,38 @@ class FieldSpec(ProtocolModel):
         return self
 
 
-# 传统链接分页：next_selector 必须由执行器解析成唯一的下一页 href。
-class PaginationSpec(ProtocolModel):
+# 链接分页：唯一 Next 元素提供 href，执行器继续使用 URL 导航和循环检测。
+class LinkPagination(ProtocolModel):
+    type: Literal["link"]
     next_selector: NonEmpty
+
+
+# 动态分页共用页面状态标志；加载标志消失只表示本轮加载结束，不代表已到末尾。
+class DynamicPagination(ProtocolModel):
+    loading_selector: NonEmpty | None = None
+    end_selector: NonEmpty | None = None
+
+
+# 点击分页覆盖追加和整批替换；mode 决定使用记录数还是字段快照确认推进。
+class ClickPagination(DynamicPagination):
+    type: Literal["click"]
+    next_selector: NonEmpty
+    mode: Literal["append", "replace"] = "append"
+
+
+# 滚动分页默认作用于页面，也可指定唯一容器；动作预算与已处理批次预算相互独立。
+class ScrollPagination(DynamicPagination):
+    type: Literal["scroll"]
+    container_selector: NonEmpty | None = None
+    # 无新增的重试也消耗动作预算；仅到底后连续无新增才累计启发式结束阈值。
+    max_scrolls: int = Field(default=100, ge=1, le=1000)
+    no_change_limit: int = Field(default=3, ge=2, le=10)
+
+
+# 显式 type 选择对应模型，拒绝未知类型和跨类型字段；旧 JSON 必须迁移，不静默兼容。
+PaginationSpec = Annotated[
+    LinkPagination | ClickPagination | ScrollPagination, Field(discriminator="type")
+]
 
 
 # 单层详情规则：从每条列表记录取得链接，再相对详情文档提取额外字段。
@@ -61,7 +90,7 @@ class ScraperSpec(ProtocolModel):
     fields: dict[NonEmpty, FieldSpec] = Field(min_length=1)
     detail: DetailSpec | None = None
     pagination: PaginationSpec | None = None
-    # max_items 统计合并、去重后的记录，max_pages 统计列表页访问量。
+    # max_pages 统计已处理列表批次；滚动重试另受 max_scrolls 约束。
     max_items: int = Field(default=100, ge=1, le=1_000_000)
     max_pages: int = Field(default=100, ge=1, le=100_000)
     timeout_ms: int = Field(default=15_000, ge=1, le=120_000)

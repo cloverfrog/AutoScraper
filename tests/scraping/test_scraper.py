@@ -29,7 +29,7 @@ def make_spec(**updates):
             },
             "optional": {"selector": ".missing", "required": False},
         },
-        pagination={"next_selector": ".next"},
+        pagination={"type": "link", "next_selector": ".next"},
         dedupe_by=["url"],
         timeout_ms=500,
     )
