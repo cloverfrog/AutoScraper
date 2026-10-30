@@ -55,6 +55,11 @@ uv run --extra agent autoscraper-agent "https://books.toscrape.com/" "抓取前2
 不自动重试。详情页 `on_item_error=skip` 仍保留类型，避免因缺少记录触发规则修复。
 CSS 语法错误、多匹配字段和未发生等待超时的必填字段缺失等规则问题仍可进入有限修复。
 
+HTTP 错误文档可能通过 JavaScript 跳转到正常 SPA 入口。执行器在原导航预算内，
+最多等待 1 秒让错误页发起主文档跳转；跳转开始后，其加载及后续跳转仍共用原超时。
+最终主文档须正常响应并完成 DOMContentLoaded 才继续提取。没有跳转或跳转后仍是 HTTP
+错误时照常失败；iframe/资源请求成功不会掩盖主文档错误，也不会重新发送原请求。
+
 规则已生成但验证或全量执行遇到上述运行时错误时，最终 JSON 使用
 `agent_status: "completed"` 和 `failure_stage` 区分生成与失败阶段，并在
 `unvalidated_spec` 给出未验证规则副本。该文件使用独立文件名并避免覆盖已有文件；

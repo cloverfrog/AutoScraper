@@ -9,7 +9,8 @@ from typing import Literal
 from urllib.parse import urldefrag, urljoin, urlsplit
 
 from playwright.sync_api import Error as PlaywrightError
-from playwright.sync_api import Locator, Page, TimeoutError as PlaywrightTimeout, sync_playwright
+from playwright.sync_api import Locator, Page, Request, Response
+from playwright.sync_api import TimeoutError as PlaywrightTimeout, sync_playwright
 from pydantic import HttpUrl, TypeAdapter
 
 from .spec import FieldSpec, ScraperSpec
@@ -112,18 +113,78 @@ class ScrapeResult:
     error_details: list[ScrapeFailure] = field(default_factory=list)
 
 
-# 导航到 DOMContentLoaded，并在操作边界区分超时、浏览器错误和 HTTP 失败。
+@dataclass
+class _DocumentNavigation:
+    """Track main-document redirects, including routes restored with history.replaceState."""
+
+    page: Page
+    request: Request | None = None
+    response: Response | None = None
+    ready: bool = False
+    error: str | None = None
+
+    def requested(self, request: Request):
+        if request.is_navigation_request() and request.frame == self.page.main_frame:
+            self.request, self.response, self.ready, self.error = request, None, False, None
+
+    def responded(self, response: Response):
+        if response.request == self.request:
+            self.response = response
+
+    def loaded(self):
+        if self.response is not None:
+            self.ready = True
+
+    def failed(self, request: Request):
+        if request == self.request:
+            self.error = request.failure or "Client-side navigation failed"
+
+
+def _follow_error_redirects(
+    page: Page, url: str, response: Response, navigation: _DocumentNavigation, deadline: float
+) -> Response:
+    # Allow one second for an error document to initiate a client-side redirect.
+    # Once navigation starts, loading/chains still share the original navigation budget.
+    while response.status >= 400:
+        redirect_deadline = min(deadline, monotonic() + 1)
+        while navigation.request == response.request:
+            remaining = redirect_deadline - monotonic()
+            if remaining <= 0:
+                raise NavigationError(url, f"HTTP {response.status} at {page.url}")
+            page.wait_for_timeout(min(25, remaining * 1000))
+        while not navigation.ready:
+            if navigation.error:
+                raise NavigationError(url, navigation.error)
+            remaining = deadline - monotonic()
+            if remaining <= 0:
+                raise NavigationTimeout(url, "Client-side redirect did not finish before timeout")
+            page.wait_for_timeout(min(25, remaining * 1000))
+        assert navigation.response is not None  # ready requires a main-document response.
+        response = navigation.response
+    return response
+
+
+# 初始错误文档可能通过 JavaScript 跳转到应用入口，最终文档仍需通过 HTTP 检查。
 def navigate(page: Page, url: str, timeout_ms: int):
     """Classify errors at the operation boundary, not by matching error text."""
+    deadline = monotonic() + timeout_ms / 1000
+    navigation = _DocumentNavigation(page)
+    listeners = {"request": navigation.requested, "response": navigation.responded,
+                 "domcontentloaded": navigation.loaded, "requestfailed": navigation.failed}
+    for event, listener in listeners.items():
+        page.on(event, listener)
     try:
         response = page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
+        if response is not None and response.status >= 400:
+            response = _follow_error_redirects(page, url, response, navigation, deadline)
+        return response
     except PlaywrightTimeout as exc:
         raise NavigationTimeout(url, str(exc)) from exc
     except PlaywrightError as exc:
         raise NavigationError(url, str(exc)) from exc
-    if response is not None and response.status >= 400:
-        raise NavigationError(url, f"HTTP {response.status} at {page.url}")
-    return response
+    finally:
+        for event, listener in listeners.items():
+            page.remove_listener(event, listener)
 
 
 # 基于当前页面补全相对链接，并验证目标是合法 HTTP(S) URL。
