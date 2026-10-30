@@ -1,3 +1,4 @@
+# 导航回归：错误文档的客户端跳转可恢复，真实 HTTP/网络错误和原超时约束仍需保留。
 """Error documents may redirect to a healthy SPA; real HTTP failures stay failures."""
 
 import time
@@ -56,7 +57,7 @@ def test_error_page_redirects_to_spa_and_restores_original_url(page, delay):
     )
     result = ScraperExecutor().run_page(spec, page)
     assert result.records == [{"title": "Recovered"}]
-    assert page.url == url  # URL inequality alone cannot detect this recovery.
+    assert page.url == url  # SPA 恢复了原地址，仅比较 URL 是否变化无法判断跳转是否成功。
 
 
 def test_multiple_error_redirects_share_navigation_deadline(page):
@@ -135,7 +136,7 @@ def test_redirect_loading_uses_remaining_original_timeout(page):
                 content_type="text/html",
                 body="<script>location.replace('/slow')</script>",
             )
-        # Leave /slow unanswered; the navigation must still respect the original deadline.
+        # /slow 故意不返回响应，跳转后的加载也必须受原导航截止时间约束。
 
     page.route("**/*", route)
     with pytest.raises(NavigationTimeout):

@@ -1,3 +1,5 @@
+# 浏览器人工接管与任务内认证快照：在探索、修复和执行之间复用登录状态。
+# 状态不进入提示词或追踪；只有调用方显式指定文件时才持久化。
 """Manual browser handoff and task-local authentication snapshots.
 
 Snapshots never enter prompts or tracing. Only an explicit caller path persists them.
@@ -19,6 +21,7 @@ class HandoffRequest(ProtocolModel):
     reason: NonEmpty
 
 
+# 通过控制流异常区分暂时无法交互与用户主动取消，由 CLI 映射不同退出码。
 class HandoffRequired(Exception):
     def __init__(self, request: HandoffRequest, *, cancelled: bool = False):
         super().__init__(
@@ -34,11 +37,13 @@ HandoffHandler = Callable[[HandoffRequest], Literal["continue", "cancel"] | None
 @dataclass
 class BrowserAccess:
     handler: HandoffHandler | None = field(default=None, repr=False)
-    state: dict | None = field(default=None, repr=False)
+    state: dict | None = field(default=None, repr=False)  # 凭据不得出现在对象的诊断表示中。
     pending: HandoffRequest | None = None
     waiting_seconds: float = 0.0
     handed_off: bool = False
 
+    # 在 Agent 动作批次和超时作用域之外接收控制决定，等待时长供工作流扣除。
+    # continue 只表示用户交还控制权，页面是否已就绪仍由恢复后的 Agent 检查。
     def resume(self) -> None:
         """Run outside Agent timeouts and action batches. Continue is not login proof."""
         assert self.pending is not None
@@ -56,6 +61,7 @@ class BrowserAccess:
         self.handed_off = True
         self.pending = None
 
+    # 采用 Playwright 标准快照；browser-use 的公开导出接口会遗漏 localStorage。
     async def capture(self, cdp_url: str) -> None:
         """Use Playwright's standard state format; browser-use export omits localStorage."""
         from playwright.async_api import Error as PlaywrightError, async_playwright
@@ -65,8 +71,8 @@ class BrowserAccess:
             if not attached.contexts:
                 raise RuntimeError("Browser context unavailable after user operation")
             state = await attached.contexts[0].storage_state()
-            # A newly attached Playwright client may not know origins navigated before
-            # it connected. Read live frame storage without navigating or reloading.
+            # 晚接入的 Playwright 客户端可能不知道页面已有的 Origin，需补读现有 frame。
+            # 合并本任务先前捕获的 Origin，保留已关闭或跳离页面的状态；当前值覆盖旧值。
             origins = {entry["origin"]: entry for entry in (self.state or {}).get("origins", [])}
             origins.update({entry["origin"]: entry for entry in state["origins"]})
             for page in attached.contexts[0].pages:
@@ -78,13 +84,14 @@ class BrowserAccess:
                                 Object.entries(localStorage).map(([name, value]) => ({name, value}))};
                         }""")
                     except PlaywrightError:
-                        continue  # A frame may detach during capture.
+                        continue  # 导出期间 frame 可能已被页面移除。
                     if entry is not None:
                         origins[entry["origin"]] = entry
             state["origins"] = list(origins.values())
             self.state = state
-            # Stopping this Playwright connection detaches; the caller owns the browser.
+            # 这里只断开临时 Playwright 连接；浏览器的关闭仍由创建它的调用方负责。
 
+    # 先校验快照的基础结构，再交给浏览器；统一错误信息，避免带出包含凭据的原文。
     def load(self, path: Path) -> None:
         try:
             state = json.loads(path.read_text(encoding="utf-8"))
@@ -118,6 +125,7 @@ class BrowserAccess:
             raise ValueError("Invalid authentication state file") from None
         self.state = state
 
+    # 在同目录私有临时文件中写完后原子替换，避免凭据文件权限过宽或只写入一部分。
     def save(self, path: Path) -> None:
         if self.state is None:
             return

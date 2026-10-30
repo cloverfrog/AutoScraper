@@ -1,3 +1,5 @@
+# 可选付费接管实验：真实模型决定动作，脚本仅模拟用户登录及登录后的页面落点。
+# 基线在实验内禁用接管能力；其余场景使用生产接管流程，结果由独立执行器核对。
 """Paid, opt-in Agent takeover experiment for #21; local fixture, real LLM.
 
 Exercises the production wait_for_user tool and browser access state. The simulated
@@ -97,7 +99,7 @@ def fixture():
         thread.join(timeout=5)
 
 
-# Only the simulated user mutates authentication. The Agent cannot access this code.
+# 只有模拟用户操作修改认证状态，Agent 无法调用这段代码自行登录。
 def intervene(browser, base, scenario):
     with sync_playwright() as playwright:
         attached = playwright.chromium.connect_over_cdp(browser.cdp_url)
@@ -155,8 +157,8 @@ async def trial(base, scenario, settings):
         handoffs.append({"reason": request.reason, "action_count": len(actions)})
         if len(handoffs) > 2:
             return None
-        # Production handoff invokes a synchronous handler outside agent.run.
-        # Use a separate thread for Playwright's synchronous API.
+        # 生产接管在 Agent.run 之外调用同步处理器；单独线程避免同步 Playwright
+        # 与当前正在运行的 asyncio 事件循环冲突。
         with ThreadPoolExecutor(max_workers=1) as pool:
             pool.submit(intervene, holder["browser"], base, scenario).result(timeout=30)
         return "continue"

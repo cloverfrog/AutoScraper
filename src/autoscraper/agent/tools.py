@@ -230,6 +230,7 @@ def build_tools(
             tools.registry.exclude_action(name)
 
     if access is not None:
+        # 工具只登记接管请求并终止本批动作，真正等待用户发生在 Agent.run 返回之后。
         @tools.action(
             description="Request human browser control when login, QR code, verification or "
             "another manual operation blocks access. Explain the observed evidence and needed "

@@ -1,3 +1,5 @@
+# 人工接管回归：检查控制权交接、等待预算、认证跨阶段传递与状态文件保护。
+# 集成用例使用模型替身和真实本地浏览器，避免调用付费模型或真实账号。
 """Manual handoff control, authenticated workflow, and private state persistence."""
 
 import asyncio
@@ -140,7 +142,7 @@ def test_same_agent_resumes_and_clears_old_selector_evidence(monkeypatch, answer
 
     def handler(request):
         if final_success:
-            time.sleep(1.05)  # Longer than exploration timeout; excluded from its budget.
+            time.sleep(1.05)  # 人工等待超过探索超时，恢复后仍应能继续执行。
         return answer
 
     access = BrowserAccess(handler=handler)
@@ -371,7 +373,7 @@ def test_authenticated_workflow_transfers_and_refreshes_cookie_and_local_storage
             trace=Trace(FileSink(trace_dir)),
         )
         assert reused.status == "success", reused.summary()
-        assert not restored.handed_off
+        assert not restored.handed_off  # 新会话复用已保存的认证状态，无需再次请求登录。
         for path in trace_dir.rglob("*.json*"):
             text = path.read_text(encoding="utf-8")
             assert "cookie-private-sentinel" not in text

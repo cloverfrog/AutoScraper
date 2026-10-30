@@ -230,6 +230,7 @@ async def generate_spec(
         **({"storage_state": access.state} if access.state is not None else {}),
     )
 
+    # 导出有独立上限，失败只报告固定信息，避免底层异常携带认证快照。
     async def capture_access():
         try:
             await asyncio.wait_for(access.capture(browser.cdp_url), timeout=30)
@@ -294,9 +295,9 @@ async def generate_spec(
                         observer.finish(agent, interrupted=True)
             if access.pending is not None:
                 access.resume()
-                # Keep login even if the subsequent exploration needs a repair round.
+                # 用户交还浏览器后立即保留登录状态，后续探索失败进入修复时也无需重新登录。
                 await capture_access()
-                # Clear selector evidence from before external browser changes.
+                # 人工操作可能改变页面，清除旧选择器证据，避免将接管前的测试当成当前依据。
                 if exploration_tools.submission is not None:
                     from .submission import SubmissionChecks
                     exploration_tools.submission = SubmissionChecks(requirements)

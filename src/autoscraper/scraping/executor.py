@@ -113,6 +113,7 @@ class ScrapeResult:
     error_details: list[ScrapeFailure] = field(default_factory=list)
 
 
+# 按主文档请求跟踪导航，排除 iframe/资源响应；SPA 恢复原 URL 时也能识别新文档。
 @dataclass
 class _DocumentNavigation:
     """Track main-document redirects, including routes restored with history.replaceState."""
@@ -143,8 +144,8 @@ class _DocumentNavigation:
 def _follow_error_redirects(
     page: Page, url: str, response: Response, navigation: _DocumentNavigation, deadline: float
 ) -> Response:
-    # Allow one second for an error document to initiate a client-side redirect.
-    # Once navigation starts, loading/chains still share the original navigation budget.
+    # 最多给错误文档 1 秒发起客户端跳转；真正的 HTTP 错误不会因此被忽略。
+    # 跳转一旦开始，加载及后续跳转仍共用原导航截止时间，不能逐跳重置预算。
     while response.status >= 400:
         redirect_deadline = min(deadline, monotonic() + 1)
         while navigation.request == response.request:
@@ -159,7 +160,7 @@ def _follow_error_redirects(
             if remaining <= 0:
                 raise NavigationTimeout(url, "Client-side redirect did not finish before timeout")
             page.wait_for_timeout(min(25, remaining * 1000))
-        assert navigation.response is not None  # ready requires a main-document response.
+        assert navigation.response is not None  # ready 只会在已有主文档响应时置为 True。
         response = navigation.response
     return response
 
@@ -183,6 +184,7 @@ def navigate(page: Page, url: str, timeout_ms: int):
     except PlaywrightError as exc:
         raise NavigationError(url, str(exc)) from exc
     finally:
+        # 同一个 Page 会继续翻页或访问详情，必须移除本次监听，避免旧状态干扰后续导航。
         for event, listener in listeners.items():
             page.remove_listener(event, listener)
 
@@ -333,6 +335,7 @@ def advance_dynamic(page, spec, options, before, scrolls):
 class ScraperExecutor:
     # 浏览器启动配置属于本次运行，不写入可复用的 ScraperSpec。
     # 默认无头运行；工作流会传入与 Agent 探索相同的配置。
+    # access 只在 run 自建上下文时载入/回收快照；run_page 的上下文状态由调用方管理。
     def __init__(self, *, headless: bool = True, executable_path: str | None = None,
                  access: BrowserAccess | None = None, login: bool = False):
         self.headless = headless
@@ -365,8 +368,8 @@ class ScraperExecutor:
                 if self.login:
                     if self.access is None:
                         raise ValueError("Manual login requires a browser access handler")
-                    # Explicit login may start on an HTTP 401/403 page; let the user
-                    # operate it before applying normal navigation/extraction checks.
+                    # 显式要求人工登录时允许先展示 HTTP 401/403 页面；用户继续后，
+                    # run_page 会重新导航目标地址并应用正常的 HTTP 与内容检查。
                     page.goto(str(spec.start_url), wait_until="domcontentloaded", timeout=spec.timeout_ms)
                     self.access.pending = HandoffRequest(reason="请完成登录，然后继续抓取目标页面。")
                     self.access.resume()

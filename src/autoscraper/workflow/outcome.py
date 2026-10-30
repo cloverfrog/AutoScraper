@@ -47,7 +47,7 @@ class TaskOutcome:
     original_url: str | None = None
     clarifications: list[dict] = field(default_factory=list)
     pending_clarification: dict | None = None
-    pending_handoff: dict | None = None
+    pending_handoff: dict | None = None  # 只报告待操作原因，不附带认证快照。
 
     # 生成 CLI/追踪共用的 JSON 摘要；区分 Agent 返回、实际执行和任务是否完成。
     # spec_valid 目前仅表示已得到协议模型，不能单凭它判断需求和数据验证是否通过。

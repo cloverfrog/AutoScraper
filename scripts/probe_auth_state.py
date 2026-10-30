@@ -1,3 +1,5 @@
+# 认证状态兼容性探针：仅运行本地模拟站点，使用真实浏览器，不调用模型或真实账号。
+# 不接入生产流程；快照只在内存中传递，报告仅输出非敏感的验证结果。
 """Issue #21: opt-in, local-only browser authentication interoperability probe.
 
 No LLM, real accounts, or production auth support. State stays in memory.
@@ -25,7 +27,7 @@ from autoscraper.scraping.executor import ContentTimeout, ScraperExecutor
 from autoscraper.scraping.spec import ScraperSpec
 
 
-# Each fixture has an independent origin and synthetic token. Nothing is persisted.
+# 每个场景使用独立 Origin 和随机模拟 Token，认证快照不写入磁盘。
 @contextmanager
 def auth_site(mode):
     token = secrets.token_urlsafe(24)
@@ -75,7 +77,7 @@ def auth_site(mode):
             if mode == "cookie":
                 cookies = SimpleCookie(self.headers.get("Cookie", ""))
                 authenticated = cookies.get("probe_auth")
-                # A 200 login page reproduces the current content_timeout behavior.
+                # 登录墙返回 200，复现未认证页面被执行器判为内容超时的行为。
                 self.send(
                     content
                     if authenticated and authenticated.value == token
@@ -124,7 +126,7 @@ def rule(base, count):
     )
 
 
-# Use the real Executor's caller-owned Page entry, without adding production APIs.
+# 通过执行器现有的调用方自持 Page 入口验证提取，不为实验增加生产接口。
 def extract(base, state, executable_path, count):
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(executable_path=executable_path)
@@ -132,8 +134,8 @@ def extract(base, state, executable_path, count):
             try:
                 context = browser.new_context(storage_state=state)
             except PlaywrightError as exc:
-                # Session-only browser-use origins lack Playwright's required localStorage array.
-                # Do not print exception text: other state errors could contain token values.
+                # 仅含 sessionStorage 的 browser-use Origin 缺少 Playwright 要求的 localStorage 数组。
+                # 不打印异常原文，避免其他状态错误附带 Token 值。
                 if "localStorage: expected array, got undefined" not in str(exc):
                     raise
                 return {"status": "invalid_storage_state", "records": 0}
@@ -156,7 +158,7 @@ def extract(base, state, executable_path, count):
             browser.close()
 
 
-# Attach Playwright to a browser-use-owned browser; only browser-use closes it.
+# Playwright 连接 browser-use 创建的浏览器，关闭浏览器的责任仍由 browser-use 承担。
 async def capture(base, executable_path):
     from browser_use import BrowserSession
 
@@ -184,7 +186,7 @@ async def capture(base, executable_path):
         await asyncio.wait_for(browser.kill(), timeout=20)
 
 
-# Repair starts a fresh browser-use session. Verify the reverse import separately.
+# 修复轮次会创建新的 browser-use 会话，因此单独验证快照反向载入也能恢复认证。
 async def restore_agent(base, state, executable_path):
     from browser_use import BrowserSession
 
@@ -218,7 +220,7 @@ async def probe(executable_path):
         with auth_site(mode) as (base, expire):
             states = await capture(base, executable_path)
             results = {}
-            # Source browser has already been killed before any independent extraction.
+            # 独立提取开始前已关闭原浏览器，避免意外复用原进程让测试虚假通过。
             for name, state in {"empty": None, **states}.items():
                 preview = await asyncio.to_thread(extract, base, state, executable_path, 1)
                 full = await asyncio.to_thread(extract, base, state, executable_path, 2)
@@ -234,7 +236,7 @@ async def probe(executable_path):
                 results[name] = {"preview": preview, "full": full}
             restored = await restore_agent(base, states["playwright_cdp"], executable_path)
             assert restored == (mode != "session")
-            # Revoke at the same origin, leaving the captured snapshot untouched.
+            # 在同一 Origin 废除 Token，不改动旧快照，验证旧状态确实失效。
             expire()
             expired = await asyncio.to_thread(
                 extract, base, states["playwright_cdp"], executable_path, 1
@@ -256,7 +258,7 @@ def main():
     args = parser.parse_args()
     os.environ.setdefault("ANONYMIZED_TELEMETRY", "false")
     os.environ.setdefault("BROWSER_USE_CLOUD_SYNC", "false")
-    # browser-use needs full Chromium, rather than Playwright's headless shell.
+    # browser-use 需要完整 Chromium 可执行文件，不能使用 Playwright 的 headless shell。
     with sync_playwright() as playwright:
         executable_path = args.browser_path or playwright.chromium.executable_path
     report = asyncio.run(probe(executable_path))

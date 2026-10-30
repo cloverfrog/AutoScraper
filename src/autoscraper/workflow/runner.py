@@ -46,6 +46,7 @@ from autoscraper.observability.tracing import Trace, emit, labels, operation, tr
 # 同步任务入口：在有限预算内完成需求解析、探索、验证和可选完整抓取。
 # execute=False 也会试抓取，但可返回 sample_only；execute=True 需要完整数据验证通过。
 # ask_user 注入交互方式；trace 由装饰器管理，函数最终返回 TaskOutcome 而不写产物文件。
+# access 在探索、修复与执行之间共享最新认证快照，不把凭据放入 TaskOutcome 或模型反馈。
 @traced_task
 def run_task(
     url: str,

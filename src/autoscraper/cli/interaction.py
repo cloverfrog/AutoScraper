@@ -1,3 +1,4 @@
+# 两个 CLI 共用的人工接管入口：只接收继续/取消，不接收或记录浏览器登录凭据。
 """Shared manual browser control for both command-line entry points."""
 
 import sys
@@ -5,6 +6,7 @@ import sys
 from autoscraper.browser.access import HandoffRequest
 
 
+# 提示写入 stderr，保持 stdout 的结果 JSON 可解析；非交互输入不消费管道内容。
 def wait_for_user(request: HandoffRequest) -> str | None:
     if not sys.stdin.isatty():
         return None
