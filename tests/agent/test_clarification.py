@@ -456,7 +456,7 @@ def test_real_agent_continues_with_browser_and_history(monkeypatch, tmp_path, mo
 
     monkeypatch.setattr(Agent, "run", traced_run)
 
-    async def scripted(self, messages, output_format=None, **kwargs):
+    async def scripted(self, messages, params, output_format, attempt):
         calls.append(messages)
         memory = "retain-observation"
         if len(calls) == 1:
@@ -490,7 +490,7 @@ def test_real_agent_continues_with_browser_and_history(monkeypatch, tmp_path, mo
             usage=None,
         )
 
-    monkeypatch.setattr(ChatOpenAIResponses, "ainvoke", scripted)
+    monkeypatch.setattr(ChatOpenAIResponses, "_invoke_once", scripted)
     with sync_playwright() as playwright:
         executable_path = playwright.chromium.executable_path
     settings = AgentSettings(

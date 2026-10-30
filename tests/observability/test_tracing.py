@@ -258,7 +258,7 @@ def test_llm_usage_sources_and_parse_failure(monkeypatch, source, invalid):
             responses=SimpleNamespace(create=AsyncMock(return_value=response))
         ),
     )
-    model = ChatOpenAIResponses(model="fixture")
+    model = ChatOpenAIResponses(model="fixture", structured_output_retries=0)
     if source == "wait":
         model.trace_source = "wait"
     memory = MemorySink()
