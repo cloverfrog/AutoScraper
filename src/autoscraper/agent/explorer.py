@@ -10,7 +10,9 @@ import re
 import time
 from pathlib import Path
 
-from pydantic import BaseModel, Field, HttpUrl, SecretStr
+from pydantic import BaseModel, Field, HttpUrl, SecretStr, model_validator
+
+from .budget import LLMBudgetExceeded
 
 from .clarification import ClarificationSession
 from autoscraper.browser.access import BrowserAccess
@@ -38,13 +40,15 @@ class UnsupportedTaskError(AgentError):
 
 
 # Agent 运行配置：模型连接、探索上限、内容等待和浏览器选项。
-# max_steps 同时用于工作流主模型调用上限和单次 Agent 步数限制；等待模型单独计数。
+# 单轮 Step、任务主模型请求、修复预留请求分别配置；等待模型单独计数。
 class AgentSettings(BaseModel):
     model: str
     base_url: HttpUrl
     api_key: SecretStr
-    # 主探索预算；需求解析和各轮修复由工作流共享同一个模型实例累计调用量。
+    # 每轮探索/修复的 Step 上限；一次 Step 可包含多次结构化输出请求。
     max_steps: int = Field(default=12, ge=1, le=50)
+    max_llm_calls: int = Field(default=24, ge=1, le=200)
+    repair_reserve_calls: int = Field(default=6, ge=0, le=199)
     timeout_seconds: int = Field(default=240, ge=1, le=900)
     llm_timeout_seconds: int = Field(default=45, ge=1, le=120)
     max_output_tokens: int = Field(default=3000, ge=256, le=8192)
@@ -55,6 +59,13 @@ class AgentSettings(BaseModel):
     headless: bool = True
     # 兼容旧 CLI 参数；当前 Responses 适配器始终使用 JSON Schema 输出结构化结果。
     structured_output: bool = False
+
+    # 需求解析和首轮探索至少保留一次请求，拒绝无法分配的预算配置。
+    @model_validator(mode="after")
+    def validate_request_budgets(self):
+        if self.repair_reserve_calls >= self.max_llm_calls:
+            raise ValueError("repair_reserve_calls must be less than max_llm_calls")
+        return self
 
 
 # 只接受纯 JSON 或单个 Markdown JSON 代码块，并按 ScraperSpec 严格校验。
@@ -215,6 +226,11 @@ async def generate_spec(
     except ImportError as exc:
         raise AgentError("Install agent dependencies: uv sync --extra agent --locked") from exc
 
+    # 仅关闭提前提交部分结果的提示；继承最后一步强制 done 和全部既有工具约束。
+    class ExplorationAgent(Agent):
+        async def _inject_budget_warning(self, step_info=None) -> None:
+            return
+
     if wait_llm is None:
         wait_llm = make_wait_llm(settings)
     prompt += (
@@ -247,9 +263,10 @@ async def generate_spec(
             check_submission=True,
             requirements=requirements,
         )
-        agent = Agent(
+        agent_llm = llm if llm is not None else make_llm(settings)
+        agent = ExplorationAgent(
             task=prompt,
-            llm=llm if llm is not None else make_llm(settings),
+            llm=agent_llm,
             browser_session=browser,
             tools=exploration_tools,
             output_model_schema=ScraperSpec,
@@ -335,6 +352,8 @@ async def generate_spec(
                         "Submission rejected: "
                         + "; ".join(issue.message for issue in checks.last_issues)[:4000]
                     )
+                if getattr(agent_llm, "budget_blocked", False):
+                    raise LLMBudgetExceeded("Agent stopped at the LLM request budget boundary")
                 raise AgentError("Agent did not finish successfully within its limits")
             candidate = parse_spec_output(final).model_copy(
                 update={"content_timeout_ms": settings.content_timeout_ms}
@@ -342,6 +361,15 @@ async def generate_spec(
             if access.handed_off or access.state is not None:
                 await capture_access()
             return candidate
+    except LLMBudgetExceeded:
+        # 框架可能吞掉请求异常，也可能直接抛出；两种路径都保留提交检查的具体原因。
+        checks = getattr(exploration_tools, "submission", None)
+        if checks and checks.last_issues:
+            raise InvalidSpecError(
+                "Submission rejected: "
+                + "; ".join(issue.message for issue in checks.last_issues)[:4000]
+            ) from None
+        raise
     except TimeoutError as exc:
         raise AgentError(f"Agent timed out after {settings.timeout_seconds}s") from exc
     finally:

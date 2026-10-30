@@ -167,3 +167,21 @@ def test_outer_timeout_cancels_regeneration_without_another_request(provider):
 
     asyncio.run(scenario())
     assert provider.await_count == model.calls == 2
+
+
+# 阶段额度拦住同一次 ainvoke 内的结构化重试；开放预留后累计计数仍受硬上限约束。
+def test_phase_limit_blocks_regeneration_without_resetting_hard_count(provider):
+    from autoscraper.agent.budget import LLMBudgetExceeded
+
+    provider.return_value = response("invalid")
+    model = LimitedChatOpenAI(model="fixture", max_calls=4, call_limit=1)
+    with pytest.raises(LLMBudgetExceeded):
+        asyncio.run(model.ainvoke([], Output))
+    assert provider.await_count == model.calls == 1
+    model.call_limit = 100  # 阶段配置即使过大，也不能突破任务硬上限。
+    provider.return_value = response()
+    for _ in range(3):
+        assert asyncio.run(model.ainvoke([], Output)).completion.count == 25
+    with pytest.raises(LLMBudgetExceeded):
+        asyncio.run(model.ainvoke([], Output))
+    assert provider.await_count == model.calls == 4

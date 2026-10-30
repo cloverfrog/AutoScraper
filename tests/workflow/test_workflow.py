@@ -342,7 +342,8 @@ def test_zero_repair_limit(candidate, settings, workflow, monkeypatch):
 
 # 需求解析和多轮探索必须共享主模型调用预算。
 def test_shared_call_budget(candidate, settings, workflow, monkeypatch):
-    settings.max_steps = 1
+    settings.max_llm_calls = 1
+    settings.repair_reserve_calls = 0
     received = install_candidates(monkeypatch, workflow, [candidate])
     result = run_task(URL, "前2本，字段名为title、price、description", settings)
     assert result.status == "unfulfilled"
@@ -997,7 +998,8 @@ def test_wait_model_budget_shared_across_repairs(candidate, settings, workflow, 
 
 # 剩余调用不足以导航、测试和提交时不创建修复轮，保留最初的缺字段诊断。
 def test_repair_is_not_started_with_only_one_call_remaining(candidate, settings, workflow, monkeypatch):
-    settings.max_steps = 2
+    settings.max_llm_calls = 2
+    settings.repair_reserve_calls = 0
     received = install_candidates(monkeypatch, workflow, [candidate])
     result = run_task(URL, "前2本，字段名为title、price、description", settings)
     assert len(received) == result.attempts == result.llm_calls == 1
@@ -1005,3 +1007,119 @@ def test_repair_is_not_started_with_only_one_call_remaining(candidate, settings,
     assert result.feedback[1].code == "missing_required_field"
     assert "description" in result.feedback[1].fields
     assert len(result.history) == 1
+
+
+# 真实请求计数贯穿需求重试、首轮阶段边界和修复；Step 配置不参与请求额度换算。
+@pytest.mark.parametrize("failure", ["request_limit", "invalid_spec", "repair_exhausted"])
+def test_reserved_requests_survive_requirements_retries_and_repair(
+    candidate, settings, monkeypatch, failure,
+):
+    from unittest.mock import AsyncMock
+    from autoscraper.agent.explorer import InvalidSpecError
+    from autoscraper.agent.llm import make_llm
+    from autoscraper.agent.responses import ChatOpenAIResponses
+    import autoscraper.agent.llm as models
+    import autoscraper.workflow.runner as module
+
+    settings.max_steps = 2
+    settings.max_llm_calls = 8
+    settings.repair_reserve_calls = 3
+    model = make_llm(settings)
+    monkeypatch.setattr(models, "make_llm", lambda settings: model)
+    create = AsyncMock(side_effect=[
+        SimpleNamespace(status="completed", output_text=text, usage=None)
+        for text in ["invalid", '{"fields":["title","price"],"count":2}'] + ["ok"] * 6
+    ])
+    monkeypatch.setattr(ChatOpenAIResponses, "get_client", lambda self: SimpleNamespace(
+        responses=SimpleNamespace(create=create)
+    ))
+    attempts = []
+
+    async def generate(url, task, run_settings, **kwargs):
+        attempts.append(kwargs)
+        assert run_settings.max_steps == 2
+        assert kwargs["llm"] is model
+        if len(attempts) == 1:
+            assert model.calls == 2  # 需求解析的失败响应也已扣费。
+            assert model.call_limit == 5
+            for _ in range(3):
+                await model.ainvoke([])
+            if failure != "request_limit":
+                raise InvalidSpecError("Submission rejected: missing detail-page evidence")
+            await model.ainvoke([])  # 阶段边界拒绝请求，工作流再决定是否启动修复。
+            pytest.fail("Initial exploration must not spend the reserve")
+        assert model.calls == 5
+        assert model.call_limit == 8
+        assert kwargs["feedback"][0].code == "invalid_spec"
+        for _ in range(3 if failure == "repair_exhausted" else 2):
+            await model.ainvoke([])
+        if failure == "repair_exhausted":
+            raise InvalidSpecError("Submission rejected: detail-page evidence still missing")
+        return candidate
+
+    monkeypatch.setattr(module, "generate_spec", generate)
+    monkeypatch.setattr(ScraperExecutor, "run", lambda *args: ScrapeResult(
+        records=[{"title": "A", "price": "1"}, {"title": "B", "price": "2"}],
+        stop_reason="max_items",
+    ))
+    result = run_task(URL, "抓取书名和价格", settings)
+    if failure == "request_limit":
+        assert result.status == "unfulfilled"
+        assert result.attempts == 1
+        assert result.llm_calls == create.await_count == 5
+        assert result.repair_not_started_reason == "no_recoverable_feedback"
+        assert result.feedback[0].code == "budget_exhausted"
+        assert not result.feedback[0].recoverable
+        return
+    if failure == "repair_exhausted":
+        assert result.status == "unfulfilled"
+        assert result.repair_not_started_reason == "insufficient_llm_requests"
+        assert [item.code for item in result.feedback] == ["budget_exhausted", "invalid_spec"]
+        assert "detail-page evidence" in result.feedback[1].message
+    else:
+        assert result.status == "validated"
+    assert result.attempts == 2
+    assert result.llm_calls == create.await_count == (8 if failure == "repair_exhausted" else 7)
+    assert result.summary()["agent_step_limit"] == 2
+    assert result.summary()["max_llm_calls"] == 8
+    assert result.summary()["repair_reserve_calls"] == 3
+    assert result.history[0]["feedback"][0]["code"] == "invalid_spec"
+
+
+# 需求解析重试耗尽首轮额度时保留修复预留，不创建无请求可用的浏览器。
+def test_requirements_cannot_consume_repair_reserve(settings, monkeypatch):
+    from unittest.mock import AsyncMock
+    from autoscraper.agent.llm import make_llm
+    from autoscraper.agent.responses import ChatOpenAIResponses
+    import autoscraper.agent.llm as models
+    import autoscraper.workflow.runner as module
+
+    settings.max_llm_calls = 5
+    settings.repair_reserve_calls = 3
+    model = make_llm(settings)
+    monkeypatch.setattr(models, "make_llm", lambda settings: model)
+    create = AsyncMock(return_value=SimpleNamespace(
+        status="completed", output_text="invalid", usage=None,
+    ))
+    monkeypatch.setattr(ChatOpenAIResponses, "get_client", lambda self: SimpleNamespace(
+        responses=SimpleNamespace(create=create)
+    ))
+    monkeypatch.setattr(module, "generate_spec", lambda *args, **kwargs: pytest.fail("No browser"))
+    result = run_task(URL, "抓取书名和价格", settings)
+    assert result.status == "unfulfilled"
+    assert result.attempts == 0
+    assert result.feedback[0].code == "budget_exhausted"
+    assert model.calls == create.await_count == 2
+    assert model.max_calls - model.calls == 3
+
+
+# 禁用修复时不扣留额度；即使失败也不开放额外请求，不会把候选规则标成成功。
+def test_no_repairs_uses_full_hard_limit(candidate, settings, workflow, monkeypatch):
+    module, model = workflow
+    received = install_candidates(monkeypatch, workflow, [candidate])
+    result = run_task(URL, "前2本，字段名为title、price、description", settings,
+                      validation=ValidationSettings(max_repairs=0))
+    assert model.call_limit == settings.max_llm_calls
+    assert result.repair_reserve_calls == 0
+    assert len(received) == result.attempts == 1
+    assert result.status == "unfulfilled"

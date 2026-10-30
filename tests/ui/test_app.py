@@ -65,6 +65,8 @@ def test_app_start_defaults_and_zero_wait_budget(tmp_path, monkeypatch, optional
     assert start_fn.fn(*values) == ("job-id", "任务已启动")
     assert configs[0].agent_options["max_wait_llm_calls"] == 0
     assert configs[0].agent_options["max_steps"] == 12
+    assert configs[0].agent_options["max_llm_calls"] == 24
+    assert configs[0].agent_options["repair_reserve_calls"] == 6
     assert configs[0].validation_options["max_items"] == 100
     expected = optional_value or None
     assert configs[0].content_timeout_ms == expected

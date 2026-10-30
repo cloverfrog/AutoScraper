@@ -294,7 +294,7 @@ def test_workflow_shares_answers_budget_and_waiting_time(monkeypatch, mode):
         assert session is received[0]["clarification"]
         assert "必须使用原入口" in session.prompt()
         assert "Questions/explanation/options are Agent proposals" in session.prompt()
-        assert settings.max_steps == 3
+        assert settings.max_steps == 4  # 修复轮的 Step 上限独立于剩余请求数。
         # A rejected alternative is not used in the subsequent candidate.
         return ScraperSpec.model_validate({**RULE, "start_url": URL})
 
@@ -309,6 +309,8 @@ def test_workflow_shares_answers_budget_and_waiting_time(monkeypatch, mode):
         model="test",
         base_url="https://llm.test",
         max_steps=4,
+        max_llm_calls=4,
+        repair_reserve_calls=0,
     )
     outcome = workflow.run_task(
         URL,

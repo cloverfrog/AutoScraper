@@ -24,7 +24,7 @@ module = importlib.import_module('autoscraper.agent.' + component)
 if component == 'llm':
     settings = SimpleNamespace(
         model='fixture', api_key=SecretStr('fake'), base_url='https://llm.test',
-        llm_timeout_seconds=45, max_steps=2, max_output_tokens=3000, max_wait_llm_calls=1,
+        llm_timeout_seconds=45, max_llm_calls=2, max_output_tokens=3000, max_wait_llm_calls=1,
     )
     module.make_llm(settings)
     module.make_wait_llm(settings)
@@ -69,7 +69,7 @@ def test_failed_main_calls_exhaust_only_main_budget(monkeypatch):
     monkeypatch.setattr(ChatOpenAIResponses, "_invoke_once", fail)
     settings = AgentSettings(
         model="fixture", api_key="fake", base_url="https://llm.test",
-        max_steps=1, max_wait_llm_calls=1,
+        max_steps=10, max_llm_calls=1, repair_reserve_calls=0, max_wait_llm_calls=1,
     )
     main = make_llm(settings)
     waiting = make_wait_llm(settings)

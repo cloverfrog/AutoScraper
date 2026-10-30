@@ -91,7 +91,9 @@ def main() -> int:
     parser.add_argument("--output", type=Path, action="append", default=[])
     parser.add_argument("--model")
     parser.add_argument("--base-url")
-    parser.add_argument("--max-steps", type=int)
+    parser.add_argument("--max-steps", type=int, help="Per-agent Step limit (default: 12)")
+    parser.add_argument("--max-llm-calls", type=int, help="Task-wide request limit (default: 24)")
+    parser.add_argument("--repair-reserve-calls", type=int, help="Reserved repair requests (default: 6)")
     parser.add_argument("--timeout", type=int, dest="timeout_seconds")
     parser.add_argument("--llm-timeout", type=int, dest="llm_timeout_seconds")
     parser.add_argument("--max-output-tokens", type=int)
@@ -151,6 +153,8 @@ def _execute(args, trace) -> int:
                     "model",
                     "base_url",
                     "max_steps",
+                    "max_llm_calls",
+                    "repair_reserve_calls",
                     "timeout_seconds",
                     "llm_timeout_seconds",
                     "max_output_tokens",
