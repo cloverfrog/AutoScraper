@@ -22,7 +22,7 @@ agent/explorer.py → scraping/spec.py → scraping/executor.py → records → 
 
 ## 探索工具与限制
 
-基础工具包含 `navigate`、结构化 `done`、`click`、`scroll`、`explore_scroll`、`inspect_page`、`test_selector`、`wait_for_selector`、`wait_for_content`。验证工作流额外提供 `report_unsupported`，将能力限制作为失败终态提交，不生成部分规则。前两者使用 browser-use 内置实现；DOM 工具使用当前 `BrowserSession` 的页面接口。`inspect_page` 输出 DOM 标签、class/id、链接属性与有限文本，支持 CSS 根节点缩小范围；`test_selector` 返回匹配数量和前 5 项样本，支持相对字段选择器与属性提取。
+基础工具包含 `navigate`、结构化 `done`、`click`、`scroll`、`explore_scroll`、`inspect_page`、`test_selector`、`wait_for_selector`、`wait_for_content`。探索器还提供 `wait_for_user`，将登录等浏览器操作交给用户，继续后重新观察页面。验证工作流额外提供 `report_unsupported`，将能力限制作为失败终态提交，不生成部分规则。前两者使用 browser-use 内置实现；DOM 工具使用当前 `BrowserSession` 的页面接口。`inspect_page` 输出 DOM 标签、class/id、链接属性与有限文本，支持 CSS 根节点缩小范围；`test_selector` 返回匹配数量和前 5 项样本，支持相对字段选择器与属性提取。
 
 `wait_for_selector` 通过 Playwright CDP 连接定位当前 target，等待至少 `min_count` 个 CSS 元素 attached（默认 1），
 返回 `initial_count`、`count`、数量门槛和状态；默认单节点等待还返回 DOM。

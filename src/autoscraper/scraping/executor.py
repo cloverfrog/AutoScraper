@@ -9,10 +9,12 @@ from typing import Literal
 from urllib.parse import urldefrag, urljoin, urlsplit
 
 from playwright.sync_api import Error as PlaywrightError
-from playwright.sync_api import Locator, Page, TimeoutError as PlaywrightTimeout, sync_playwright
+from playwright.sync_api import Locator, Page, Request, Response
+from playwright.sync_api import TimeoutError as PlaywrightTimeout, sync_playwright
 from pydantic import HttpUrl, TypeAdapter
 
 from .spec import FieldSpec, ScraperSpec
+from autoscraper.browser.access import BrowserAccess, HandoffRequest
 from .progress import STATE_SCRIPT, state_options, progressed
 from .scrolling import scroll_step
 from autoscraper.observability.tracing import emit, operation
@@ -111,18 +113,80 @@ class ScrapeResult:
     error_details: list[ScrapeFailure] = field(default_factory=list)
 
 
-# 导航到 DOMContentLoaded，并在操作边界区分超时、浏览器错误和 HTTP 失败。
+# 按主文档请求跟踪导航，排除 iframe/资源响应；SPA 恢复原 URL 时也能识别新文档。
+@dataclass
+class _DocumentNavigation:
+    """Track main-document redirects, including routes restored with history.replaceState."""
+
+    page: Page
+    request: Request | None = None
+    response: Response | None = None
+    ready: bool = False
+    error: str | None = None
+
+    def requested(self, request: Request):
+        if request.is_navigation_request() and request.frame == self.page.main_frame:
+            self.request, self.response, self.ready, self.error = request, None, False, None
+
+    def responded(self, response: Response):
+        if response.request == self.request:
+            self.response = response
+
+    def loaded(self):
+        if self.response is not None:
+            self.ready = True
+
+    def failed(self, request: Request):
+        if request == self.request:
+            self.error = request.failure or "Client-side navigation failed"
+
+
+def _follow_error_redirects(
+    page: Page, url: str, response: Response, navigation: _DocumentNavigation, deadline: float
+) -> Response:
+    # 最多给错误文档 1 秒发起客户端跳转；真正的 HTTP 错误不会因此被忽略。
+    # 跳转一旦开始，加载及后续跳转仍共用原导航截止时间，不能逐跳重置预算。
+    while response.status >= 400:
+        redirect_deadline = min(deadline, monotonic() + 1)
+        while navigation.request == response.request:
+            remaining = redirect_deadline - monotonic()
+            if remaining <= 0:
+                raise NavigationError(url, f"HTTP {response.status} at {page.url}")
+            page.wait_for_timeout(min(25, remaining * 1000))
+        while not navigation.ready:
+            if navigation.error:
+                raise NavigationError(url, navigation.error)
+            remaining = deadline - monotonic()
+            if remaining <= 0:
+                raise NavigationTimeout(url, "Client-side redirect did not finish before timeout")
+            page.wait_for_timeout(min(25, remaining * 1000))
+        assert navigation.response is not None  # ready 只会在已有主文档响应时置为 True。
+        response = navigation.response
+    return response
+
+
+# 初始错误文档可能通过 JavaScript 跳转到应用入口，最终文档仍需通过 HTTP 检查。
 def navigate(page: Page, url: str, timeout_ms: int):
     """Classify errors at the operation boundary, not by matching error text."""
+    deadline = monotonic() + timeout_ms / 1000
+    navigation = _DocumentNavigation(page)
+    listeners = {"request": navigation.requested, "response": navigation.responded,
+                 "domcontentloaded": navigation.loaded, "requestfailed": navigation.failed}
+    for event, listener in listeners.items():
+        page.on(event, listener)
     try:
         response = page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
+        if response is not None and response.status >= 400:
+            response = _follow_error_redirects(page, url, response, navigation, deadline)
+        return response
     except PlaywrightTimeout as exc:
         raise NavigationTimeout(url, str(exc)) from exc
     except PlaywrightError as exc:
         raise NavigationError(url, str(exc)) from exc
-    if response is not None and response.status >= 400:
-        raise NavigationError(url, f"HTTP {response.status} at {page.url}")
-    return response
+    finally:
+        # 同一个 Page 会继续翻页或访问详情，必须移除本次监听，避免旧状态干扰后续导航。
+        for event, listener in listeners.items():
+            page.remove_listener(event, listener)
 
 
 # 基于当前页面补全相对链接，并验证目标是合法 HTTP(S) URL。
@@ -271,9 +335,13 @@ def advance_dynamic(page, spec, options, before, scrolls):
 class ScraperExecutor:
     # 浏览器启动配置属于本次运行，不写入可复用的 ScraperSpec。
     # 默认无头运行；工作流会传入与 Agent 探索相同的配置。
-    def __init__(self, *, headless: bool = True, executable_path: str | None = None):
+    # access 只在 run 自建上下文时载入/回收快照；run_page 的上下文状态由调用方管理。
+    def __init__(self, *, headless: bool = True, executable_path: str | None = None,
+                 access: BrowserAccess | None = None, login: bool = False):
         self.headless = headless
         self.executable_path = executable_path
+        self.access = access
+        self.login = login
 
     # 执行规则并记录总体追踪指标；真正的浏览器创建与回收交给 _run。
     def run(self, spec: ScraperSpec) -> ScrapeResult:
@@ -291,12 +359,40 @@ class ScraperExecutor:
             browser = playwright.chromium.launch(
                 headless=self.headless, executable_path=self.executable_path
             )
+            context = None
+            failed = True
             try:
-                context = browser.new_context()
+                context = browser.new_context(
+                    **({"storage_state": self.access.state}
+                       if self.access is not None and self.access.state is not None else {})
+                )
                 page = context.new_page()
-                return self.run_page(spec, page)
+                if self.login:
+                    if self.access is None:
+                        raise ValueError("Manual login requires a browser access handler")
+                    # 显式要求人工登录时允许先展示 HTTP 401/403 页面；用户继续后，
+                    # run_page 会重新导航目标地址并应用正常的 HTTP 与内容检查。
+                    page.goto(str(spec.start_url), wait_until="domcontentloaded", timeout=spec.timeout_ms)
+                    self.access.pending = HandoffRequest(reason="请完成登录，然后继续抓取目标页面。")
+                    self.access.resume()
+                result = self.run_page(spec, page)
+                failed = False
+                return result
             finally:
-                browser.close()
+                try:
+                    # 提取失败前站点也可能轮换 Cookie；关闭浏览器前回收最新状态供修复复用。
+                    if context is not None and self.access is not None and (
+                        self.access.handed_off or self.access.state is not None
+                    ):
+                        try:
+                            self.access.state = context.storage_state()
+                        except Exception:
+                            if not failed:
+                                raise
+                            # 保留原始提取异常，不把可能包含凭据的快照异常写入诊断。
+                            emit("auth.snapshot_failed", reason="Could not capture browser state during cleanup")
+                finally:
+                    browser.close()
 
     # 串行处理列表、详情和分页，维护链接循环检测、记录去重及列表/详情/滚动预算。
     # 调用方拥有列表 Page，本函数只负责关闭自己创建的详情 Page。

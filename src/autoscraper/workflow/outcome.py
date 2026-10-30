@@ -19,6 +19,8 @@ TaskStatus = Literal[
     "unfulfilled",          # 任务未完成或验证失败。
     "unsupported",          # 当前协议无法满足需求。
     "needs_clarification",  # 等待用户补充任务意图。
+    "needs_user",           # 需要用户在可见浏览器中操作。
+    "cancelled",            # 用户取消人工接管。
 ]
 
 # 工作流中的活动阶段；failure_stage=None 保留原有“未标记失败阶段”的含义。
@@ -45,6 +47,7 @@ class TaskOutcome:
     original_url: str | None = None
     clarifications: list[dict] = field(default_factory=list)
     pending_clarification: dict | None = None
+    pending_handoff: dict | None = None  # 只报告待操作原因，不附带认证快照。
 
     # 生成 CLI/追踪共用的 JSON 摘要；区分 Agent 返回、实际执行和任务是否完成。
     # spec_valid 目前仅表示已得到协议模型，不能单凭它判断需求和数据验证是否通过。
@@ -76,6 +79,7 @@ class TaskOutcome:
             "actual_start_url": str(self.spec.start_url) if self.spec else None,
             "clarifications": self.clarifications,
             "pending_clarification": self.pending_clarification,
+            "pending_handoff": self.pending_handoff,
             "validation_scope": "protocol, required fields, count and extraction; "
             "source equivalence and semantic constraints are not independently verified",
         }

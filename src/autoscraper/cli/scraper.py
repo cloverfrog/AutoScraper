@@ -13,6 +13,8 @@ from pydantic import ValidationError
 from autoscraper.scraping.executor import ContentTimeout, NavigationError, ScrapeError, ScraperExecutor
 from autoscraper.scraping.export import export_records
 from autoscraper.scraping.spec import ScraperSpec
+from autoscraper.browser.access import BrowserAccess, HandoffRequired
+from autoscraper.cli.interaction import wait_for_user
 
 
 # 校验输入与输出路径，应用可选超时覆盖，执行并导出；异常转换为 JSON 诊断和退出码。
@@ -23,12 +25,22 @@ def main() -> int:
     parser.add_argument("--content-timeout-ms", type=int)
     parser.add_argument("--navigation-timeout-ms", type=int)
     parser.add_argument("--headed", action="store_true", help="Show the scraping browser")
+    parser.add_argument("--auth-state", type=Path,
+                        help="Load/save private authentication state for this site/account")
+    parser.add_argument("--login", action="store_true",
+                        help="Pause for manual login before scraping (requires --headed)")
     parser.add_argument(
         "--browser-path", dest="executable_path", default=os.getenv("AUTOSCRAPER_BROWSER_PATH"),
         help="Chromium / Chrome executable path (default: AUTOSCRAPER_BROWSER_PATH)",
     )
     args = parser.parse_args()
     try:
+        if args.login and not args.headed:
+            raise ValueError("--login requires --headed")
+        if args.auth_state is not None and args.auth_state.resolve() in {
+            args.spec.resolve(), *(output.resolve() for output in args.output)
+        }:
+            raise ValueError("Authentication state must not share a rule or data path")
         for output in args.output:
             if output.suffix.lower() not in {".csv", ".json"}:
                 raise ValueError("Output extension must be .csv or .json")
@@ -42,9 +54,15 @@ def main() -> int:
             overrides["timeout_ms"] = args.navigation_timeout_ms
         if overrides:
             spec = ScraperSpec.model_validate({**spec.model_dump(), **overrides})
+        access = BrowserAccess(handler=wait_for_user if args.headed else None)
+        if args.auth_state is not None and args.auth_state.exists():
+            access.load(args.auth_state)
         result = ScraperExecutor(
-            headless=not args.headed, executable_path=args.executable_path
+            headless=not args.headed, executable_path=args.executable_path,
+            access=access, login=args.login,
         ).run(spec)
+        if args.auth_state is not None:
+            access.save(args.auth_state)
         for output in args.output:
             export_records(result.records, output, list(spec.all_fields))
         print(
@@ -62,6 +80,10 @@ def main() -> int:
             )
         )
         return 2 if result.errors or result.stop_reason == "detail_limit" else 0
+    except HandoffRequired as exc:
+        print(json.dumps({"status": "cancelled" if exc.cancelled else "needs_user",
+                          "pending_handoff": exc.request.model_dump()}, ensure_ascii=False))
+        return 130 if exc.cancelled else 5
     except (OSError, ValueError, ValidationError, ScrapeError, PlaywrightError) as exc:
         code = (
             exc.code

@@ -15,7 +15,7 @@ from autoscraper.scraping.spec import NonEmpty, ProtocolModel
 class TaskRequirements(ProtocolModel):
     fields: list[NonEmpty] = Field(min_length=1, max_length=50)
     count: int | None = Field(default=None, ge=1, le=1_000_000)
-    unsupported_capabilities: list[Literal["login", "captcha_bypass", "virtual_list"]] = (
+    unsupported_capabilities: list[Literal["captcha_bypass", "virtual_list"]] = (
         Field(default_factory=list)
     )
 
@@ -69,7 +69,8 @@ async def extract_requirements(task: str, llm, fields=None, count=None) -> TaskR
                 "Do not see or use any generated scraping rule. Preserve exact field names "
                 "when given; otherwise choose short descriptive names. Count=null if absent. "
                 "All requested fields are mandatory. Only mark unsupported_capabilities when "
-                "the user EXPLICITLY requires login, CAPTCHA bypass or complex virtual lists. "
+                "the user EXPLICITLY requires CAPTCHA bypass or complex virtual lists. "
+                "Manual login and user-completed verification are supported; do not mark them unsupported. "
                 "Link, click, infinite scroll and one level of detail-page extraction are supported. "
                 "Do not mark detail-page crawling as unsupported."
             ),

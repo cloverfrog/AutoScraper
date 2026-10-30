@@ -48,6 +48,55 @@ def test_executor_uses_configured_browser(monkeypatch, spec, headless, path):
     assert closed == [True]
 
 
+# 快照必须在异常退出时也回收；回收失败不能替换原始提取异常，但正常路径仍应报告回收失败。
+@pytest.mark.parametrize("extraction_fails", [False, True])
+@pytest.mark.parametrize("snapshot_fails", [False, True])
+def test_auth_snapshot_cleanup_preserves_original_error(
+    monkeypatch, spec, extraction_fails, snapshot_fails
+):
+    import autoscraper.scraping.executor as executor
+    from autoscraper.browser.access import BrowserAccess
+    from playwright.sync_api import Error
+
+    events = []
+    diagnostics = []
+    access = BrowserAccess(state={"cookies": [], "origins": []})
+    old_state = access.state
+    new_state = {"cookies": [{"name": "auth", "value": "rotated"}], "origins": []}
+    original = executor.ScrapeError("Broken pagination link")
+    snapshot_error = Error("private-state-must-not-be-logged")
+
+    def snapshot():
+        events.append("snapshot")
+        if snapshot_fails:
+            raise snapshot_error
+        return new_state
+
+    context = SimpleNamespace(new_page=lambda: object(), storage_state=snapshot)
+    browser = SimpleNamespace(new_context=lambda **kwargs: context,
+                              close=lambda: events.append("close"))
+    monkeypatch.setattr(executor, "sync_playwright", lambda: nullcontext(
+        SimpleNamespace(chromium=SimpleNamespace(launch=lambda **kwargs: browser))))
+    monkeypatch.setattr(executor, "emit", lambda *args, **kwargs: diagnostics.append((args, kwargs)))
+    expected = ScrapeResult(stop_reason="no_pagination")
+
+    def extract(*args):
+        if extraction_fails:
+            raise original
+        return expected
+
+    monkeypatch.setattr(ScraperExecutor, "run_page", extract)
+    if extraction_fails or snapshot_fails:
+        with pytest.raises(Exception) as error:
+            ScraperExecutor(access=access).run(spec)
+        assert error.value is (original if extraction_fails else snapshot_error)
+    else:
+        assert ScraperExecutor(access=access).run(spec) is expected
+    assert events == ["snapshot", "close"]
+    assert access.state is (old_state if snapshot_fails else new_state)
+    assert "private-state" not in repr(diagnostics)
+
+
 # CLI 显式路径优先于环境变量；不传 --headed 时所有路径组合都应无头运行。
 @pytest.mark.parametrize(
     "flags, environment_path, expected_headless, expected_path",

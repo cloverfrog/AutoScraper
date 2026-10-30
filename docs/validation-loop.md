@@ -15,7 +15,7 @@ uv run --extra agent autoscraper-agent "https://books.toscrape.com/" "抓取前2
 ## 流程
 
 1. 从原始任务建立 `TaskRequirements`：必需字段、显式请求数量和显式不支持的能力。命令行的 `--fields` / `--count` 优先；明确写出的字段标识符和常见数量表达直接解析，其他自然语言最多调用一次 LLM，且不向该步骤提供候选规则。
-2. 将约束交给单 browser-use Agent。成功时仍提交原有 ScraperSpec；发现登录等当前协议不能表达的情况时，调用 `report_unsupported`，附带具体原因和字段，立即结束。
+2. 将约束交给单 browser-use Agent。成功时仍提交原有 ScraperSpec；登录等人工操作交给 `wait_for_user`，用户继续后在同一浏览器恢复；发现复杂虚拟列表等不支持能力时调用 `report_unsupported`，立即结束。
 3. 独立检查规则：所有必需字段必须存在并标记 required；显式数量必须等于 max_items。沿用 Pydantic 协议校验，不扩展 ScraperSpec，不允许脚本。
 4. 使用现有 Executor 试跑候选规则，默认最多 100 条、5 页；导航超时沿用规则设置。检查提取异常、空结果、逐条缺失/空字段、数量不足和分页循环。
 5. 可恢复的问题把错误码、字段、原因和上一份规则反馈给同一个 Agent 工作流，再生成并重新验证。默认最多修复两次，即总共最多三份候选规则；不会重新提取或放宽原始需求。不支持的能力、预算不足、需求解析失败、验证页数预算不足直接停止。
@@ -32,6 +32,8 @@ uv run --extra agent autoscraper-agent "https://books.toscrape.com/" "抓取前2
 | `unsupported` | 当前协议无法满足必需字段/能力 | 3 |
 | `unfulfilled` | 验证不通过、修复耗尽或预算/模型错误 | 1 |
 | `needs_clarification` | 等待用户补充任务意图，没有默认选择 | 4 |
+| `needs_user` | 需要用户在可见浏览器中操作，当前无法交互 | 5 |
+| `cancelled` | 用户取消人工接管 | 130 |
 
 内部状态使用 `workflow/outcome.py` 的 `TaskStatus` 和 `TaskStage` 类型，分别约束
 任务结果及 `exploration` / `validation` / `execution` 阶段；执行器的停止原因使用
@@ -52,6 +54,11 @@ uv run --extra agent autoscraper-agent "https://books.toscrape.com/" "抓取前2
 `content_timeout`。均保留目标 URL 和原始错误，返回 `unfulfilled`，不交给 Agent Repair，
 不自动重试。详情页 `on_item_error=skip` 仍保留类型，避免因缺少记录触发规则修复。
 CSS 语法错误、多匹配字段和未发生等待超时的必填字段缺失等规则问题仍可进入有限修复。
+
+HTTP 错误文档可能通过 JavaScript 跳转到正常 SPA 入口。执行器在原导航预算内，
+最多等待 1 秒让错误页发起主文档跳转；跳转开始后，其加载及后续跳转仍共用原超时。
+最终主文档须正常响应并完成 DOMContentLoaded 才继续提取。没有跳转或跳转后仍是 HTTP
+错误时照常失败；iframe/资源请求成功不会掩盖主文档错误，也不会重新发送原请求。
 
 规则已生成但验证或全量执行遇到上述运行时错误时，最终 JSON 使用
 `agent_status: "completed"` 和 `failure_stage` 区分生成与失败阶段，并在

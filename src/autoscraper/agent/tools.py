@@ -12,6 +12,7 @@ from browser_use import ActionResult, Tools
 from browser_use.browser.session import BrowserSession
 
 from .clarification import ClarificationRequest, ClarificationSession
+from autoscraper.browser.access import BrowserAccess, HandoffRequest
 from .dom import INSPECT_SCRIPT, SELECTOR_SCRIPT, BATCH_SELECTOR_SCRIPT
 from .submission import SubmissionChecks, page_key
 from autoscraper.scraping.spec import FieldSpec, ScraperSpec
@@ -217,6 +218,7 @@ def build_tools(
     content_timeout_ms: int = 30000,
     wait_llm=None,
     clarification: ClarificationSession | None = None,
+    access: BrowserAccess | None = None,
     check_submission: bool = False,
     requirements=None,
 ) -> Tools:
@@ -226,6 +228,19 @@ def build_tools(
     for name in list(tools.registry.registry.actions):
         if name not in {"navigate", "done", "click", "scroll"}:
             tools.registry.exclude_action(name)
+
+    if access is not None:
+        # 工具只登记接管请求并终止本批动作，真正等待用户发生在 Agent.run 返回之后。
+        @tools.action(
+            description="Request human browser control when login, QR code, verification or "
+            "another manual operation blocks access. Explain the observed evidence and needed "
+            "operation in reason. Stops this action batch until the user continues or cancels. "
+            "Never request credentials in chat."
+        )
+        async def wait_for_user(reason: str) -> ActionResult:
+            access.pending = HandoffRequest(reason=reason)
+            return ActionResult(is_done=True, success=False,
+                                extracted_content='{"status":"needs_user"}')
 
     # 保存内置滚动入口：普通页面复用框架动作，自定义工具只补充记录检查和有界循环。
     builtin_scroll = tools.registry.registry.actions["scroll"].function

@@ -9,6 +9,7 @@ import time
 from contextlib import nullcontext
 
 from playwright.sync_api import Error as PlaywrightError
+from autoscraper.browser.access import BrowserAccess, HandoffRequired
 
 from autoscraper.agent.explorer import (
     AgentError,
@@ -45,6 +46,7 @@ from autoscraper.observability.tracing import Trace, emit, labels, operation, tr
 # 同步任务入口：在有限预算内完成需求解析、探索、验证和可选完整抓取。
 # execute=False 也会试抓取，但可返回 sample_only；execute=True 需要完整数据验证通过。
 # ask_user 注入交互方式；trace 由装饰器管理，函数最终返回 TaskOutcome 而不写产物文件。
+# access 在探索、修复与执行之间共享最新认证快照，不把凭据放入 TaskOutcome 或模型反馈。
 @traced_task
 def run_task(
     url: str,
@@ -57,6 +59,7 @@ def run_task(
     execute: bool = False,
     ask_user: ClarificationHandler | None = None,
     trace: Trace | None = None,
+    access: BrowserAccess | None = None,
 ) -> TaskOutcome:
     from autoscraper.agent.explorer import build_task
 
@@ -70,13 +73,14 @@ def run_task(
     wait_llm = make_wait_llm(settings)
     deadline = time.monotonic() + settings.timeout_seconds
     clarification = ClarificationSession(handler=ask_user)
+    access = access if access is not None else BrowserAccess()
     outcome = TaskOutcome(
         status="unfulfilled", original_url=url, clarifications=clarification.history
     )
 
     # 计算共享剩余时长并检查主模型调用预算；人工问答等待加回截止时间。
     def remaining():
-        seconds = deadline + clarification.waiting_seconds - time.monotonic()
+        seconds = deadline + clarification.waiting_seconds + access.waiting_seconds - time.monotonic()
         if seconds <= 0 or llm.calls >= settings.max_steps:
             raise AgentError("Shared time or LLM call budget exhausted")
         return seconds
@@ -114,7 +118,7 @@ def run_task(
             return outcome
         # 试抓取、完整执行和各轮修复都沿用探索阶段的浏览器设置。
         executor = ScraperExecutor(
-            headless=settings.headless, executable_path=settings.executable_path
+            headless=settings.headless, executable_path=settings.executable_path, access=access
         )
         # 首次生成也算一次尝试，因此总尝试数为 max_repairs + 1。
         previous_spec = None
@@ -163,6 +167,7 @@ def run_task(
                             llm=llm,
                             wait_llm=wait_llm,
                             clarification=clarification,
+                            access=access,
                         )
                     )
                     candidate = candidate.model_copy(
@@ -188,6 +193,10 @@ def run_task(
                             issues, complete = validate_execution_data(result, requirements)
                         outcome.sample_only = not complete
                     outcome.spec, outcome.data = candidate, result
+                except HandoffRequired as exc:
+                    outcome.status = "cancelled" if exc.cancelled else "needs_user"
+                    outcome.pending_handoff = exc.request.model_dump()
+                    return outcome
                 except ClarificationRequired as exc:
                     outcome.status = "needs_clarification"
                     outcome.pending_clarification = exc.request.model_dump()
