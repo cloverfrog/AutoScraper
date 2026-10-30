@@ -316,7 +316,7 @@ def test_explicit_unsupported_requirements_skip_browser(settings, workflow, monk
     module, model = workflow
 
     async def requirements(*args):
-        return TaskRequirements(fields=["description"], unsupported_capabilities=["login"])
+        return TaskRequirements(fields=["description"], unsupported_capabilities=["captcha_bypass"])
 
     monkeypatch.setattr(module, "extract_requirements", requirements)
     monkeypatch.setattr(

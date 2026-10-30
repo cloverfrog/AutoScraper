@@ -13,6 +13,7 @@ from playwright.sync_api import Locator, Page, TimeoutError as PlaywrightTimeout
 from pydantic import HttpUrl, TypeAdapter
 
 from .spec import FieldSpec, ScraperSpec
+from autoscraper.browser.access import BrowserAccess, HandoffRequest
 from .progress import STATE_SCRIPT, state_options, progressed
 from .scrolling import scroll_step
 from autoscraper.observability.tracing import emit, operation
@@ -271,9 +272,12 @@ def advance_dynamic(page, spec, options, before, scrolls):
 class ScraperExecutor:
     # 浏览器启动配置属于本次运行，不写入可复用的 ScraperSpec。
     # 默认无头运行；工作流会传入与 Agent 探索相同的配置。
-    def __init__(self, *, headless: bool = True, executable_path: str | None = None):
+    def __init__(self, *, headless: bool = True, executable_path: str | None = None,
+                 access: BrowserAccess | None = None, login: bool = False):
         self.headless = headless
         self.executable_path = executable_path
+        self.access = access
+        self.login = login
 
     # 执行规则并记录总体追踪指标；真正的浏览器创建与回收交给 _run。
     def run(self, spec: ScraperSpec) -> ScrapeResult:
@@ -292,9 +296,23 @@ class ScraperExecutor:
                 headless=self.headless, executable_path=self.executable_path
             )
             try:
-                context = browser.new_context()
+                context = browser.new_context(
+                    **({"storage_state": self.access.state}
+                       if self.access is not None and self.access.state is not None else {})
+                )
                 page = context.new_page()
-                return self.run_page(spec, page)
+                if self.login:
+                    if self.access is None:
+                        raise ValueError("Manual login requires a browser access handler")
+                    # Explicit login may start on an HTTP 401/403 page; let the user
+                    # operate it before applying normal navigation/extraction checks.
+                    page.goto(str(spec.start_url), wait_until="domcontentloaded", timeout=spec.timeout_ms)
+                    self.access.pending = HandoffRequest(reason="请完成登录，然后继续抓取目标页面。")
+                    self.access.resume()
+                result = self.run_page(spec, page)
+                if self.access is not None and (self.access.handed_off or self.access.state is not None):
+                    self.access.state = context.storage_state()
+                return result
             finally:
                 browser.close()
 

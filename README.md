@@ -65,7 +65,7 @@ uv run --extra agent autoscraper-agent "https://books.toscrape.com/" "抓取前2
 
 换网站时，替换命令里的 URL 和自然语言需求即可。
 
-列表字段和一层详情页字段均可抓取；登录、复杂虚拟列表等超出当前协议的场景，会返回 `status: "unsupported"` 并以退出码 3 结束，不再静默省略字段。其他验证失败返回 `unfulfilled` / 退出码 1，保留已有规则和数据文件。运行时导航或内容超时时，还会另存未验证的候选规则。具体反馈见终端最后一条 JSON。
+列表字段和一层详情页字段均可抓取；登录可以交给用户手动完成，见下方“人工登录”。复杂虚拟列表、验证码绕过等不支持的场景会返回 `status: "unsupported"` 并以退出码 3 结束，不再静默省略字段。其他验证失败返回 `unfulfilled` / 退出码 1，保留已有规则和数据文件。运行时导航或内容超时时，还会另存未验证的候选规则。具体反馈见终端最后一条 JSON。
 
 需要精确固定字段和数量时，可在上述命令中加 `--fields title price --count 25`。否则会先独立解析自然语言需求，再生成和验证规则。
 
@@ -134,6 +134,7 @@ Agent 工作流判定为验证失败，不覆盖已有输出。只运行 Executo
 | `--spec-output` | 规则输出路径，必填 | — |
 | `--output` | 数据输出路径，可重复指定 CSV / JSON | 不抓取数据 |
 | `--headed` | 显示探索、试抓取和正式抓取浏览器 | 无头模式 |
+| `--auth-state` | 显式加载/保存此网站、账号的认证状态文件 | 仅本次任务中传递 |
 | `--model` | LLM 模型名 | `deepseek-flash` |
 | `--base-url` | 模型接口地址 | `https://api.deepseek.com` |
 | `--max-steps` | 需求解析、探索、修复共享的 LLM 调用上限 | 12 |
@@ -185,6 +186,42 @@ Agent 执行轨迹默认保存至 `.agent-runtime/runs/<开始时间>_<run_id>/`
 独立验证覆盖协议、必需字段、数量和实际提取；用户允许替代入口不代表内容或顺序等价
 已获证明。语义约束依赖主 Agent 遵守，程序不会仅凭 URL 差异判断违规；主 Agent
 仍可能漏判需要澄清的情形。这是需求澄清能力，不是强制操作审批或通用语义验证系统。
+
+## 人工登录
+
+需要登录的网站使用 `--headed` 在交互终端运行。Agent 遇到登录、扫码或验证码等阻塞时，
+可以调用 `wait_for_user`，暂停自动操作。用户直接在浏览器完成操作，回到终端按 **Enter**
+继续，输入 `q` 或按 Ctrl+C 取消。请勿在终端输入账号、密码或验证码。
+
+```bash
+uv run --extra agent autoscraper-agent "https://example.com/reports" "抓取前20条，字段名为title、price" --headed --spec-output output/reports.json --output output/reports-data.json
+```
+
+继续后 Agent 重新观察页面并确认目标可访问，保留原任务和浏览器继续探索。
+按 Enter 本身不表示认证成功；程序不会持续监听并自动接回浏览器。
+人工等待不占探索超时，恢复不重置模型调用预算，也不新增一次修复。
+
+Cookie 和 localStorage 认证状态默认只在本次任务中传递，供修复、试抓取及正式执行使用。
+需要下次复用时，显式加入 `--auth-state .agent-runtime/auth/example-work.json`；
+文件存在时加载，完成探索/执行后更新。不同网站/账号使用不同文件，删除文件即可清除。
+状态文件与规则、数据文件必须使用不同路径。`.agent-runtime/` 已被 Git 忽略，状态文件
+使用私有文件权限并原子替换；它包含敏感凭据，不应提交到仓库或分享。
+本实现不记录用户键入的账号密码，也不将状态快照交给模型或追踪记录。
+
+独立 Executor 可以复用该状态，也可以在抓取前主动暂停等待手动登录：
+
+```bash
+uv run autoscraper output/reports.json --output output/reports-data.json --auth-state .agent-runtime/auth/example-work.json
+uv run autoscraper output/reports.json --output output/reports-data.json --headed --login --auth-state .agent-runtime/auth/example-work.json
+```
+
+无头模式、非交互 stdin 或 `--non-interactive` 下 Agent 遇到人工操作请求时，返回
+`status: "needs_user"`、`pending_handoff` 和退出码 **5**，保留已有输出，关闭浏览器；
+此时需在可见浏览器/交互终端重新运行。取消返回 `cancelled` 和退出码 **130**。
+
+这一版支持同次进程中的人工接管，以及 Cookie/localStorage 快照复用。
+sessionStorage、IndexedDB 等认证方式和抓取中途认证失效后的自动识别、断点恢复尚未支持。
+执行器不会把普通内容超时直接认定为登录失效；状态过期时可用 `--headed --login` 重新登录后重跑。
 
 ## 浏览器与缓存路径
 
@@ -248,6 +285,7 @@ PowerShell 先执行 `$env:RUN_LIVE_REPAIR = "1"`，再运行上述 pytest 命�
 
 ```text
 src/autoscraper/
+├── browser/        # 人工接管、任务内认证状态与显式状态文件
 ├── agent/          # 浏览器探索、工具、模型适配和需求澄清
 │   ├── explorer.py
 │   ├── tools.py

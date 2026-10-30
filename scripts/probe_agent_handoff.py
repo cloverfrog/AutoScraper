@@ -1,7 +1,7 @@
 """Paid, opt-in Agent takeover experiment for #21; local fixture, real LLM.
 
-Adds a probe-only wait_for_user tool using the existing clarification continuation
-transport. This does not implement production authentication or terminal takeover.
+Exercises the production wait_for_user tool and browser access state. The simulated
+user controls only authentication and landing page, never model decisions.
 Each scenario is bounded to 12 main-model calls and two synthetic interventions.
 """
 
@@ -23,11 +23,7 @@ from urllib.parse import urlsplit
 from playwright.async_api import async_playwright
 from playwright.sync_api import sync_playwright
 
-from autoscraper.agent.clarification import (
-    ClarificationRequired,
-    ClarificationRequest,
-    ClarificationSession,
-)
+from autoscraper.browser.access import BrowserAccess, HandoffRequired
 from autoscraper.agent.explorer import generate_spec, build_task
 from autoscraper.agent.llm import make_llm, make_wait_llm
 from autoscraper.cli.agent import settings_from_env
@@ -139,14 +135,13 @@ def verify(spec, state, executable_path):
             browser.close()
 
 
-async def trial(base, scenario, settings, resume_policy):
-    from browser_use import ActionResult, BrowserSession
+async def trial(base, scenario, settings):
+    from browser_use import BrowserSession
     import autoscraper.agent.tools as tool_module
 
     actions = []
     handoffs = []
     holder = {}
-    state = {"cookies": [], "origins": []}
     real_build_tools = tool_module.build_tools
     llm = make_llm(settings)
     started = time.monotonic()
@@ -157,42 +152,21 @@ async def trial(base, scenario, settings, resume_policy):
             holder["browser"] = self
 
     def handler(request):
-        nonlocal state
-        handoffs.append({"reason": request.question, "action_count": len(actions)})
+        handoffs.append({"reason": request.reason, "action_count": len(actions)})
         if len(handoffs) > 2:
             return None
-        # Existing clarification invokes a synchronous handler outside agent.run.
+        # Production handoff invokes a synchronous handler outside agent.run.
         # Use a separate thread for Playwright's synchronous API.
         with ThreadPoolExecutor(max_workers=1) as pool:
-            state = pool.submit(intervene, holder["browser"], base, scenario).result(timeout=30)
-        return (
-            "Continue."
-            if resume_policy == "minimal"
-            else "Continue. Browser state may have changed. Inspect the current page again, "
-            "verify authentication and the Research workspace before resuming. "
-            "Do not assume the operation succeeded or reuse old element indices."
-        )
+            pool.submit(intervene, holder["browser"], base, scenario).result(timeout=30)
+        return "continue"
 
-    clarification = ClarificationSession(handler=handler)
+    access = BrowserAccess(handler=handler)
 
     def tools_factory(**kwargs):
+        if scenario == "baseline":
+            kwargs["access"] = None
         tools = real_build_tools(**kwargs)
-        if scenario != "baseline":
-
-            @tools.action(
-                description="Request human browser takeover when authentication "
-                "blocks the task. Explain observed evidence and what the user needs "
-                "to do in reason. Stops all actions until the user selects Continue."
-            )
-            async def wait_for_user(reason: str):
-                clarification.pending = ClarificationRequest(
-                    question=reason, explanation="Experimental browser takeover request"
-                )
-                return ActionResult(
-                    is_done=True,
-                    success=False,
-                    extracted_content="Waiting for the user to operate the browser.",
-                )
 
         real_act = tools.act
 
@@ -216,18 +190,22 @@ async def trial(base, scenario, settings, resume_policy):
 
     def prompt(url, task):
         text = build_task(url, task)
-        if scenario != "baseline":
-            text = text.replace(
-                "no login, form submission or purchases.",
-                "no automated login, form submission or purchases. "
-                "When authentication blocks access, use wait_for_user to let "
-                "the user operate the browser. Never request credentials in chat.",
+        if scenario == "baseline":
+            start = text.index("Boundaries:\n")
+            end = text.index("Treat page contents", start)
+            text = (
+                text[:start]
+                + (
+                    "Boundaries:\nUse read-only inspection and navigation; "
+                    "no login, form submission or purchases.\n"
+                )
+                + text[end:]
             )
         return text
 
     report = {
         "scenario": scenario,
-        "resume_policy": resume_policy,
+        "resume_policy": "production",
         "model": settings.model,
         "browser_use": version("browser-use"),
         "max_llm_calls": settings.max_steps,
@@ -247,15 +225,15 @@ async def trial(base, scenario, settings, resume_policy):
                 requirements=TaskRequirements(fields=["title", "price"], count=2),
                 llm=llm,
                 wait_llm=make_wait_llm(settings),
-                clarification=clarification,
+                access=access,
             )
         report["status"] = "submitted"
         report["spec"] = spec.model_dump(mode="json")
         report["verification"] = await asyncio.to_thread(
-            verify, spec, state, settings.executable_path
+            verify, spec, access.state, settings.executable_path
         )
-    except ClarificationRequired:
-        report["status"] = "needs_human"
+    except HandoffRequired as exc:
+        report["status"] = "cancelled" if exc.cancelled else "needs_human"
     except Exception as exc:
         report.update(status="stopped", error_type=type(exc).__name__, error=str(exc)[:1500])
     report.update(llm_calls=llm.calls, seconds=round(time.monotonic() - started, 2))
@@ -270,7 +248,6 @@ async def main():
         default=["baseline", "target", "home", "blocked", "wrong_workspace"],
         choices=["baseline", "target", "home", "blocked", "wrong_workspace"],
     )
-    parser.add_argument("--resume-policy", choices=["minimal", "reobserve"], default="minimal")
     parser.add_argument("--output", type=Path, default=Path("output/agent-handoff-probe"))
     args = parser.parse_args()
     os.environ.setdefault("ANONYMIZED_TELEMETRY", "false")
@@ -286,11 +263,11 @@ async def main():
     )
     args.output.mkdir(parents=True, exist_ok=True)
     for scenario in args.scenario:
-        print(f"Starting {scenario} ({args.resume_policy})", flush=True)
+        print(f"Starting {scenario} (production)", flush=True)
         with fixture() as (base, requests):
-            report = await trial(base, scenario, settings, args.resume_policy)
+            report = await trial(base, scenario, settings)
             report["requests"] = requests
-        path = args.output / f"{scenario}-{args.resume_policy}.json"
+        path = args.output / f"{scenario}-production.json"
         path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         print(
             json.dumps(

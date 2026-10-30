@@ -11,6 +11,8 @@ from pathlib import Path
 
 from autoscraper.agent.explorer import AgentError, AgentSettings, save_spec
 from autoscraper.agent.clarification import ClarificationRequest
+from autoscraper.browser.access import BrowserAccess
+from autoscraper.cli.interaction import wait_for_user
 from autoscraper.scraping.export import export_records
 from autoscraper.workflow.validation import ValidationSettings
 from autoscraper.workflow.runner import run_task
@@ -97,10 +99,12 @@ def main() -> int:
     parser.add_argument("--max-wait-llm-calls", type=int, default=8)
     parser.add_argument("--browser-path", dest="executable_path")
     parser.add_argument("--headed", action="store_true")
+    parser.add_argument("--auth-state", type=Path,
+                        help="Load/save private authentication state for this site/account")
     parser.add_argument(
         "--non-interactive",
         action="store_true",
-        help="Return needs_clarification instead of prompting for task ambiguities",
+        help="Return needs_clarification/needs_user instead of prompting",
     )
     parser.add_argument("--fields", nargs="+", help="Authoritative required field names")
     parser.add_argument("--count", type=int, help="Authoritative requested record count")
@@ -132,6 +136,8 @@ def main() -> int:
 def _execute(args, trace) -> int:
     try:
         paths = [args.spec_output.resolve(), *(p.resolve() for p in args.output)]
+        if args.auth_state is not None:
+            paths.append(args.auth_state.resolve())
         if len(paths) != len(set(paths)):
             raise ValueError("Rule and data output paths must be distinct")
         if args.spec_output.suffix.lower() != ".json":
@@ -163,6 +169,11 @@ def _execute(args, trace) -> int:
             max_detail_pages=args.validation_detail_pages,
             timeout_ms=args.validation_timeout_ms,
         )
+        access = BrowserAccess(
+            handler=wait_for_user if args.headed and not args.non_interactive else None
+        )
+        if args.auth_state is not None and args.auth_state.exists():
+            access.load(args.auth_state)
         outcome = run_task(
             args.url,
             args.task,
@@ -172,8 +183,13 @@ def _execute(args, trace) -> int:
             count=args.count,
             execute=bool(args.output),
             ask_user=None if args.non_interactive else ask_user,
+            access=access,
         )
+        if args.auth_state is not None:
+            access.save(args.auth_state)
         summary = outcome.summary()
+        if outcome.status == "needs_user":
+            summary["resume_hint"] = "请使用 --headed 在交互终端重新运行，并在浏览器中操作。"
         trace.outcome = summary
         emit("cli.result", **summary)
         if outcome.status not in {"success", "validated"}:
@@ -189,6 +205,10 @@ def _execute(args, trace) -> int:
             print(json.dumps(summary, ensure_ascii=False))
             if outcome.status == "needs_clarification":
                 return 4
+            if outcome.status == "needs_user":
+                return 5
+            if outcome.status == "cancelled":
+                return 130
             return 3 if outcome.status == "unsupported" else 1
         # 需求约束、执行和数据检查通过后，才写正式规则与数据文件。
         with operation("artifacts"):

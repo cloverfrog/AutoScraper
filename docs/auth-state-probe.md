@@ -5,6 +5,10 @@
 
 真实模型的识别、接管与恢复行为另见 [Agent 人工接管实验](agent-handoff-probe.md)。
 
+后续实现还验证到：Playwright 在页面导航完成后才通过 CDP 接入时，可能不知道该页面
+已有的 Origin，直接 storage_state 会遗漏 localStorage。生产实现会补读现有页面/iframe
+的 localStorage，并合并本任务已捕获的 Origin；原探针在导航前接入，未覆盖这一差异。
+
 ## 如何复现
 
 安装项目的 agent 依赖和 Playwright Chromium 后执行：

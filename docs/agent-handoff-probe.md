@@ -3,6 +3,10 @@
 本次关注真实 Agent 能否识别登录阻塞、请求用户操作、在操作后继续原任务。
 这与 [认证状态传递探针](auth-state-probe.md) 是两个独立实验。
 
+以下五场记录来自实现前的 `60e8525` 提交。当前脚本已改为直接使用生产
+`wait_for_user` 与 BrowserAccess，不再临时注册接管工具；baseline 仅在实验内禁用
+接管能力并恢复旧边界作为对照。原始实验可通过上述提交复现。
+
 ## 实验设计
 
 使用现有 `generate_spec()`、browser-use Agent、DeepSeek Responses 适配器和提交检查。
@@ -83,5 +87,21 @@ uv run --extra agent python scripts/probe_agent_handoff.py
 `output/agent-handoff-probe/`，包括动作参数、工具返回、接管请求、HTTP 访问记录、
 候选规则和独立数据验证结果，不包含 API Key 或认证状态快照。
 
-`--resume-policy reobserve` 可额外测试明确要求重新观察的恢复提示词；本报告只运行了
-默认的 minimal 策略，不提供两种恢复提示词之间的效果比较。
+历史实验仅运行 minimal 恢复策略，没有两种恢复提示词之间的效果比较。
+当前脚本使用生产恢复提示词，输出文件名为 `<场景>-production.json`。
+
+## 生产实现验收
+
+接入独立的 BrowserAccess、手动继续/取消、Cookie/localStorage 快照传递后，再用真实
+`deepseek-flash` 验证目标列表、首页落点、错误工作空间三个场景。三个场景均生成了
+正确规则，独立 Executor 提取到正确的 Research 两条记录，成功运行分别使用 4、6、6 次调用。
+
+首轮目标页场景在第 4 次模型调用发生连接错误、首页场景在第 1 次调用发生连接错误；
+各单独重试一次后通过。首轮保存在 `output/agent-handoff-implementation/`，重试保存在
+`output/agent-handoff-implementation-retry/`，两轮共计 21 次主模型请求，保留失败记录。
+
+默认回归曾运行 438 项通过、5 项可选线上/付费测试跳过；随后补充快照保留及 HTTP 401
+手动登录用例后，接管/浏览器配置定向测试 27 项通过。模型替身与真实本地 Chromium
+验证了动作批次暂停、同一 Agent 恢复、人工等待不占超时、取消/非交互输出保护、
+晚接入 CDP 的 localStorage 捕获、试抓取到正式执行的状态更新、磁盘状态在新 Agent
+和独立 Executor 中复用、认证文件权限，以及快照值不出现在执行追踪中。
