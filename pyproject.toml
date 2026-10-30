@@ -11,8 +11,10 @@ dev = ["pytest>=8,<10", "ruff>=0.9"]
 [project.scripts]
 autoscraper = "autoscraper.cli.scraper:main"
 autoscraper-agent = "autoscraper.cli.agent:main"
+autoscraper-ui = "autoscraper.ui.app:main"
 
 [project.optional-dependencies]
+ui = ["gradio>=6,<7"]
 agent = [
     "browser-use==0.13.11",
 ]
