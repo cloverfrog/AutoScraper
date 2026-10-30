@@ -3,6 +3,8 @@
 本次只验证浏览器之间的认证状态传递，不增加生产登录功能，不修改 ScraperSpec。
 关联 [Issue #21](https://github.com/cloverfrog/AutoScraper/issues/21)。
 
+真实模型的识别、接管与恢复行为另见 [Agent 人工接管实验](agent-handoff-probe.md)。
+
 ## 如何复现
 
 安装项目的 agent 依赖和 Playwright Chromium 后执行：
