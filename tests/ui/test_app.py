@@ -46,7 +46,8 @@ def test_app_clarification_round_trip(tmp_path):
 
 
 # 从实际控件默认值调用启动回调，保证表单字段和配置顺序一致，并保留零预算。
-def test_app_start_defaults_and_zero_wait_budget(tmp_path, monkeypatch):
+@pytest.mark.parametrize("optional_value", [None, 0, 1234])
+def test_app_start_defaults_and_zero_wait_budget(tmp_path, monkeypatch, optional_value):
     manager = JobManager(tmp_path)
     configs = []
     monkeypatch.setattr(manager, "start", lambda config: configs.append(config) or "job-id")
@@ -55,11 +56,22 @@ def test_app_start_defaults_and_zero_wait_budget(tmp_path, monkeypatch):
     values = [component.value for component in start_fn.inputs]
     index = next(i for i, c in enumerate(start_fn.inputs) if c.label == "内容等待模型调用预算")
     values[index] = 0
+    optional_labels = ("请求条数", "验证超时", "内容等待超时", "规则导航超时")
+    for i, component in enumerate(start_fn.inputs):
+        if component.label.startswith(optional_labels):
+            values[i] = optional_value
+        if component.label == "最大修复次数":
+            values[i] = 0
     assert start_fn.fn(*values) == ("job-id", "任务已启动")
     assert configs[0].agent_options["max_wait_llm_calls"] == 0
     assert configs[0].agent_options["max_steps"] == 12
     assert configs[0].validation_options["max_items"] == 100
-    assert configs[0].content_timeout_ms is None
+    expected = optional_value or None
+    assert configs[0].content_timeout_ms == expected
+    assert configs[0].navigation_timeout_ms == expected
+    assert configs[0].count == expected
+    assert configs[0].validation_options.get("timeout_ms") == expected
+    assert configs[0].validation_options["max_repairs"] == 0
 
 
 # 实际 HTTP 文件路由仅开放产物，认证和 Trace 即使知道路径也不能下载。
@@ -217,3 +229,62 @@ def test_browser_upload_and_real_scrape(tmp_path):
         fixture.shutdown()
         fixture.server_close()
         fixture_thread.join(2)
+
+
+# 从真实网页提交空值、零及正数，覆盖组件序列化后到 AgentSettings 的配置链路。
+def test_browser_optional_numbers_use_defaults(tmp_path, monkeypatch):
+    import re
+    import time
+
+    from playwright.sync_api import expect, sync_playwright
+
+    from autoscraper.cli.agent import settings_from_env
+    from autoscraper.workflow.validation import ValidationSettings
+
+    monkeypatch.setenv("AUTOSCRAPER_API_KEY", "test-only-key")
+    manager = JobManager(tmp_path)
+    configs = []
+
+    def start(config):
+        # 直接使用实际模型校验，不启动浏览器探索或产生模型费用。
+        settings = settings_from_env(content_timeout_ms=config.content_timeout_ms)
+        validation = ValidationSettings(**config.validation_options)
+        configs.append((config, settings, validation))
+        return f"job-{len(configs)}"
+
+    monkeypatch.setattr(manager, "start", start)
+    app = build_app(manager)
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+    try:
+        app.launch(server_name="127.0.0.1", server_port=port, share=False,
+                   prevent_thread_lock=True, quiet=True)
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch()
+            page = browser.new_page()
+            page.goto(f"http://127.0.0.1:{port}")
+            page.get_by_role("button", name=re.compile("高级设置")).click()
+            labels = ("请求条数", "验证超时", "内容等待超时", "规则导航超时")
+            for value in (None, 0, 1234):
+                if value is not None:
+                    for label in labels:
+                        page.get_by_label(re.compile("^" + label)).fill(str(value))
+                page.get_by_role("button", name="生成规则", exact=True).click()
+                expect(page.get_by_label("任务状态", exact=True)).to_have_value("任务已启动")
+                # 页面状态可能与上一轮相同，通过任务 ID 确认本次提交已完成。
+                deadline = time.monotonic() + 5
+                expected_count = (None, 0, 1234).index(value) + 1
+                while len(configs) < expected_count and time.monotonic() < deadline:
+                    page.wait_for_timeout(20)
+                assert len(configs) == expected_count
+                config, settings, validation = configs[-1]
+                expected = value or None
+                assert config.count == expected
+                assert config.content_timeout_ms == expected
+                assert config.navigation_timeout_ms == expected
+                assert validation.timeout_ms == expected
+                assert settings.content_timeout_ms == (expected or 30000)
+            browser.close()
+    finally:
+        app.close()

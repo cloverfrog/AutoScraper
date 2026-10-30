@@ -16,6 +16,10 @@ def build_app(manager):
     def start(mode, *values):
         keys = list(controls)
         data = dict(zip(keys, values, strict=True))
+        # 可选正整数的 0/空值表示不覆盖默认配置；不能影响允许为零的调用和修复预算。
+        for key in ("count", "timeout_ms", "content_timeout_ms", "navigation_timeout_ms"):
+            if data[key] in (None, "", 0):
+                data[key] = None
         agent_options = {
             key: (None if data[key] == "" else data[key]) for key in (
                 "model", "base_url", "max_steps", "timeout_seconds", "llm_timeout_seconds",
@@ -126,7 +130,10 @@ def build_app(manager):
             controls["browser_path"] = gr.Textbox(label="浏览器程序路径（留空使用环境配置）")
             with gr.Row():
                 controls["fields"] = gr.Textbox(label="必需字段（空格分隔，仅 Agent）")
-                controls["count"] = gr.Number(label="请求条数（可选，仅 Agent）", precision=0)
+                controls["count"] = gr.Number(
+                    label="请求条数（可选，仅 Agent）", precision=0, minimum=0,
+                    placeholder="不额外限定条数", info="0 或留空表示不覆盖。",
+                )
             with gr.Row():
                 for key, label, value in (
                     ("max_steps", "主模型调用预算", 12),
@@ -144,13 +151,21 @@ def build_app(manager):
                     ("max_detail_pages", "验证详情页上限", 100),
                     ("timeout_ms", "验证超时（毫秒，可选）", None),
                 ):
-                    controls[key] = gr.Number(label=label, value=value, precision=0)
+                    controls[key] = gr.Number(
+                        label=label, value=value, precision=0,
+                        placeholder="沿用默认" if key == "timeout_ms" else None,
+                        info="0 或留空表示不覆盖。" if key == "timeout_ms" else None,
+                        minimum=0 if key == "timeout_ms" else None,
+                    )
             with gr.Row():
                 controls["content_timeout_ms"] = gr.Number(
                     label="内容等待超时（毫秒，留空沿用默认）", precision=0,
+                    minimum=0, placeholder="Agent 默认 30000；执行规则时沿用规则",
+                    info="0 或留空表示不覆盖。",
                 )
                 controls["navigation_timeout_ms"] = gr.Number(
                     label="规则导航超时（毫秒，留空沿用规则）", precision=0,
+                    minimum=0, placeholder="沿用规则", info="0 或留空表示不覆盖。",
                 )
         status = gr.Textbox(label="任务状态", value="就绪", interactive=False)
         with gr.Group(visible=False) as interaction:
