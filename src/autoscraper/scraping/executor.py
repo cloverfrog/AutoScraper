@@ -359,6 +359,8 @@ class ScraperExecutor:
             browser = playwright.chromium.launch(
                 headless=self.headless, executable_path=self.executable_path
             )
+            context = None
+            failed = True
             try:
                 context = browser.new_context(
                     **({"storage_state": self.access.state}
@@ -374,11 +376,23 @@ class ScraperExecutor:
                     self.access.pending = HandoffRequest(reason="请完成登录，然后继续抓取目标页面。")
                     self.access.resume()
                 result = self.run_page(spec, page)
-                if self.access is not None and (self.access.handed_off or self.access.state is not None):
-                    self.access.state = context.storage_state()
+                failed = False
                 return result
             finally:
-                browser.close()
+                try:
+                    # 提取失败前站点也可能轮换 Cookie；关闭浏览器前回收最新状态供修复复用。
+                    if context is not None and self.access is not None and (
+                        self.access.handed_off or self.access.state is not None
+                    ):
+                        try:
+                            self.access.state = context.storage_state()
+                        except Exception:
+                            if not failed:
+                                raise
+                            # 保留原始提取异常，不把可能包含凭据的快照异常写入诊断。
+                            emit("auth.snapshot_failed", reason="Could not capture browser state during cleanup")
+                finally:
+                    browser.close()
 
     # 串行处理列表、详情和分页，维护链接循环检测、记录去重及列表/详情/滚动预算。
     # 调用方拥有列表 Page，本函数只负责关闭自己创建的详情 Page。

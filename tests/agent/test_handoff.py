@@ -451,3 +451,52 @@ def test_executor_explicit_login_accepts_401_and_rechecks_target(monkeypatch):
         )
         assert result.records == [{"title": "A"}, {"title": "B"}]
         assert access.state is not None
+
+
+# 用真实上下文复现响应轮换 Cookie 后分页规则报错，修复后的下一次执行必须使用新 Cookie。
+def test_cookie_rotation_survives_extraction_failure(monkeypatch):
+    from autoscraper.scraping.executor import ScrapeError
+
+    original = ScraperExecutor.run_page
+    received = []
+
+    def extract(self, spec, page):
+        def route(request):
+            received.append(request.request.headers.get("cookie", ""))
+            request.fulfill(
+                status=200,
+                content_type="text/html",
+                headers={"Set-Cookie": "auth=rotated; Path=/; HttpOnly; SameSite=Lax"},
+                body='<article><h2>A</h2></article><a class="next">Next</a>',
+            )
+
+        page.route("**/*", route)
+        return original(self, spec, page)
+
+    monkeypatch.setattr(ScraperExecutor, "run_page", extract)
+    access = BrowserAccess(
+        state={
+            "cookies": [
+                {
+                    "name": "auth",
+                    "value": "old",
+                    "domain": "fixture.test",
+                    "path": "/",
+                }
+            ],
+            "origins": [],
+        }
+    )
+    spec = ScraperSpec.model_validate(
+        {**RULE, "pagination": {"type": "link", "next_selector": ".next"}, "max_items": 2}
+    )
+    executor = ScraperExecutor(access=access)
+    with pytest.raises(ScrapeError, match="requires a Next link"):
+        executor.run(spec)
+    assert (
+        next(cookie["value"] for cookie in access.state["cookies"] if cookie["name"] == "auth")
+        == "rotated"
+    )
+    fixed = spec.model_copy(update={"pagination": None})
+    assert executor.run(fixed).records == [{"title": "A"}]
+    assert received == ["auth=old", "auth=rotated"]
