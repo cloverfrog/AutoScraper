@@ -441,7 +441,7 @@ def test_runner_limits_validation_cleanup(monkeypatch, rule, outcome):
             if outcome == "timeout":
                 await asyncio.sleep(5)
             if outcome in {"budget", "rejected_budget", "direct_budget"}:
-                from autoscraper.agent.budget import LLMBudgetExceeded
+                from autoscraper.exceptions import LLMBudgetExceeded
                 from autoscraper.workflow.validation import Feedback
                 self.llm.budget_blocked = True
                 if outcome != "budget":
@@ -468,7 +468,7 @@ def test_runner_limits_validation_cleanup(monkeypatch, rule, outcome):
     if outcome == "success":
         assert asyncio.run(generate_spec(rule["start_url"], "title", settings)).max_items == 1
     else:
-        from autoscraper.agent.budget import LLMBudgetExceeded
+        from autoscraper.exceptions import LLMBudgetExceeded
         expected = LLMBudgetExceeded if outcome == "budget" else AgentError
         match = "missing detail-page evidence" if outcome in {"rejected_budget", "direct_budget"} else None
         with pytest.raises(expected, match=match):

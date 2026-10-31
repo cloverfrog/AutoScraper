@@ -5,7 +5,7 @@
 from dataclasses import dataclass, field
 
 from .responses import ChatOpenAIResponses
-from .budget import LLMBudgetExceeded
+from autoscraper.exceptions import LLMBudgetExceeded
 
 
 # Responses 适配器上的调用次数限制；同一实例可跨需求解析和多轮修复使用。
