@@ -17,11 +17,11 @@
   {
     "name": "汽车列表（Load more测试）",
     "url": "https://webscraper.io/test-sites/load-more",
-    "task": "抓取前25条数据，字段名为name、desc、year、mileage、origin、status，分别为名称、简要描述、年份、里程数、原产地和当前出售状态"
+    "task": "抓取前25条数据，字段名为name、desc、year、status、stars，分别为名称、简要描述、年份、当前出售状态和星级"
   },{
     "name": "汽车列表（滚动测试）",
     "url": "https://webscraper.io/test-sites/scroll",
-    "task": "抓取前25条数据，字段名为name、desc、year、mileage、origin、status，分别为名称、简要描述、年份、里程数、原产地和当前出售状态"
+    "task": "抓取前25条数据，字段名为name、desc、year、status、stars，分别为名称、简要描述、年份、当前出售状态和星级"
   },
   {
     "name": "汽车列表（滚动页面详情测试）",
