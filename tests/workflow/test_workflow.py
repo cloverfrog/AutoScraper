@@ -59,7 +59,7 @@ def settings():
 
 # 替换主模型工厂，记录整次工作流共享的模型调用数。
 @pytest.fixture
-def workflow(monkeypatch):
+def workflow(monkeypatch, explicit_unfiltered_requirements):
     pytest.importorskip("browser_use")
     import autoscraper.workflow.runner as module
     import autoscraper.agent.llm as models

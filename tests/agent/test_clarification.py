@@ -263,7 +263,7 @@ def test_human_wait_excluded_from_timeout(monkeypatch):
 
 # 多轮修复应共享问答、调用预算和人工等待累计值。
 @pytest.mark.parametrize("mode", ["answer", "pending", "budget"])
-def test_workflow_shares_answers_budget_and_waiting_time(monkeypatch, mode):
+def test_workflow_shares_answers_budget_and_waiting_time(monkeypatch, mode, explicit_unfiltered_requirements):
     pytest.importorskip("browser_use")
     import autoscraper.agent.llm as helpers
     import autoscraper.workflow.runner as workflow
@@ -385,7 +385,7 @@ def test_cli_pending_preserves_existing_outputs(monkeypatch, capsys, tmp_path, n
 
 # 用真实本地 Chromium 与脚本模型验证框架的暂停/继续和不支持终态。
 @pytest.mark.parametrize("mode", ["clarification", "unsupported"])
-def test_real_agent_continues_with_browser_and_history(monkeypatch, tmp_path, mode):
+def test_real_agent_continues_with_browser_and_history(monkeypatch, tmp_path, mode, explicit_unfiltered_requirements):
     """Exercise pinned browser-use run/add_new_task with real local Chromium, no paid LLM."""
     pytest.importorskip("browser_use")
     import threading

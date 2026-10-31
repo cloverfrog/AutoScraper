@@ -81,6 +81,10 @@ class TaskOutcome:
             "pages": self.data.pages_visited if self.data else 0,
             "detail_pages": self.data.detail_pages_visited if self.data else 0,
             "stop_reason": self.data.stop_reason if self.data else None,
+            "items_extracted": self.data.items_extracted if self.data else 0,
+            "filtered_out": self.data.filtered_out if self.data else 0,
+            "filter_unknown": self.data.filter_unknown if self.data else 0,
+            "filter_unknown_reasons": self.data.filter_unknown_reasons if self.data else {},
             "feedback": [item.model_dump() for item in self.feedback],
             "validation_history": self.history,
             "original_url": self.original_url,
@@ -88,6 +92,6 @@ class TaskOutcome:
             "clarifications": self.clarifications,
             "pending_clarification": self.pending_clarification,
             "pending_handoff": self.pending_handoff,
-            "validation_scope": "protocol, required fields, count and extraction; "
+            "validation_scope": "protocol, required fields, count, filter declarations and extraction; "
             "source equivalence and semantic constraints are not independently verified",
         }

@@ -20,6 +20,7 @@ from .errors import (
 from .spec import FieldSpec, ScraperSpec
 from autoscraper.browser.access import BrowserAccess, HandoffRequest
 from .values import FieldValue, has_field_value, record_identity
+from .filtering import evaluate_filters
 from .progress import STATE_SCRIPT, state_options, progressed
 from .scrolling import scroll_step
 from autoscraper.observability.tracing import emit, operation
@@ -68,6 +69,11 @@ class ScrapeResult:
     pages_visited: int = 0
     detail_pages_visited: int = 0
     duplicates: int = 0
+    # 记录原始列表提取成功数；筛除和无法判断不属于提取错误，也不消耗详情预算。
+    items_extracted: int = 0
+    filtered_out: int = 0
+    filter_unknown: int = 0
+    filter_unknown_reasons: dict[str, int] = field(default_factory=dict)
     # max_items/no_next/no_pagination 为数量或自然结束；max_pages/detail_limit 为预算截断。
     # pagination_cycle 表示重复分页链接，工作流将其视为规则错误。
     stop_reason: ScrapeStopReason = ""
@@ -418,6 +424,18 @@ class ScraperExecutor:
                     try:
                         item = items.nth(index)
                         record = extract_item(item, spec, page.url)
+                        result.items_extracted += 1
+                        decision = evaluate_filters(record, spec.filters)
+                        if decision.matched is not True:
+                            if decision.matched is False:
+                                result.filtered_out += 1
+                            else:
+                                result.filter_unknown += 1
+                                reason = decision.reason
+                                result.filter_unknown_reasons[reason] = (
+                                    result.filter_unknown_reasons.get(reason, 0) + 1
+                                )
+                            continue
                         keys = spec.dedupe_by or list(spec.all_fields)
                         # 若去重键已完全包含在列表字段里，可提前跳过，节省详情页访问预算。
                         if all(key in record for key in keys):
@@ -524,7 +542,9 @@ class ScraperExecutor:
         finally:
             emit("executor.result", items=len(result.records), pages=result.pages_visited,
                  detail_pages=result.detail_pages_visited, errors=len(result.errors),
-                 stop_reason=result.stop_reason,
+                 stop_reason=result.stop_reason, items_extracted=result.items_extracted,
+                 filtered_out=result.filtered_out, filter_unknown=result.filter_unknown,
+                 filter_unknown_reasons=result.filter_unknown_reasons,
                  error_codes=[error.code for error in result.error_details])
             if detail_page is not None:
                 detail_page.close()

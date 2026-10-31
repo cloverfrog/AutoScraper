@@ -279,7 +279,7 @@ def test_llm_usage_sources_and_parse_failure(monkeypatch, source, invalid):
 
 
 # 多轮修复、候选和反馈必须关联同一个追踪运行。
-def test_workflow_repair_and_feedback_share_run(monkeypatch, settings, spec):
+def test_workflow_repair_and_feedback_share_run(monkeypatch, settings, spec, explicit_unfiltered_requirements):
     pytest.importorskip("browser_use")
     import autoscraper.workflow.runner as workflow
 
@@ -572,6 +572,7 @@ def test_workflow_terminal_paths_preserve_original_semantics(
     kind,
     status,
     code,
+    explicit_unfiltered_requirements,
 ):
     pytest.importorskip("browser_use")
     import autoscraper.workflow.runner as workflow

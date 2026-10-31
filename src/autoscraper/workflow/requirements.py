@@ -1,4 +1,4 @@
-# 用户需求定义与独立解析：先保留明确的字段/数量，再由模型补充缺失部分。
+# 用户需求定义与独立解析：保留明确的字段/数量，并在生成规则前独立解析筛选约束。
 # 这里只解析用户意图，不读取生成的抓取规则；模型由工作流传入，调用预算不在此重置。
 """Define and extract task requirements independently of generated scraping rules."""
 
@@ -8,13 +8,14 @@ from typing import Literal
 
 from pydantic import Field, field_validator
 
-from autoscraper.scraping.spec import NonEmpty, ProtocolModel
+from autoscraper.scraping.spec import FilterCondition, NonEmpty, ProtocolModel
 
 
-# 独立于生成规则的用户约束：必需字段、目标数量和明确要求的不支持能力。
+# 独立于生成规则的用户约束：必需字段、目标数量、筛选条件和明确要求的不支持能力。
 class TaskRequirements(ProtocolModel):
     fields: list[NonEmpty] = Field(min_length=1, max_length=50)
     count: int | None = Field(default=None, ge=1, le=1_000_000)
+    filters: list[FilterCondition] = Field(default_factory=list)
     unsupported_capabilities: list[Literal["captcha_bypass", "virtual_list"]] = (
         Field(default_factory=list)
     )
@@ -54,12 +55,11 @@ def explicit_requirements(task: str, fields: list[str] | None, count: int | None
     return fields, count
 
 
-# 先解析确定的字段/数量，只把缺失部分交给模型；不向它提供生成后的规则。
+# 先解析确定的字段/数量，再由模型补全需求和筛选；不向它提供生成后的规则。
 # 模型返回后再次应用显式值并校验，防止生成规则反过来缩减用户原始需求。
 async def extract_requirements(task: str, llm, fields=None, count=None) -> TaskRequirements:
     fields, count = explicit_requirements(task, fields, count)
-    if fields is not None and count is not None:
-        return TaskRequirements(fields=fields, count=count)
+    # 即使字段和数量已确定，仍需独立解析筛选要求，不能让早返回吞掉用户约束。
     from browser_use.llm.messages import SystemMessage, UserMessage
 
     response = await llm.ainvoke(
@@ -72,9 +72,17 @@ async def extract_requirements(task: str, llm, fields=None, count=None) -> TaskR
                 "the user EXPLICITLY requires CAPTCHA bypass or complex virtual lists. "
                 "Manual login and user-completed verification are supported; do not mark them unsupported. "
                 "Link, click, infinite scroll and one level of detail-page extraction are supported. "
-                "Do not mark detail-page crawling as unsupported."
+                "Do not mark detail-page crawling as unsupported. "
+                "Preserve every explicit filtering constraint in filters (field, operator, value), "
+                "independent of how the webpage encodes it. Use eq/ne/contains/lt/lte/gt/gte; "
+                "numeric comparisons use numeric values. Do not invent constraints or confuse "
+                "requested output fields/count with filters. Filters use AND. A filter field need "
+                "not be a requested output field; use consistent names when one is. "
+                "No filters means an empty list."
             ),
-            UserMessage(content=json.dumps({"task": task}, ensure_ascii=False)),
+            UserMessage(content=json.dumps(
+                {"task": task, "fields": fields, "count": count}, ensure_ascii=False
+            )),
         ],
         output_format=TaskRequirements,
     )

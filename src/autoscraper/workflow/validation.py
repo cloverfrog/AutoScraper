@@ -22,6 +22,7 @@ class Feedback(ProtocolModel):
     code: Literal[
         "missing_required_field",
         "count_mismatch",
+        "filter_mismatch",
         "invalid_spec",
         "selector_failure",
         "navigation_failure",
@@ -111,6 +112,20 @@ def validate_spec(spec: ScraperSpec, requirements: TaskRequirements) -> list[Fee
                 message=f"max_items must equal requested count {requirements.count}",
             )
         )
+    # URL 条件只声明覆盖关系，具体可用性由 Agent 在正常探索中判断；本地条件核对同一基准。
+    # 这里不比较页面相关的临时转换，但禁止条件遗漏、变更和擅自增加限制。
+    declared = [condition.model_dump(include={"field", "operator", "value"})
+                for condition in [*spec.filters, *spec.url_filters]]
+    expected = [condition.model_dump() for condition in requirements.filters]
+    if any(condition not in declared for condition in expected) or any(
+        condition not in expected for condition in declared
+    ):
+        issues.append(Feedback(
+            code="filter_mismatch",
+            message="Preserve exactly the authoritative filtering conditions in filters or "
+                    "url_filters. Keep field names, operators and comparison values unchanged; "
+                    "use temporary transforms only to interpret the extracted representation.",
+        ))
     if spec.max_pages > 100 or spec.timeout_ms > 30000:
         issues.append(
             Feedback(code="invalid_spec", message="Use max_pages <= 100 and timeout_ms <= 30000")
@@ -201,9 +216,11 @@ def validate_data(
     if any(not item.recoverable for item in issues):
         # 超时、导航失败或预算截断后的记录不足，不足以说明规则需要修复。
         return issues
-    if not result.records:
+    filtered = result.filtered_out + result.filter_unknown
+    if not result.records and not (filtered and filtered == result.items_extracted):
         issues.append(Feedback(code="empty_extraction", message="No records were extracted"))
         return issues
+    # 已提取的记录全部被筛选跳过不说明选择器有误，继续检查停止原因及匹配后的数量。
     missing = [
         name
         for name in requirements.fields
@@ -228,6 +245,10 @@ def validate_data(
         issues.append(
             Feedback(
                 code="insufficient_items",
+                # 单纯筛除导致不足不修复；同时有真实提取错误时仍允许修复该错误。
+                recoverable=not bool(filtered) or any(
+                    issue.code in {"selector_failure", "missing_data"} for issue in issues
+                ),
                 message=f"Expected {target} unique records; got {len(result.records)} "
                 f"(stop_reason={result.stop_reason})",
             )

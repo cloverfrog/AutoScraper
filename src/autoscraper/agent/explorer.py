@@ -146,6 +146,11 @@ Protocol semantics:
   use transform=absolute_url for URL attributes. texts/count do not support transforms.
   Use test_fields for texts/count evidence.
   Preserve required fields; never omit or substitute.
+- Preserve filtering requirements. Prefer an observed working URL query when available; otherwise
+  use filters on listing fields before detail visits. Declare URL-covered conditions in url_filters;
+  these are coverage declarations, not extra execution filters. filters use AND; optional transforms
+  (regex_extract, regex_replace, map, to_number) affect comparisons only, never saved field values.
+  contains means substring for text or exact membership for texts; ordering comparisons use numbers.
 - Detail extraction requires version="2": detail.url_selector uniquely matches a listing href;
   detail.fields are relative to the detail document. Preserve user-requested names there:
   if the user asks for description from details, use detail.fields.description, not
