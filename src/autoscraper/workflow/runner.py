@@ -11,25 +11,19 @@ from contextlib import nullcontext
 from playwright.sync_api import Error as PlaywrightError
 from autoscraper.browser.access import BrowserAccess, HandoffRequired
 
-from autoscraper.agent.explorer import (
-    AgentError,
-    AgentSettings,
-    InvalidSpecError,
-    UnsupportedTaskError,
-    generate_spec,
+from autoscraper.agent.errors import (
+    AgentError, InvalidSpecError, LLMBudgetExceeded, UnsupportedTaskError,
 )
+from autoscraper.agent.explorer import AgentSettings, generate_spec
 from autoscraper.agent.clarification import (
     ClarificationHandler,
     ClarificationRequired,
     ClarificationSession,
 )
-from autoscraper.scraping.executor import (
-    ContentTimeout,
-    PaginationActionError,
-    NavigationError,
-    ScrapeError,
-    ScraperExecutor,
+from autoscraper.scraping.errors import (
+    ContentTimeout, NavigationError, PaginationActionError, ScrapeError,
 )
+from autoscraper.scraping.executor import ScraperExecutor
 from .outcome import TaskOutcome, TaskStage
 from .requirements import extract_requirements
 from .validation import (
@@ -71,18 +65,25 @@ def run_task(
     policy = validation or ValidationSettings()
     llm = make_llm(settings)  # 独立需求解析和每轮修复共享同一付费调用预算。
     wait_llm = make_wait_llm(settings)
+    reserve = settings.repair_reserve_calls if policy.max_repairs else 0
+    # 需求解析也受首轮阶段上限约束，结构化重试不能侵占修复预留。
+    llm.call_limit = settings.max_llm_calls - reserve
     deadline = time.monotonic() + settings.timeout_seconds
     clarification = ClarificationSession(handler=ask_user)
     access = access if access is not None else BrowserAccess()
     outcome = TaskOutcome(
-        status="unfulfilled", original_url=url, clarifications=clarification.history
+        status="unfulfilled", original_url=url, clarifications=clarification.history,
+        agent_step_limit=settings.max_steps, max_llm_calls=settings.max_llm_calls,
+        repair_reserve_calls=reserve,
     )
 
     # 计算共享剩余时长并检查主模型调用预算；人工问答等待加回截止时间。
     def remaining():
         seconds = deadline + clarification.waiting_seconds + access.waiting_seconds - time.monotonic()
-        if seconds <= 0 or llm.calls >= settings.max_steps:
-            raise AgentError("Shared time or LLM call budget exhausted")
+        if seconds <= 0:
+            raise TimeoutError("Shared task time budget exhausted")
+        if llm.calls >= settings.max_llm_calls:
+            raise LLMBudgetExceeded("Shared task LLM request budget exhausted")
         return seconds
 
     # 为独立需求解析套用追踪和剩余时间限制，调用量计入共享主模型预算。
@@ -97,7 +98,7 @@ def run_task(
     try:
         try:
             outcome.requirements = asyncio.run(requirements_call())
-        except TimeoutError:
+        except (TimeoutError, LLMBudgetExceeded):
             raise
         except Exception as exc:
             outcome.feedback = [
@@ -116,26 +117,41 @@ def run_task(
                 )
             ]
             return outcome
+        # 解析需求若已耗尽首轮额度，不启动无法发出请求的探索浏览器。
+        if llm.calls >= llm.call_limit:
+            raise LLMBudgetExceeded(
+                f"Requirements consumed the initial request budget: used={llm.calls}, "
+                f"phase_limit={llm.call_limit}, hard_limit={settings.max_llm_calls}"
+            )
         # 试抓取、完整执行和各轮修复都沿用探索阶段的浏览器设置。
         executor = ScraperExecutor(
             headless=settings.headless, executable_path=settings.executable_path, access=access
         )
         # 首次生成也算一次尝试，因此总尝试数为 max_repairs + 1。
         previous_spec = None
+        previous_evidence = None
         for attempt in range(policy.max_repairs + 1):
-            # 新浏览器至少需要导航、测试和提交三次机会；不足时保留失败现场，避免空跑修复。
+            # 保守要求修复至少有三次请求余量；这是启动策略，不是 Step 到请求数的换算。
             # 预算反馈放在前面，同时保留此前的具体原因，不用泛化错误覆盖诊断。
-            if attempt and settings.max_steps - llm.calls < 3:
+            if attempt and settings.max_llm_calls - llm.calls < 3:
+                outcome.repair_not_started_reason = "insufficient_llm_requests"
                 outcome.feedback = [
                     Feedback(
                         code="budget_exhausted",
                         recoverable=False,
-                        message="Insufficient shared LLM budget for navigation, testing and submission; "
-                        "repair was not started",
+                        message=f"Repair was not started: used={llm.calls}, "
+                        f"hard_limit={settings.max_llm_calls}, minimum_remaining_requests=3",
                     ),
                     *outcome.feedback,
                 ]
                 return outcome
+            # 新建修复 Agent，但沿用同一模型计数；只有工作流能开放预留额度。
+            llm.call_limit = settings.max_llm_calls if attempt else settings.max_llm_calls - reserve
+            llm.budget_blocked = False
+            emit("budget.phase", phase="repair" if attempt else "exploration",
+                 agent_step_limit=settings.max_steps, max_llm_calls=settings.max_llm_calls,
+                 phase_request_limit=llm.call_limit, llm_calls=llm.calls,
+                 repair_reserve_calls=reserve)
             with (
                 labels(attempt=attempt + 1),
                 operation("attempt"),
@@ -147,15 +163,22 @@ def run_task(
                 outcome.attempts = attempt + 1
                 outcome.spec, outcome.data = None, None
                 candidate = None
+                repair_evidence = None
                 result = None
                 try:
-                    # 复用模型实例，并把剩余步骤/时间交给这一轮；修复不会重置总预算。
+                    # Step 上限独立于剩余请求数，只传递剩余任务时长。
                     run_settings = settings.model_copy(
                         update={
-                            "max_steps": settings.max_steps - llm.calls,
                             "timeout_seconds": max(1, min(settings.timeout_seconds, int(seconds))),
                         }
                     )
+                    if attempt and previous_evidence is not None:
+                        emit(
+                            "repair.context",
+                            previous_spec=previous_spec.model_dump(mode="json")
+                            if previous_spec is not None else None,
+                            evidence_summary=previous_evidence,
+                        )
                     candidate = asyncio.run(
                         generate_spec(
                             url,
@@ -164,6 +187,7 @@ def run_task(
                             requirements=requirements,
                             feedback=outcome.feedback,
                             previous_spec=previous_spec,
+                            evidence_summary=previous_evidence,
                             llm=llm,
                             wait_llm=wait_llm,
                             clarification=clarification,
@@ -227,7 +251,20 @@ def run_task(
                     issues = [Feedback(code="selector_failure", message=str(exc)[:2000])]
                     outcome.spec, outcome.data = candidate, None
                 except InvalidSpecError as exc:
+                    candidate = exc.candidate
+                    repair_evidence = exc.evidence_summary
                     issues = [Feedback(code="invalid_spec", message=str(exc)[:2000])]
+                except LLMBudgetExceeded as exc:
+                    # 单纯耗尽额度没有可修复的规则反馈，不能盲目花掉预留重新探索。
+                    issues = [Feedback(
+                        code="budget_exhausted", message=str(exc), recoverable=False,
+                    )]
+                    if attempt < policy.max_repairs:
+                        outcome.repair_not_started_reason = (
+                            "insufficient_llm_requests"
+                            if settings.max_llm_calls - llm.calls < 3
+                            else "no_recoverable_feedback"
+                        )
                 except AgentError as exc:
                     issues = [
                         Feedback(code="agent_failure", message=str(exc)[:2000], recoverable=False)
@@ -251,9 +288,13 @@ def run_task(
                     break
                 # 传回失败规则与具体反馈，让下一轮围绕已知问题修复而非从零猜测。
                 previous_spec = candidate
+                previous_evidence = repair_evidence
         return outcome
-    except (AgentError, TimeoutError) as exc:
-        outcome.feedback = [Feedback(code="budget_exhausted", message=str(exc), recoverable=False)]
+    except (AgentError, TimeoutError, LLMBudgetExceeded) as exc:
+        outcome.feedback = [
+            Feedback(code="budget_exhausted", message=str(exc), recoverable=False),
+            *outcome.feedback,
+        ]
         return outcome
     finally:
         outcome.llm_calls = llm.calls

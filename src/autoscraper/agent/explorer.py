@@ -10,7 +10,9 @@ import re
 import time
 from pathlib import Path
 
-from pydantic import BaseModel, Field, HttpUrl, SecretStr
+from pydantic import BaseModel, Field, HttpUrl, SecretStr, model_validator
+
+from .errors import AgentError, InvalidSpecError, LLMBudgetExceeded, UnsupportedTaskError
 
 from .clarification import ClarificationSession
 from autoscraper.browser.access import BrowserAccess
@@ -19,32 +21,16 @@ from autoscraper.workflow.validation import Feedback, UnsupportedResult
 from autoscraper.workflow.requirements import TaskRequirements
 
 
-# 探索层统一异常，表示 Agent 无法在能力或预算范围内生成候选规则。
-class AgentError(RuntimeError):
-    pass
-
-
-# 模型最终输出无法解析成合法抓取协议；工作流可尝试让 Agent 修复。
-class InvalidSpecError(AgentError):
-    pass
-
-
-# Agent 明确报告协议无法表达需求，携带原因和受影响字段。
-class UnsupportedTaskError(AgentError):
-    # 保留不能满足的字段，使工作流能输出机器可读的失败反馈。
-    def __init__(self, reason: str, fields: list[str]):
-        super().__init__(reason)
-        self.fields = fields
-
-
 # Agent 运行配置：模型连接、探索上限、内容等待和浏览器选项。
-# max_steps 同时用于工作流主模型调用上限和单次 Agent 步数限制；等待模型单独计数。
+# 单轮 Step、任务主模型请求、修复预留请求分别配置；等待模型单独计数。
 class AgentSettings(BaseModel):
     model: str
     base_url: HttpUrl
     api_key: SecretStr
-    # 主探索预算；需求解析和各轮修复由工作流共享同一个模型实例累计调用量。
+    # 每轮探索/修复的 Step 上限；一次 Step 可包含多次结构化输出请求。
     max_steps: int = Field(default=12, ge=1, le=50)
+    max_llm_calls: int = Field(default=24, ge=1, le=200)
+    repair_reserve_calls: int = Field(default=6, ge=0, le=199)
     timeout_seconds: int = Field(default=240, ge=1, le=900)
     llm_timeout_seconds: int = Field(default=45, ge=1, le=120)
     max_output_tokens: int = Field(default=3000, ge=256, le=8192)
@@ -55,6 +41,13 @@ class AgentSettings(BaseModel):
     headless: bool = True
     # 兼容旧 CLI 参数；当前 Responses 适配器始终使用 JSON Schema 输出结构化结果。
     structured_output: bool = False
+
+    # 需求解析和首轮探索至少保留一次请求，拒绝无法分配的预算配置。
+    @model_validator(mode="after")
+    def validate_request_budgets(self):
+        if self.repair_reserve_calls >= self.max_llm_calls:
+            raise ValueError("repair_reserve_calls must be less than max_llm_calls")
+        return self
 
 
 # 只接受纯 JSON 或单个 Markdown JSON 代码块，并按 ScraperSpec 严格校验。
@@ -110,6 +103,18 @@ answer; if the required plan cannot fit the protocol, report_unsupported instead
 relaxing it. Allowing an alternative does not establish equivalent content or order.
 
 Exploration:
+Prefer low-cost checks of uncertainties that could invalidate the overall approach before
+refining individual fields. Choose the order from page state and dependencies.
+Organize work by page: in memory keep the current page, its unfinished checks, and the
+next destination/reason. Navigation has a cost. Prefer completing locally available checks
+before switching pages; if another page is needed first, keep the unfinished work explicit.
+Review local test results before scheduling a page change that depends on them.
+Inspecting a selector does not verify it. On a detail page, batch-test its requested fields
+with item_selector="html" before leaving where practical. Prefer testing known selectors
+directly over inspecting them again. page_work reports current-session checks for planning;
+its candidate_pending list refers to the supplied candidate and may change as rules change.
+Once all required evidence is recorded, submit from the current page; revisit another page
+only when remaining checks need it. Historical repair summaries are not current-session evidence.
 1. Start with inspect_page(root_selector="") to see page structure and actual button/link classes.
    Infer selectors from its DOM evidence. A missing root also returns a body sample; use that
    evidence to fix selectors instead of guessing multiple roots. For loading content, use wait_for_selector
@@ -181,6 +186,7 @@ async def generate_spec(
     requirements: TaskRequirements | None = None,
     feedback: list[Feedback] | None = None,
     previous_spec: ScraperSpec | None = None,
+    evidence_summary: dict | None = None,
     llm=None,
     wait_llm=None,
     clarification: ClarificationSession | None = None,
@@ -201,6 +207,14 @@ async def generate_spec(
         )
         if previous_spec is not None:
             prompt += "\nPrevious failed candidate:\n" + previous_spec.model_dump_json()
+        if evidence_summary:
+            prompt += (
+                "\nPrevious exploration summary (historical leads, not current-session evidence):\n"
+                + json.dumps(evidence_summary, ensure_ascii=False)
+                + "\nPrefer targeted checks of the failed candidate and supplied selectors over "
+                "restarting discovery. Keep working selectors unless new observations justify "
+                "changing them. Revalidate relevant rules in this browser before submission."
+            )
         if feedback:
             prompt += "\nRepair these validation failures and retest:\n" + json.dumps(
                 [item.model_dump() for item in feedback], ensure_ascii=False
@@ -214,6 +228,11 @@ async def generate_spec(
         from .llm import make_llm, make_wait_llm
     except ImportError as exc:
         raise AgentError("Install agent dependencies: uv sync --extra agent --locked") from exc
+
+    # 仅关闭提前提交部分结果的提示；继承最后一步强制 done 和全部既有工具约束。
+    class ExplorationAgent(Agent):
+        async def _inject_budget_warning(self, step_info=None) -> None:
+            return
 
     if wait_llm is None:
         wait_llm = make_wait_llm(settings)
@@ -246,10 +265,13 @@ async def generate_spec(
             access=access,
             check_submission=True,
             requirements=requirements,
+            listing_url=url,
+            reference_spec=previous_spec,
         )
-        agent = Agent(
+        agent_llm = llm if llm is not None else make_llm(settings)
+        agent = ExplorationAgent(
             task=prompt,
-            llm=llm if llm is not None else make_llm(settings),
+            llm=agent_llm,
             browser_session=browser,
             tools=exploration_tools,
             output_model_schema=ScraperSpec,
@@ -300,7 +322,9 @@ async def generate_spec(
                 # 人工操作可能改变页面，清除旧选择器证据，避免将接管前的测试当成当前依据。
                 if exploration_tools.submission is not None:
                     from .submission import SubmissionChecks
-                    exploration_tools.submission = SubmissionChecks(requirements)
+                    exploration_tools.submission = SubmissionChecks(
+                        requirements, listing_url=url, reference_spec=previous_spec,
+                    )
                 agent.add_new_task(
                     "The user returned browser control. Observe the current page again; verify "
                     "target access and the requested account/workspace before resuming the original "
@@ -331,10 +355,9 @@ async def generate_spec(
                 # 证据门槛拒绝后耗尽步骤时，保留具体失败原因，而不是只剩泛化 Agent 失败。
                 checks = getattr(exploration_tools, "submission", None)
                 if checks and checks.last_issues:
-                    raise InvalidSpecError(
-                        "Submission rejected: "
-                        + "; ".join(issue.message for issue in checks.last_issues)[:4000]
-                    )
+                    raise checks.rejection_error()
+                if getattr(agent_llm, "budget_blocked", False):
+                    raise LLMBudgetExceeded("Agent stopped at the LLM request budget boundary")
                 raise AgentError("Agent did not finish successfully within its limits")
             candidate = parse_spec_output(final).model_copy(
                 update={"content_timeout_ms": settings.content_timeout_ms}
@@ -342,6 +365,12 @@ async def generate_spec(
             if access.handed_off or access.state is not None:
                 await capture_access()
             return candidate
+    except LLMBudgetExceeded:
+        # 框架可能吞掉请求异常，也可能直接抛出；两种路径都保留提交检查的具体原因。
+        checks = getattr(exploration_tools, "submission", None)
+        if checks and checks.last_issues:
+            raise checks.rejection_error() from None
+        raise
     except TimeoutError as exc:
         raise AgentError(f"Agent timed out after {settings.timeout_seconds}s") from exc
     finally:

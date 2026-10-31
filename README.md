@@ -79,8 +79,36 @@ uv run --extra agent autoscraper-agent "https://books.toscrape.com/" "抓取前2
 详情字段仍需对应详情页的测试证据。记录数按 URL 与记录选择器独立保存，点击/滚动前重新
 计数并固定基线，字段测试、单独计数和数量等待可共同确认追加增长；替换模式仍比较字段内容。
 必要时使用有界数量等待。这些检查不调用 LLM；失败会把具体反馈返回当前 Agent 会话继续修正。
+提交被拒绝时保留候选和有界的选择器、详情 URL、分页推进摘要，供下一轮针对性复验。
+摘要不包含字段文本样本，也不替代新浏览器会话的证据检查；记录根变化时反馈会指出此前
+通过的根及受影响的证据关联，避免把已测详情笼统报成未测。字段、分页和详情检查顺序由
+实际页面和依赖决定，探索优先用较小成本确认可能影响整体方案的疑点。
+探索按页面组织待办，尽量完成当前页可做的检查后再切页；工具的 `page_work` 会报告本会话
+的字段测试和参考候选待办，提醒详情页的 DOM 检查不等于字段验证。待办只作规划提示，
+不阻止导航；证据齐备时可从当前页提交。规划复用现有 `memory`，不增加独立模型调用。
 采样检查不保证字段语义或全量正确，
-后续仍会独立试抓取。共享预算不足 3 次模型调用时不再启动新的修复浏览器，并保留原失败原因。
+后续仍会独立试抓取。任务硬预算剩余不足 3 次主模型请求时不再启动新的修复浏览器，
+结果中的 `repair_not_started_reason` 为 `insufficient_llm_requests`，并保留原失败原因。
+这个三次请求门槛是保守的修复启动策略，不保证修复成功，也不表示三步。
+
+Agent Step 与实际模型请求分别计量：一次 Step 可能因结构化输出重试发出多次请求，失败请求
+也计入硬预算。默认每轮 12 步，整次任务最多 24 次主模型请求，其中 6 次预留给修复；
+相比旧版默认 12 次请求，新的默认硬上限有所增加。需求解析与首轮探索最多共用 18 次请求，
+由请求层强制限制；若需求解析耗尽这 18 次，直接报告预算不足，不启动探索。
+有可恢复的提交/验证失败时，工作流才允许新建修复 Agent 使用余量；
+只有额度耗尽而无可修复反馈时，报告 `no_recoverable_feedback`，不盲目重开探索。
+多轮修复共用剩余硬预算，受 `--max-repairs` 和任务总时限约束，不重置调用计数。
+`--max-repairs 0` 时不扣留预留额度；`--repair-reserve-calls 0` 可禁用预留。
+
+browser-use 的 75% 步数预警已通过局部 Agent 子类关闭，最后一步仍强制 `done`，
+提交证据检查与独立验证继续生效。人工澄清和接管恢复不增加预算。
+结果 JSON 的 `agent_step_limit`、`max_llm_calls`、`llm_calls`、`repair_reserve_calls`
+分别报告每轮 Step 上限、任务请求硬上限、已用请求数和本次有效预留量；
+追踪中的 `budget.phase` 还记录当前阶段请求上限。语义等待模型继续独立计数。
+
+**参数迁移**：旧版 `--max-steps` 也限制任务总请求数；现在它仅限制每轮 Step。
+已有脚本若要保持总请求上限，应显式增加 `--max-llm-calls`，并设置小于该值的预留量。
+例如总请求上限仍为 12，可使用 `--max-llm-calls 12 --repair-reserve-calls 3`。
 
 ## 只生成规则 / 重复抓取
 
@@ -137,7 +165,9 @@ Agent 工作流判定为验证失败，不覆盖已有输出。只运行 Executo
 | `--auth-state` | 显式加载/保存此网站、账号的认证状态文件 | 仅本次任务中传递 |
 | `--model` | LLM 模型名 | `deepseek-flash` |
 | `--base-url` | 模型接口地址 | `https://api.deepseek.com` |
-| `--max-steps` | 需求解析、探索、修复共享的 LLM 调用上限 | 12 |
+| `--max-steps` | 每轮探索/修复的 Agent Step 上限（1–50） | 12 |
+| `--max-llm-calls` | 需求解析、探索、修复共享的主模型请求硬上限（1–200） | 24 |
+| `--repair-reserve-calls` | 首轮不可使用的修复请求预留量（0–199，必须小于硬上限） | 6 |
 | `--timeout` | 探索总超时，秒 | 240 |
 | `--llm-timeout` | 单次 LLM 超时，秒 | 45 |
 | `--content-timeout-ms` | 探索、验证和执行的内容等待上限（毫秒，1–120000） | 30000 |
@@ -338,7 +368,7 @@ uv run --extra agent autoscraper-agent "https://quotes.toscrape.com/js-delayed/"
 返回 `ready` / `timeout` 和当前 DOM。语义判断在 DOM 摘要变化后才调用模型；
 检查次数包含跳过判断的检查，仍受时间上限约束。语义等待额外产生 API 费用，独立计入
 最终 JSON 的 `wait_llm_calls`，所有修复轮次共用 `--max-wait-llm-calls`；
-主 Agent 的 `--max-steps` 预算保持独立。设为 0 可禁用语义判断调用。
+主模型的 `--max-llm-calls` 请求预算保持独立。设为 0 可禁用语义判断调用。
 
 内容超时保存为规则中的 `content_timeout_ms`。验证时，内容等待使用这一配置，导航默认使用规则的 `timeout_ms`，两者互不截断。
 重复抓取可用 `uv run autoscraper output/quotes.json --output output/quotes-data.json --content-timeout-ms 45000`

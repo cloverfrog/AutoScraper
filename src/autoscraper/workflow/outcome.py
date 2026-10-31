@@ -39,6 +39,10 @@ class TaskOutcome:
     feedback: list[Feedback] = field(default_factory=list)
     attempts: int = 0
     llm_calls: int = 0
+    agent_step_limit: int = 0
+    max_llm_calls: int = 0
+    repair_reserve_calls: int = 0
+    repair_not_started_reason: str | None = None
     wait_llm_calls: int = 0
     sample_only: bool = False
     failure_stage: TaskStage | None = None
@@ -67,6 +71,10 @@ class TaskOutcome:
             "sample_only": self.sample_only,
             "requirements": self.requirements.model_dump() if self.requirements else None,
             "attempts": self.attempts,
+            "agent_step_limit": self.agent_step_limit,
+            "max_llm_calls": self.max_llm_calls,
+            "repair_reserve_calls": self.repair_reserve_calls,
+            "repair_not_started_reason": self.repair_not_started_reason,
             "llm_calls": self.llm_calls,
             "wait_llm_calls": self.wait_llm_calls,
             "items": len(self.data.records) if self.data else 0,

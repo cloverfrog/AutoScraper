@@ -78,6 +78,8 @@ def test_env_settings(monkeypatch):
     settings = settings_from_env(model="example", max_steps=3)
     assert settings.model == "example"
     assert settings.max_steps == 3
+    assert settings.max_llm_calls == 24
+    assert settings.repair_reserve_calls == 6
     assert str(settings.base_url) == "https://api.deepseek.com/"
     assert "test-secret" not in repr(settings)
 
@@ -367,6 +369,7 @@ def test_exploration_prompt_preserves_task_context(monkeypatch, rule, repair):
             settings,
             requirements=requirements,
             previous_spec=previous,
+            evidence_summary={"tests": [{"item_selector": "article", "field_selector": "h2"}]} if repair else None,
             feedback=feedback if repair else None,
             llm=object(),
             wait_llm=SimpleNamespace(max_calls=8, calls=3),
@@ -377,6 +380,8 @@ def test_exploration_prompt_preserves_task_context(monkeypatch, rule, repair):
     assert requirements.model_dump_json() in prompt
     assert ("Previous failed candidate:" in prompt) is repair
     assert ("Repair these validation failures and retest:" in prompt) is repair
+    assert ("historical leads, not current-session evidence" in prompt) is repair
+    assert captured["tools"].submission.tests == {}
     if repair:
         assert previous.model_dump_json() in prompt
         assert json.dumps([item.model_dump() for item in feedback], ensure_ascii=False) in prompt
@@ -387,7 +392,9 @@ def test_exploration_prompt_preserves_task_context(monkeypatch, rule, repair):
 
 
 # 覆盖成功、非法输出、未完成和超时退出，确认浏览器总会清理。
-@pytest.mark.parametrize("outcome", ["success", "invalid", "unfinished", "timeout"])
+@pytest.mark.parametrize("outcome", [
+    "success", "invalid", "unfinished", "timeout", "budget", "rejected_budget", "direct_budget",
+])
 def test_runner_limits_validation_cleanup(monkeypatch, rule, outcome):
     bu = pytest.importorskip("browser_use")
     import autoscraper.agent.llm as helpers
@@ -404,25 +411,57 @@ def test_runner_limits_validation_cleanup(monkeypatch, rule, outcome):
             Browser.killed = True
 
     class Agent:
+        # 用真实依赖的方法验证局部子类关闭预警、保留末步约束，不启动真实浏览器。
+        _inject_budget_warning = bu.Agent._inject_budget_warning
+        _force_done_after_last_step = bu.Agent._force_done_after_last_step
+
         def __init__(self, **kwargs):
+            assert type(self)._inject_budget_warning is not Agent._inject_budget_warning
+            assert type(self)._force_done_after_last_step is Agent._force_done_after_last_step
             assert kwargs["use_judge"] is False
             assert kwargs["use_thinking"] is False
             assert kwargs["flash_mode"] is True
             assert kwargs["message_compaction"] is False
             assert kwargs["max_failures"] == 1
+            self.llm = kwargs["llm"]
+            self.tools = kwargs["tools"]
 
         async def run(self, max_steps):
             assert max_steps == 2
+            from browser_use.agent.views import AgentStepInfo
+            for step in (6, 7):
+                await self._inject_budget_warning(AgentStepInfo(step_number=step, max_steps=8))
+            # 末步仍限制为 done，并提示未完成时 success=false。
+            messages = []
+            self._message_manager = SimpleNamespace(
+                _add_context_message=messages.append,
+            )
+            self.logger = SimpleNamespace(debug=lambda *args: None)
+            self.DoneAgentOutput = object()
+            await self._force_done_after_last_step(AgentStepInfo(step_number=7, max_steps=8))
+            assert self.AgentOutput is self.DoneAgentOutput
+            assert 'set success in "done" to false' in messages[0].content
             if outcome == "timeout":
                 await asyncio.sleep(5)
+            if outcome in {"budget", "rejected_budget", "direct_budget"}:
+                from autoscraper.agent.errors import LLMBudgetExceeded
+                from autoscraper.workflow.validation import Feedback
+                self.llm.budget_blocked = True
+                if outcome != "budget":
+                    self.tools.submission.last_issues = [Feedback(
+                        code="invalid_spec", message="missing detail-page evidence",
+                    )]
+                    self.tools.submission.last_candidate = parse_spec_output(json.dumps(rule))
+                if outcome == "direct_budget":
+                    raise LLMBudgetExceeded("request phase limit")
             return SimpleNamespace(
-                is_successful=lambda: outcome != "unfinished",
+                is_successful=lambda: outcome not in {"unfinished", "budget", "rejected_budget"},
                 final_result=lambda: "{}" if outcome == "invalid" else json.dumps(rule),
             )
 
     monkeypatch.setattr(bu, "BrowserSession", Browser)
     monkeypatch.setattr(bu, "Agent", Agent)
-    monkeypatch.setattr(helpers, "make_llm", lambda settings: object())
+    monkeypatch.setattr(helpers, "make_llm", lambda settings: SimpleNamespace(budget_blocked=False))
     settings = AgentSettings(
         api_key="fake",
         model="deepseek-flash",
@@ -433,8 +472,14 @@ def test_runner_limits_validation_cleanup(monkeypatch, rule, outcome):
     if outcome == "success":
         assert asyncio.run(generate_spec(rule["start_url"], "title", settings)).max_items == 1
     else:
-        with pytest.raises(AgentError):
+        from autoscraper.agent.errors import LLMBudgetExceeded
+        expected = LLMBudgetExceeded if outcome == "budget" else AgentError
+        match = "missing detail-page evidence" if outcome in {"rejected_budget", "direct_budget"} else None
+        with pytest.raises(expected, match=match) as caught:
             asyncio.run(generate_spec(rule["start_url"], "title", settings))
+        if outcome in {"rejected_budget", "direct_budget"}:
+            assert caught.value.candidate == parse_spec_output(json.dumps(rule))
+            assert "tests" in caught.value.evidence_summary
     assert Browser.killed
 
 
@@ -462,7 +507,9 @@ def test_tools_and_llm_budget(monkeypatch):
         api_key="fake",
         model="deepseek-flash",
         base_url="https://api.deepseek.com",
-        max_steps=1,
+        max_steps=10,
+        max_llm_calls=1,
+        repair_reserve_calls=0,
     )
     llm = make_llm(settings)
     assert isinstance(llm, ChatOpenAIResponses)
@@ -637,3 +684,37 @@ def test_real_books_agent(tmp_path):
     assert all(
         row["price"].startswith("£") and row["url"].startswith("https://") for row in result.records
     )
+
+
+# 请求上限和预留量使用请求单位校验，不要求与 Step 上限有大小关系。
+@pytest.mark.parametrize("hard,reserve,valid", [(4, 4, False), (4, 5, False), (4, 0, True)])
+def test_request_budget_configuration(hard, reserve, valid):
+    options = dict(api_key="fake", model="test", base_url="https://llm.test",
+                   max_steps=20, max_llm_calls=hard, repair_reserve_calls=reserve)
+    if valid:
+        assert AgentSettings(**options).max_steps == 20
+    else:
+        with pytest.raises(ValueError, match="repair_reserve_calls"):
+            AgentSettings(**options)
+
+
+# 新预算参数必须经 CLI 传到工作流，不能只在配置模型中存在。
+def test_cli_passes_distinct_budget_options(monkeypatch, tmp_path):
+    from autoscraper.workflow.outcome import TaskOutcome
+    import autoscraper.cli.agent as cli
+
+    monkeypatch.setenv("AUTOSCRAPER_API_KEY", "fake")
+    received = []
+
+    def run(url, task, settings, **kwargs):
+        received.append(settings)
+        return TaskOutcome(status="unfulfilled")
+
+    monkeypatch.setattr(cli, "run_task", run)
+    monkeypatch.setattr("sys.argv", [
+        "autoscraper-agent", "https://fixture.test", "抓取书名",
+        "--spec-output", str(tmp_path / "spec.json"),
+        "--max-steps", "7", "--max-llm-calls", "15", "--repair-reserve-calls", "4",
+    ])
+    assert cli.main() == 1
+    assert (received[0].max_steps, received[0].max_llm_calls, received[0].repair_reserve_calls) == (7, 15, 4)

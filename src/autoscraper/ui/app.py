@@ -22,7 +22,8 @@ def build_app(manager):
                 data[key] = None
         agent_options = {
             key: (None if data[key] == "" else data[key]) for key in (
-                "model", "base_url", "max_steps", "timeout_seconds", "llm_timeout_seconds",
+                "model", "base_url", "max_steps", "max_llm_calls", "repair_reserve_calls",
+                "timeout_seconds", "llm_timeout_seconds",
                 "max_output_tokens", "max_wait_llm_calls",
             )
         }
@@ -136,7 +137,9 @@ def build_app(manager):
                 )
             with gr.Row():
                 for key, label, value in (
-                    ("max_steps", "主模型调用预算", 12),
+                    ("max_steps", "每轮 Agent 步数上限", 12),
+                    ("max_llm_calls", "任务主模型请求硬上限", 24),
+                    ("repair_reserve_calls", "修复预留请求数", 6),
                     ("timeout_seconds", "Agent 超时（秒）", 240),
                     ("llm_timeout_seconds", "模型调用超时（秒）", 45),
                     ("max_output_tokens", "最大输出 Token", 3000),
