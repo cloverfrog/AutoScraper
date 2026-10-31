@@ -30,7 +30,7 @@ class FieldSpec(ProtocolModel):
         if (self.extract == "attribute") != (self.attribute is not None):
             raise ValueError("attribute must be set exactly when extract='attribute'")
         if self.extract in {"texts", "count"} and self.transform != "none":
-            raise ValueError("texts/count do not support transforms")
+            raise ValueError("absolute_url requires text or attribute extraction")
         return self
 
 

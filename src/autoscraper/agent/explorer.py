@@ -144,8 +144,7 @@ Protocol semantics:
   texts in DOM order; count returns the number of matches (zero is valid). Required texts must be
   nonempty with nonempty entries; optional texts may be []. Set attribute only for extract=attribute;
   use transform=absolute_url for URL attributes. texts/count do not support transforms.
-  Use test_fields for texts/count evidence. Count only elements whose selector represents the target:
-  five fixed star icons do not imply a five-star rating; extract the class attribute if needed.
+  Use test_fields for texts/count evidence.
   Preserve required fields; never omit or substitute.
 - Detail extraction requires version="2": detail.url_selector uniquely matches a listing href;
   detail.fields are relative to the detail document. Preserve user-requested names there:
