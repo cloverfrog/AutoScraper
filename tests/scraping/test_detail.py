@@ -447,3 +447,21 @@ def test_detail_limit_cli_reports_partial_result(monkeypatch, tmp_path, capsys):
     monkeypatch.setattr("sys.argv", ["autoscraper", str(path), "--output", str(tmp_path / "x.csv")])
     assert cli.main() == 2
     assert json.loads(capsys.readouterr().out)["stop_reason"] == "detail_limit"
+
+
+# 详情页空计数无需等待不存在的元素；合并后的列表字段仍能用于去重。
+def test_detail_multi_element_fields_and_zero_count(site):
+    page, routes, requests = site
+    routes[BASE + "page-1.html"] = card(1) + card(2)
+    for number in (1, 2):
+        routes[BASE + f"book-{number}/index.html"] = '<b> A </b><b>B</b>'
+    spec = detail_spec(detail={"url_selector": "h3 a", "fields": {
+        "tags": {"selector": "b", "extract": "texts"},
+        "count": {"selector": ".missing", "extract": "count"},
+    }}, dedupe_by=["tags"])
+    result = ScraperExecutor().run_page(spec, page)
+    assert len(result.records) == 1 and result.duplicates == 1
+    assert result.detail_pages_visited == 2 and result.errors == []
+    assert result.records[0]["tags"] == ["A", "B"]
+    assert result.records[0]["count"] == 0
+    assert validate_data(result, TaskRequirements(fields=["tags", "count"])) == []

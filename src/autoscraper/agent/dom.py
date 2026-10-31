@@ -29,10 +29,10 @@ INSPECT_SCRIPT = """(selector) => {
 }"""
 
 # 选择器测试脚本：先检查 CSS 语法，再在最多五条记录内检查字段匹配数量和值。
-# 即使没有列表记录也检查字段 CSS；sample_passed 只说明样本内匹配唯一，仍需独立验证。
-SELECTOR_SCRIPT = """(itemSelector, fieldSelector, attribute) => {
+# 即使没有列表记录也检查字段 CSS；sample_passed 只检查模式允许的匹配数量，必填值另行验证。
+SELECTOR_SCRIPT = """(itemSelector, fieldSelector, attribute, extract = attribute ? 'attribute' : 'text') => {
     const result = {url: location.href, item_selector: itemSelector,
-        field_selector: fieldSelector, attribute, count: null, samples: [],
+        field_selector: fieldSelector, attribute, extract, count: null, samples: [],
         tested_count: 0, all_items_tested: false};
     const invalid = (parameter, error) => {
         if (error.name !== 'SyntaxError') throw error;
@@ -53,6 +53,10 @@ SELECTOR_SCRIPT = """(itemSelector, fieldSelector, attribute) => {
         const matches = fieldSelector && fieldSelector !== ':scope' ? [...item.querySelectorAll(fieldSelector)] : [item];
         const status = matches.length === 0 ? 'no_match'
             : matches.length === 1 ? 'single_match' : 'multiple_matches';
+        // 多元素值按 DOM 顺序保留；计数不依赖文本是否为空。
+        if (extract === 'count') return {status, matches: matches.length, values: [matches.length]};
+        if (extract === 'texts') return {status, matches: matches.length, values: matches.map(el =>
+            (el.innerText || '').replace(/\\s+/g, ' ').trim().slice(0, 300))};
         return {status, matches: matches.length, values: matches.slice(0, 2).map(el =>
             attribute ? el.getAttribute(attribute)?.slice(0, 300) ?? null
                       : (el.innerText || '').trim().slice(0, 300))};
@@ -60,7 +64,7 @@ SELECTOR_SCRIPT = """(itemSelector, fieldSelector, attribute) => {
     result.tested_count = result.samples.length;
     result.all_items_tested = result.tested_count === result.count;
     result.status = !items.length ? 'no_items'
-        : result.samples.every(sample => sample.matches === 1)
+        : result.samples.every(sample => extract === 'count' || extract === 'texts' || sample.matches === 1)
             ? 'sample_passed' : 'sample_failed';
     return result;
 }"""
@@ -72,5 +76,5 @@ BATCH_SELECTOR_SCRIPT = """(itemSelector, fields) => {
     const test = """ + SELECTOR_SCRIPT + """;
     return {url: location.href, item_selector: itemSelector,
         results: Object.fromEntries(Object.entries(fields).map(([name, rule]) =>
-            [name, test(itemSelector, rule.selector, rule.extract === 'attribute' ? rule.attribute : '')]))};
+            [name, test(itemSelector, rule.selector, rule.extract === 'attribute' ? rule.attribute : '', rule.extract || 'text')]))};
 }"""

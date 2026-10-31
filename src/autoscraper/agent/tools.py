@@ -406,7 +406,8 @@ def build_tools(
     # 详情页用 html 根；详情链接可作为额外的 attribute/href 规则一起检查。
     @tools.action(
         description="Test up to 50 named FieldSpec rules on the current page in ONE call. "
-        "Returns current URL and per-field counts, exact selectors, values and status. "
+        "Returns current URL and per-field counts, exact selectors, extraction modes, values and status. "
+        "texts accepts multiple matches; count accepts zero matches and returns an integer. "
         "Use listing item selector for listing fields/detail href, html for detail fields. "
         "Do not test listing rules while on a detail page or rename requested fields."
     )

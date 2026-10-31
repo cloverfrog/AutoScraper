@@ -5,6 +5,7 @@
 from urllib.parse import urldefrag, urljoin
 
 from autoscraper.scraping.spec import ScraperSpec
+from autoscraper.scraping.values import has_field_value
 from .errors import InvalidSpecError
 from autoscraper.workflow.validation import Feedback, validate_spec
 
@@ -14,7 +15,7 @@ def page_key(url):
     return urldefrag(str(url)).url
 
 
-# 字段测试与记录计数分别保存：计数不依赖字段参数，替换模式仍比较同一字段的值。
+# 字段测试按提取方式隔离；计数不依赖字段参数，替换模式仍比较同一规则的值。
 class SubmissionChecks:
     def __init__(self, requirements=None, *, listing_url=None, reference_spec=None):
         self.requirements = requirements
@@ -49,12 +50,13 @@ class SubmissionChecks:
     def remember(self, result, field_selector="", attribute=""):
         if not result.get("url") or "item_selector" not in result:
             return
-        key = (page_key(result["url"]), result["item_selector"], field_selector, attribute or "")
+        mode = result.get("extract", "attribute" if attribute else "text")
+        key = (page_key(result["url"]), result["item_selector"], field_selector, attribute or "", mode)
         self.tests[key] = result
         self.remember_count(result["url"], result["item_selector"], result.get("count"))
         # 保留曾测试通过的详情目标，替换列表后复核新链接不会抹掉先前详情页的有效证据。
         if attribute == "href" and self.passed(result):
-            self.links.setdefault(key, set()).update(
+            self.links.setdefault(key[:4], set()).update(
                 urljoin(result["url"], value)
                 for sample in result["samples"]
                 for value in sample["values"]
@@ -79,14 +81,26 @@ class SubmissionChecks:
         return self.aliases.get(key, key)
 
     # 使用最终规则的原样参数取证，规范化页面别名不改变选择器语义。
-    def result(self, url, item_selector, selector, attribute=""):
-        return self.tests.get((self.actual_url(url), item_selector, selector, attribute or ""))
+    def result(self, url, item_selector, selector, attribute="", extract=None):
+        mode = extract or ("attribute" if attribute else "text")
+        return self.tests.get((self.actual_url(url), item_selector, selector, attribute or "", mode))
 
-    # 样本唯一性之外，必填字段还要求样本值非空；可选字段允许无匹配，但不允许歧义。
+    # 按提取方式检查样本：单值要求唯一，多元素允许多匹配；必填文本与列表还需非空。
     @staticmethod
-    def passed(result, required=True):
+    def passed(result, required=True, extract=None):
         if not result or not result.get("count") or not result.get("samples"):
             return False
+        mode = result.get("extract", "attribute" if result.get("attribute") else "text")
+        if extract is not None and extract != mode:
+            return False
+        # 多元素证据只用于对应提取方式，不能冒充单值选择器唯一性证据。
+        if mode == "count":
+            return all(sample.get("values") == [sample.get("matches")]
+                       and type(sample.get("matches")) is int and sample["matches"] >= 0
+                       for sample in result["samples"])
+        if mode == "texts":
+            return all(not required or has_field_value(sample.get("values"))
+                       for sample in result["samples"])
         return all(
             sample.get("matches") == 1
             and (
@@ -113,14 +127,17 @@ class SubmissionChecks:
                 )
             }
         role = "listing" if is_listing else "detail" if page in detail_urls else "other"
-        field_tests = sum(1 for test_url, _, field, _ in self.tests if test_url == page and field)
+        field_tests = sum(1 for test_url, _, field, _, _ in self.tests if test_url == page and field)
         pending = []
         if spec is not None and role in {"listing", "detail"}:
             fields = spec.fields if is_listing else spec.detail.fields
             root = spec.item_selector if is_listing else "html"
             pending.extend(
                 f"field:{name}" for name, field in fields.items()
-                if not self.passed(self.result(page, root, field.selector, field.attribute), field.required)
+                if not self.passed(
+                    self.result(page, root, field.selector, field.attribute, field.extract),
+                    field.required, field.extract,
+                )
             )
             if is_listing and spec.detail and not self.passed(
                 self.result(page, root, spec.detail.url_selector, "href")
@@ -163,9 +180,9 @@ class SubmissionChecks:
         return {
             "tests": [
                 {"url": url, "item_selector": item, "field_selector": selector,
-                 "attribute": attribute, "status": result.get("status"),
+                 "attribute": attribute, "extract": result.get("extract"), "status": result.get("status"),
                  "count": result.get("count"), "passed": self.passed(result)}
-                for (url, item, selector, attribute), result in tests
+                for (url, item, selector, attribute, _), result in tests
             ],
             "omitted_tests": max(0, len(self.tests) - len(tests)),
             "observed_link_urls": sorted({value for values in self.links.values() for value in values})[:8],
@@ -189,9 +206,9 @@ class SubmissionChecks:
         issues = validate_spec(spec, self.requirements) if self.requirements else []
         url = self.actual_url(spec.start_url)
 
-        def require(test_url, item, selector, attribute="", required=True):
-            result = self.result(test_url, item, selector, attribute)
-            if not self.passed(result, required):
+        def require(test_url, item, selector, attribute="", required=True, extract=None):
+            result = self.result(test_url, item, selector, attribute, extract)
+            if not self.passed(result, required, extract):
                 if result is None:
                     reason = "No test exists for this exact page/root/field combination."
                 else:
@@ -200,10 +217,10 @@ class SubmissionChecks:
                         f"count={result.get('count')!r}."
                     )
                 other_roots = sorted({
-                    root for (page, root, field, attr), previous in self.tests.items()
+                    root for (page, root, field, attr, _), previous in self.tests.items()
                     if page == self.actual_url(test_url) and root != item
                     and field == selector and attr == (attribute or "")
-                    and self.passed(previous, required)
+                    and self.passed(previous, required, extract)
                 })[:3]
                 if other_roots:
                     reason += (
@@ -213,14 +230,15 @@ class SubmissionChecks:
                     )
                 issues.append(Feedback(
                     code="selector_failure",
-                    message=f"Test exact selector {selector!r} attribute={attribute!r} relative to "
+                    message=f"Test exact selector {selector!r} attribute={attribute!r} "
+                    f"extract={extract or ('attribute' if attribute else 'text')!r} relative to "
                     f"{item!r} on {test_url}. {reason} "
                     "Navigate to the correct listing/detail page and use test_fields/test_selector.",
                 ))
             return result
 
         for field in spec.fields.values():
-            require(url, spec.item_selector, field.selector, field.attribute, field.required)
+            require(url, spec.item_selector, field.selector, field.attribute, field.required, field.extract)
         if spec.detail:
             require(url, spec.item_selector, spec.detail.url_selector, "href")
             detail_urls = {
@@ -233,8 +251,8 @@ class SubmissionChecks:
             verified = any(
                 all(
                     self.passed(
-                        self.result(detail_url, "html", field.selector, field.attribute),
-                        field.required,
+                        self.result(detail_url, "html", field.selector, field.attribute, field.extract),
+                        field.required, field.extract,
                     )
                     for field in spec.detail.fields.values()
                 )
@@ -242,12 +260,13 @@ class SubmissionChecks:
             )
             if not verified:
                 tested_urls = {
-                    page for page, root, _, _ in self.tests if root == "html" and page != url
+                    page for page, root, _, _, _ in self.tests if root == "html" and page != url
                 }
                 passed_urls = sorted(
                     page for page in tested_urls if all(
                         self.passed(
-                            self.result(page, "html", field.selector, field.attribute), field.required
+                            self.result(page, "html", field.selector, field.attribute, field.extract),
+                            field.required, field.extract,
                         )
                         for field in spec.detail.fields.values()
                     )

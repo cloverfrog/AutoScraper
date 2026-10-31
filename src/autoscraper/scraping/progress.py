@@ -13,12 +13,18 @@ STATE_SCRIPT = """(o) => {
         : document.scrollingElement;
     if (!root) throw new Error('Scroll container not found');
     const snapshot = o.fields ? items.map(item => Object.values(o.fields).map(f => {
-        const el = f.selector === ':scope' ? item : item.querySelector(f.selector);
+        const matches = f.selector === ':scope' ? [item] : [...item.querySelectorAll(f.selector)];
+        if (f.extract === 'count') return matches.length;
+        if (f.extract === 'texts') return matches.map(el =>
+            (el.innerText ?? el.textContent).replace(/\\s+/g, ' ').trim());
+        const el = matches[0];
         const value = el ? (f.extract === 'attribute' ? el.getAttribute(f.attribute) : (el.innerText ?? el.textContent)) : null;
         return value === null ? null : value.replace(/\\s+/g, ' ').trim();
     })) : [];
     const ready = !o.fields || snapshot.every(values => Object.values(o.fields)
-        .every((f, i) => !f.required || !!values[i]));
+        .every((f, i) => !f.required || (f.extract === 'count' ? true
+            : f.extract === 'texts' ? values[i].length > 0 && values[i].every(v => !!v)
+            : !!values[i])));
     return {ready, count: items.length, snapshot: JSON.stringify(snapshot),
         loading: !!visible(o.loading_selector), end: !!visible(o.end_selector),
         scroll_top: root.scrollTop, scroll_height: root.scrollHeight,

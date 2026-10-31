@@ -534,3 +534,17 @@ def test_skipped_append_prefix_is_not_retried(listing_page):
     assert [record["title"] for record in result.records] == ["B"]
     assert result.detail_pages_visited == 2 and len(result.errors) == 1
     assert result.stop_reason == "no_next"
+
+
+# 替换分页必须看到整个文本列表变化；计数字段从一变零也构成有效推进。
+@pytest.mark.parametrize("extract", ["texts", "count"])
+def test_replace_multi_element_snapshot(page, extract):
+    body = """<article><span>A</span><span>B</span></article>
+    <button onclick="document.querySelector('article').innerHTML='REPLACEMENT';
+    this.disabled=true">Next</button>"""
+    body = body.replace("REPLACEMENT", "<span>A</span><span>C</span>" if extract == "texts" else "")
+    result = run(page, body, dict(type="click", next_selector="button", mode="replace"),
+                 fields={"value": {"selector": "span", "extract": extract}})
+    assert result.errors == [] and result.pages_visited == 2
+    assert [row["value"] for row in result.records] == (
+        [["A", "B"], ["A", "C"]] if extract == "texts" else [2, 0])
