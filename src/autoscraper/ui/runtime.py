@@ -12,8 +12,7 @@ import threading
 import time
 import uuid
 
-from autoscraper.browser.access import BrowserAccess
-from autoscraper.exceptions import HandoffRequired
+from autoscraper.browser.access import BrowserAccess, HandoffRequired
 from autoscraper.observability.tracing import FileSink, Sanitizer, Trace
 from autoscraper.scraping.executor import ScraperExecutor
 from autoscraper.scraping.export import export_records

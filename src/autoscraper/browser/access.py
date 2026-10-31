@@ -14,12 +14,21 @@ import tempfile
 import time
 from typing import Literal
 
-from autoscraper.exceptions import HandoffRequired
 from autoscraper.scraping.spec import NonEmpty, ProtocolModel
 
 
 class HandoffRequest(ProtocolModel):
     reason: NonEmpty
+
+
+# 通过控制流异常区分暂时无法交互与用户主动取消，由 CLI 映射不同退出码。
+class HandoffRequired(Exception):
+    def __init__(self, request: HandoffRequest, *, cancelled: bool = False):
+        super().__init__(
+            "Browser operation cancelled" if cancelled else "User browser operation required"
+        )
+        self.request = request
+        self.cancelled = cancelled
 
 
 HandoffHandler = Callable[[HandoffRequest], Literal["continue", "cancel"] | None]

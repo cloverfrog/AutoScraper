@@ -9,8 +9,7 @@ import os
 import sys
 from pathlib import Path
 
-from autoscraper.agent.explorer import AgentSettings, save_spec
-from autoscraper.exceptions import AgentError
+from autoscraper.agent.explorer import AgentError, AgentSettings, save_spec
 from autoscraper.agent.clarification import ClarificationRequest
 from autoscraper.browser.access import BrowserAccess
 from autoscraper.cli.interaction import wait_for_user

@@ -10,8 +10,6 @@ from dataclasses import dataclass, field
 
 from pydantic import Field
 
-from autoscraper.exceptions import ClarificationRequired
-
 from autoscraper.scraping.spec import NonEmpty, ProtocolModel
 from autoscraper.observability.tracing import emit, operation
 
@@ -21,6 +19,14 @@ class ClarificationRequest(ProtocolModel):
     question: NonEmpty
     explanation: NonEmpty
     options: list[NonEmpty] = Field(default_factory=list, max_length=5)
+
+
+# 没有有效回答时抛出的控制流异常，携带原问题供 CLI 返回待澄清状态。
+class ClarificationRequired(Exception):
+    # 保留完整结构化问题，避免上层只拿到异常文本而丢失选项和说明。
+    def __init__(self, request: ClarificationRequest):
+        super().__init__(request.question)
+        self.request = request
 
 
 # 交互接口由 CLI 或其他调用方注入；None 表示尚未得到有效答案。

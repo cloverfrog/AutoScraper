@@ -21,10 +21,13 @@ from browser_use.llm.openai.responses_serializer import ResponsesAPIMessageSeria
 from browser_use.llm.schema import SchemaOptimizer
 from browser_use.llm.views import ChatInvokeCompletion, ChatInvokeUsage
 
-from autoscraper.exceptions import StructuredOutputError
 from autoscraper.observability.tracing import capture_usage, emit, traced_llm
 
 T = TypeVar("T", bound=BaseModel)
+
+
+class StructuredOutputError(ModelProviderError):
+    """Only a completed response that failed structured-output validation."""
 
 
 # 实现 browser-use 的聊天模型接口，将底层调用路由到兼容 Responses 的服务。
