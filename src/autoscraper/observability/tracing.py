@@ -98,6 +98,7 @@ def summarize_tool_output(content):
                 "sampled_roots",
                 "fallback_root",
                 "truncated",
+                "page_work",
             )
             if key in data
         }

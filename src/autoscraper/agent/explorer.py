@@ -105,6 +105,16 @@ relaxing it. Allowing an alternative does not establish equivalent content or or
 Exploration:
 Prefer low-cost checks of uncertainties that could invalidate the overall approach before
 refining individual fields. Choose the order from page state and dependencies.
+Organize work by page: in memory keep the current page, its unfinished checks, and the
+next destination/reason. Navigation has a cost. Prefer completing locally available checks
+before switching pages; if another page is needed first, keep the unfinished work explicit.
+Review local test results before scheduling a page change that depends on them.
+Inspecting a selector does not verify it. On a detail page, batch-test its requested fields
+with item_selector="html" before leaving where practical. Prefer testing known selectors
+directly over inspecting them again. page_work reports current-session checks for planning;
+its candidate_pending list refers to the supplied candidate and may change as rules change.
+Once all required evidence is recorded, submit from the current page; revisit another page
+only when remaining checks need it. Historical repair summaries are not current-session evidence.
 1. Start with inspect_page(root_selector="") to see page structure and actual button/link classes.
    Infer selectors from its DOM evidence. A missing root also returns a body sample; use that
    evidence to fix selectors instead of guessing multiple roots. For loading content, use wait_for_selector
@@ -255,6 +265,8 @@ async def generate_spec(
             access=access,
             check_submission=True,
             requirements=requirements,
+            listing_url=url,
+            reference_spec=previous_spec,
         )
         agent_llm = llm if llm is not None else make_llm(settings)
         agent = ExplorationAgent(
@@ -310,7 +322,9 @@ async def generate_spec(
                 # 人工操作可能改变页面，清除旧选择器证据，避免将接管前的测试当成当前依据。
                 if exploration_tools.submission is not None:
                     from .submission import SubmissionChecks
-                    exploration_tools.submission = SubmissionChecks(requirements)
+                    exploration_tools.submission = SubmissionChecks(
+                        requirements, listing_url=url, reference_spec=previous_spec,
+                    )
                 agent.add_new_task(
                     "The user returned browser control. Observe the current page again; verify "
                     "target access and the requested account/workspace before resuming the original "

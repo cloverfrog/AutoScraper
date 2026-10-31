@@ -16,8 +16,10 @@ def page_key(url):
 
 # 字段测试与记录计数分别保存：计数不依赖字段参数，替换模式仍比较同一字段的值。
 class SubmissionChecks:
-    def __init__(self, requirements=None):
+    def __init__(self, requirements=None, *, listing_url=None, reference_spec=None):
         self.requirements = requirements
+        self.listing_url = listing_url
+        self.reference_spec = reference_spec
         self.tests = {}
         self.counts = {}
         self.links = {}
@@ -96,6 +98,64 @@ class SubmissionChecks:
             or (not required and sample.get("matches") == 0)
             for sample in result["samples"]
         )
+
+    # 页内待办只依据本会话的实际测试生成；参考候选用于提示，不导入历史取证或阻止导航。
+    def page_work(self, url):
+        page = self.actual_url(url)
+        spec = self.last_candidate or self.reference_spec
+        listing = spec.start_url if spec is not None else self.listing_url
+        is_listing = listing is not None and page == self.actual_url(listing)
+        detail_urls = set()
+        if spec is not None and spec.detail:
+            detail_urls = {
+                self.actual_url(value) for value in self.links.get(
+                    (self.actual_url(spec.start_url), spec.item_selector, spec.detail.url_selector, "href"), ()
+                )
+            }
+        role = "listing" if is_listing else "detail" if page in detail_urls else "other"
+        field_tests = sum(1 for test_url, _, field, _ in self.tests if test_url == page and field)
+        pending = []
+        if spec is not None and role in {"listing", "detail"}:
+            fields = spec.fields if is_listing else spec.detail.fields
+            root = spec.item_selector if is_listing else "html"
+            pending.extend(
+                f"field:{name}" for name, field in fields.items()
+                if not self.passed(self.result(page, root, field.selector, field.attribute), field.required)
+            )
+            if is_listing and spec.detail and not self.passed(
+                self.result(page, root, spec.detail.url_selector, "href")
+            ):
+                pending.append("detail_link")
+            pagination = spec.pagination
+            if is_listing and pagination:
+                if pagination.type in {"click", "link"}:
+                    control = self.result(page, pagination.next_selector, "",
+                                          "href" if pagination.type == "link" else "")
+                    if not self.passed(control, pagination.type == "link") or control.get("count") != 1:
+                        pending.append("pagination_control")
+                if pagination.type in {"click", "scroll"}:
+                    mode = getattr(pagination, "mode", "append")
+                    if (page, root, pagination.type, mode) not in self.advances:
+                        pending.append(f"pagination_progress:{pagination.type}/{mode}")
+        guidance = (
+            "Inspection alone is not a field test. Group locally available field/link and "
+            "pagination checks before a detail visit where practical."
+            if is_listing else
+            "If this is a detail page, test its requested fields with item_selector='html' before leaving; "
+            "inspecting their selectors does not verify them."
+        )
+        if spec is not None and role != "other" and not pending:
+            guidance = (
+                "Current-page checks for the supplied candidate are already covered. "
+                "Avoid repeating unchanged tests; continue remaining work elsewhere or submit "
+                "if all required evidence is recorded."
+            )
+        return {
+            "url": page, "role": role, "field_tests": field_tests,
+            "candidate_pending": pending[:12] if spec is not None and role != "other" else None,
+            "omitted_pending": max(0, len(pending) - 12),
+            "guidance": guidance,
+        }
 
     # 修复只继承有界的选择器/URL/推进摘要，不复制原始页面文本或导入旧会话证据。
     def repair_summary(self):

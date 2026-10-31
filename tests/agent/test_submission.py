@@ -513,3 +513,109 @@ def test_repair_summary_is_bounded_and_excludes_page_text():
     assert all(test["passed"] for test in summary["tests"])
     fresh = SubmissionChecks()
     assert fresh.check(candidate())  # 摘要不构成新会话中的有效取证。
+
+
+# 没有候选时不把空待办当作全部完成；原始检查也不能冒充字段测试。
+def test_page_work_without_candidate_reports_inspection_only():
+    checks = SubmissionChecks(listing_url="https://fixture.test/")
+    listing = checks.page_work("https://fixture.test/")
+    assert listing["role"] == "listing"
+    assert listing["field_tests"] == 0 and listing["candidate_pending"] is None
+    other = checks.page_work("https://fixture.test/detail")
+    assert "does not verify" in other["guidance"]
+    assert "item_selector='html'" in other["guidance"]
+    assert checks.tests == {} and checks.advances == set()
+
+
+# 页内待办帮助安排顺序但不阻止提前导航；证据齐备时可直接在详情页完成提交。
+@pytest.mark.parametrize("finish_listing", [False, True])
+def test_page_work_guides_page_grouping_without_navigation_gate(finish_listing):
+    pytest.importorskip("browser_use")
+    from browser_use import ActionResult
+    from autoscraper.agent.tools import build_tools
+    from autoscraper.observability.tracing import summarize_tool_output
+
+    url = "https://fixture.test/"
+    detail_url = url + "detail"
+    spec = candidate(version="2", fields={"name": {"selector": "h2"}},
+                     detail={"url_selector": "a", "fields": {"desc": {"selector": "p.description"}}},
+                     pagination={"type": "click", "next_selector": "button.more"})
+    tools = build_tools(check_submission=True, listing_url=url, reference_spec=spec)
+    tools.use_structured_output_action(ScraperSpec)
+    current_url = url
+    evaluations = []
+
+    class Session:
+        downloaded_files = []
+        cdp_client = None
+        agent_focus_target_id = None
+
+        async def get_current_page_url(self):
+            return current_url
+
+        async def must_get_current_page(self):
+            return self
+
+        async def evaluate(self, script, *args):
+            evaluations.append(script)
+            if script == INSPECT_SCRIPT:
+                return json.dumps({"url": current_url, "nodes": [], "root_count": 1})
+
+            def field(root, selector, attribute=""):
+                return {"url": current_url, "item_selector": root, "field_selector": selector,
+                        "attribute": attribute, "count": 1, "status": "sample_passed",
+                        "samples": [{"matches": 1, "values": ["/detail" if attribute == "href" else "A"]}]}
+
+            if script == BATCH_SELECTOR_SCRIPT:
+                root, fields = args
+                return json.dumps({"url": current_url, "item_selector": root, "results": {
+                    name: field(root, rule["selector"], rule.get("attribute") or "")
+                    for name, rule in fields.items()
+                }})
+            assert script == SELECTOR_SCRIPT
+            return json.dumps(field(*args))
+
+    async def navigate(params, **kwargs):
+        nonlocal current_url
+        current_url = params.url
+        return ActionResult(extracted_content="navigated")
+
+    tools.registry.registry.actions["navigate"].function = navigate
+    actions = tools.registry.create_action_model()
+
+    async def act(data):
+        return await tools.act(actions.model_validate(data), browser_session=Session(),
+                               file_system=SimpleNamespace())
+
+    async def run():
+        inspected = await act({"inspect_page": {"root_selector": "article"}})
+        work = json.loads(inspected.extracted_content)["page_work"]
+        assert work["field_tests"] == 0
+        assert "field:name" in work["candidate_pending"]
+        assert "pagination_progress:click/append" in work["candidate_pending"]
+        assert len(evaluations) == 1  # 生成待办不增加浏览器操作或模型请求。
+        assert summarize_tool_output(inspected.extracted_content)["page_work"] == work
+        await act({"test_fields": {"item_selector": "article", "fields": {
+            "name": {"selector": "h2"},
+            "href": {"selector": "a", "extract": "attribute", "attribute": "href"},
+        }}})
+        if finish_listing:
+            await act({"test_selector": {"item_selector": "button.more", "field_selector": ""}})
+            tools.submission.begin_action("click", url)
+            tools.submission.remember_wait({"url": url, "selector": "article", "status": "ready", "count": 2})
+        navigated = await act({"navigate": {"url": detail_url}})
+        assert not navigated.error and current_url == detail_url
+        inspected = await act({"inspect_page": {"root_selector": "p"}})
+        work = json.loads(inspected.extracted_content)["page_work"]
+        assert work["role"] == "detail" and work["candidate_pending"] == ["field:desc"]
+        tested = await act({"test_fields": {"item_selector": "html", "fields": {
+            "desc": {"selector": "p.description"},
+        }}})
+        completed = json.loads(tested.extracted_content)["page_work"]
+        assert completed["candidate_pending"] == []
+        assert "already covered" in completed["guidance"]
+        result = await act({"done": {"data": spec.model_dump(mode="json")}})
+        assert bool(result.is_done) is finish_listing, result.extracted_content
+        assert current_url == detail_url  # 不因提交而强制回列表；缺证据时仍保持拒绝。
+
+    asyncio.run(run())

@@ -110,6 +110,9 @@ class TracedTools(Tools):
                     checks.advances.add(
                         (checks.actual_url(url), inputs["item_selector"], "scroll", "append")
                     )
+                if name in {"inspect_page", "test_fields", "test_selector"} and data.get("url"):
+                    data["page_work"] = checks.page_work(data["url"])
+                    result.extracted_content = json.dumps(data, ensure_ascii=False)
         elif checks and name in {"click", "scroll"}:
             checks.pending = None
         return result
@@ -224,9 +227,13 @@ def build_tools(
     access: BrowserAccess | None = None,
     check_submission: bool = False,
     requirements=None,
+    listing_url: str | None = None,
+    reference_spec: ScraperSpec | None = None,
 ) -> Tools:
     tools = TracedTools()
-    tools.submission = SubmissionChecks(requirements) if check_submission else None
+    tools.submission = SubmissionChecks(
+        requirements, listing_url=listing_url, reference_spec=reference_spec,
+    ) if check_submission else None
     # 只开放导航与分页探索相关动作；继续禁止输入、文件和任意代码执行。
     for name in list(tools.registry.registry.actions):
         if name not in {"navigate", "done", "click", "scroll"}:
