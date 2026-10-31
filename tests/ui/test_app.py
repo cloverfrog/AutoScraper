@@ -14,7 +14,7 @@ from autoscraper.ui.runtime import Job, JobManager, RunConfig
 
 # 按实际绑定的函数寻找回调，避免依赖 Gradio 的内部组件编号。
 def callback(app, name):
-    return next(fn.fn for fn in app.fns.values() if fn.fn.__name__ == name)
+    return next(fn.fn for fn in app.fns.values() if getattr(fn.fn, "__name__", None) == name)
 
 
 # 验证问题和说明能输出到网页，选项/自由回答能经真实 UI 回调返回工作线程。
@@ -52,7 +52,9 @@ def test_app_start_defaults_and_zero_wait_budget(tmp_path, monkeypatch, optional
     configs = []
     monkeypatch.setattr(manager, "start", lambda config: configs.append(config) or "job-id")
     app = build_app(manager)
-    start_fn = next(fn for fn in app.fns.values() if fn.fn.__name__ == "<lambda>")
+    start_fn = next(
+        fn for fn in app.fns.values() if getattr(fn.fn, "__name__", None) == "start_agent"
+    )
     values = [component.value for component in start_fn.inputs]
     index = next(i for i, c in enumerate(start_fn.inputs) if c.label == "内容等待模型调用预算")
     values[index] = 0

@@ -1,0 +1,16 @@
+[
+  {
+    "name": "图书列表（5 条）",
+    "url": "https://books.toscrape.com/",
+    "task": "抓取前 5 本书的书名、价格和详情页链接。",
+    "fields": "title price url",
+    "count": 5
+  },
+  {
+    "name": "图书分页（25 条）",
+    "url": "https://books.toscrape.com/",
+    "task": "跨列表分页抓取前 25 本书的书名、价格和详情页链接。",
+    "fields": "title price url",
+    "count": 25
+  }
+]

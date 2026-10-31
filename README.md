@@ -433,7 +433,7 @@ Agent 对已知选择器的数量等待使用 `wait_for_selector(selector, min_c
 
 ## 本地 Web UI
 
-Web UI 是现有两个 CLI 的可选操作入口，只监听 `127.0.0.1`，不创建公开分享链接。
+Web UI 是现有两个 CLI 的可选操作入口，默认监听 `127.0.0.1`，不创建公开分享链接。
 
 ```bash
 # 仅执行已有规则
@@ -446,7 +446,14 @@ uv run playwright install chromium
 # Agent 使用前，按上文配置 API Key、模型及浏览器环境变量
 uv run autoscraper-ui
 # 可选：--port 7861 --runtime-dir .agent-runtime/ui
+
+# 开发时通过 Tailscale IP 访问，并在 Python 源码变化后自动重启
+uv run autoscraper-ui --host 100.x.y.z --reload
 ```
+
+表单会自动记在当前浏览器的 `localStorage` 中，刷新或重新打开相同地址后恢复；点击“恢复默认设置”重置表单。“测试任务预设”读取仓库内的 `examples/ui_tasks.json`，可直接添加用例；`name` 为显示名称，其他字段使用表单字段名（例如 `url`、`task`、`fields`、`count`），选择后仍可手动修改。
+
+`--host` 可指定开发机的 Tailscale IP，仅供可信设备访问，访问范围由本机网络和 Tailnet ACL 控制。浏览器窗口仍在服务所在的开发机上运行。`--reload` 使用 watchfiles 监控实际 `src/autoscraper/` 下的 Python 源码，变化后完整重启并保留启动参数；当前测试任务会中断，需自行重新运行。日志、JSON 和其他运行产物变化不会触发重启。不加 `--reload` 时仍为普通启动。
 
 打开终端给出的本机地址。在“Agent 生成规则”中输入 URL 和自然语言需求；默认只生成并试抓取验证，勾选“执行完整抓取”后才要求完整执行。在“执行已有规则”中上传或粘贴 ScraperSpec JSON，即可重复抓取，无需模型依赖或 API Key。高级设置覆盖模型、步骤和等待预算、超时、必需字段、数量及验证上限。可选的请求条数、验证超时、内容等待超时和导航超时填写 0 或留空均表示不覆盖默认值；修复次数和内容等待模型调用预算中的 0 仍表示零次。
 
