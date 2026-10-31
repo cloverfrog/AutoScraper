@@ -369,6 +369,7 @@ def test_exploration_prompt_preserves_task_context(monkeypatch, rule, repair):
             settings,
             requirements=requirements,
             previous_spec=previous,
+            evidence_summary={"tests": [{"item_selector": "article", "field_selector": "h2"}]} if repair else None,
             feedback=feedback if repair else None,
             llm=object(),
             wait_llm=SimpleNamespace(max_calls=8, calls=3),
@@ -379,6 +380,8 @@ def test_exploration_prompt_preserves_task_context(monkeypatch, rule, repair):
     assert requirements.model_dump_json() in prompt
     assert ("Previous failed candidate:" in prompt) is repair
     assert ("Repair these validation failures and retest:" in prompt) is repair
+    assert ("historical leads, not current-session evidence" in prompt) is repair
+    assert captured["tools"].submission.tests == {}
     if repair:
         assert previous.model_dump_json() in prompt
         assert json.dumps([item.model_dump() for item in feedback], ensure_ascii=False) in prompt
@@ -448,6 +451,7 @@ def test_runner_limits_validation_cleanup(monkeypatch, rule, outcome):
                     self.tools.submission.last_issues = [Feedback(
                         code="invalid_spec", message="missing detail-page evidence",
                     )]
+                    self.tools.submission.last_candidate = parse_spec_output(json.dumps(rule))
                 if outcome == "direct_budget":
                     raise LLMBudgetExceeded("request phase limit")
             return SimpleNamespace(
@@ -471,8 +475,11 @@ def test_runner_limits_validation_cleanup(monkeypatch, rule, outcome):
         from autoscraper.agent.errors import LLMBudgetExceeded
         expected = LLMBudgetExceeded if outcome == "budget" else AgentError
         match = "missing detail-page evidence" if outcome in {"rejected_budget", "direct_budget"} else None
-        with pytest.raises(expected, match=match):
+        with pytest.raises(expected, match=match) as caught:
             asyncio.run(generate_spec(rule["start_url"], "title", settings))
+        if outcome in {"rejected_budget", "direct_budget"}:
+            assert caught.value.candidate == parse_spec_output(json.dumps(rule))
+            assert "tests" in caught.value.evidence_summary
     assert Browser.killed
 
 

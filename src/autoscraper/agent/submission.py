@@ -5,6 +5,7 @@
 from urllib.parse import urldefrag, urljoin
 
 from autoscraper.scraping.spec import ScraperSpec
+from .errors import InvalidSpecError
 from autoscraper.workflow.validation import Feedback, validate_spec
 
 
@@ -24,6 +25,7 @@ class SubmissionChecks:
         self.pending = None
         self.advances = set()
         self.last_issues = []
+        self.last_candidate = None
 
     # 动作前固定字段和数量快照；后续工具结果不能覆盖用于比较的基线。
     def begin_action(self, kind, url):
@@ -95,6 +97,33 @@ class SubmissionChecks:
             for sample in result["samples"]
         )
 
+    # 修复只继承有界的选择器/URL/推进摘要，不复制原始页面文本或导入旧会话证据。
+    def repair_summary(self):
+        tests = list(self.tests.items())[-32:]
+        return {
+            "tests": [
+                {"url": url, "item_selector": item, "field_selector": selector,
+                 "attribute": attribute, "status": result.get("status"),
+                 "count": result.get("count"), "passed": self.passed(result)}
+                for (url, item, selector, attribute), result in tests
+            ],
+            "omitted_tests": max(0, len(self.tests) - len(tests)),
+            "observed_link_urls": sorted({value for values in self.links.values() for value in values})[:8],
+            "progression": [
+                {"url": url, "item_selector": item, "type": kind, "mode": mode}
+                for url, item, kind, mode in sorted(self.advances)[:8]
+            ],
+        }
+
+    # 拒绝原因与候选一起离开已结束的 Agent，避免工作流只能传回一段泛化错误。
+    def rejection_error(self):
+        return InvalidSpecError(
+            "Submission rejected: "
+            + "; ".join(issue.message for issue in self.last_issues)[:4000],
+            candidate=self.last_candidate,
+            evidence_summary=self.repair_summary(),
+        )
+
     # 生成可直接回给 Agent 的修复指令；用户字段名以合并后的列表/详情字段为准。
     def check(self, spec: ScraperSpec):
         issues = validate_spec(spec, self.requirements) if self.requirements else []
@@ -103,16 +132,31 @@ class SubmissionChecks:
         def require(test_url, item, selector, attribute="", required=True):
             result = self.result(test_url, item, selector, attribute)
             if not self.passed(result, required):
-                issues.append(
-                    Feedback(
-                        code="selector_failure",
-                        message=(
-                            f"Test exact selector {selector!r} attribute={attribute!r} relative to "
-                            f"{item!r} on {test_url}; it is untested or its latest sample failed. "
-                            "Navigate to the correct listing/detail page and use test_fields/test_selector."
-                        ),
+                if result is None:
+                    reason = "No test exists for this exact page/root/field combination."
+                else:
+                    reason = (
+                        f"The latest test failed: status={result.get('status')!r}, "
+                        f"count={result.get('count')!r}."
                     )
-                )
+                other_roots = sorted({
+                    root for (page, root, field, attr), previous in self.tests.items()
+                    if page == self.actual_url(test_url) and root != item
+                    and field == selector and attr == (attribute or "")
+                    and self.passed(previous, required)
+                })[:3]
+                if other_roots:
+                    reason += (
+                        f" Passing evidence exists under different item roots {other_roots!r}; "
+                        "it does not verify the current root. Check the root change before "
+                        "rediscovering field selectors."
+                    )
+                issues.append(Feedback(
+                    code="selector_failure",
+                    message=f"Test exact selector {selector!r} attribute={attribute!r} relative to "
+                    f"{item!r} on {test_url}. {reason} "
+                    "Navigate to the correct listing/detail page and use test_fields/test_selector.",
+                ))
             return result
 
         for field in spec.fields.values():
@@ -137,16 +181,35 @@ class SubmissionChecks:
                 for detail_url in detail_urls
             )
             if not verified:
-                issues.append(
-                    Feedback(
-                        code="selector_failure",
-                        message=(
-                            "Test every detail field with item_selector='html' on an observed detail URL. "
-                            "Listing-page tests do not verify detail fields. Keep requested field names, "
-                            "e.g. detail.fields.description; only avoid names already in listing fields."
-                        ),
+                tested_urls = {
+                    page for page, root, _, _ in self.tests if root == "html" and page != url
+                }
+                passed_urls = sorted(
+                    page for page in tested_urls if all(
+                        self.passed(
+                            self.result(page, "html", field.selector, field.attribute), field.required
+                        )
+                        for field in spec.detail.fields.values()
                     )
-                )
+                )[:3]
+                if passed_urls:
+                    message = (
+                        f"Detail fields already passed on {passed_urls!r}, but those URLs are not "
+                        "linked by the candidate's current item root and detail href selector. "
+                        "Verify that listing/link combination before repeating detail field discovery."
+                    )
+                elif not detail_urls:
+                    message = (
+                        "No detail URL was observed for the candidate's current item root and href "
+                        "selector. Verify the listing/link combination before testing detail fields."
+                    )
+                else:
+                    message = (
+                        "Test every detail field with item_selector='html' on an observed detail URL. "
+                        "Listing-page tests do not verify detail fields. Keep requested field names, "
+                        "e.g. detail.fields.description; only avoid names already in listing fields."
+                    )
+                issues.append(Feedback(code="selector_failure", message=message))
         pagination = spec.pagination
         if pagination:
             if pagination.type in {"link", "click"}:
@@ -167,11 +230,20 @@ class SubmissionChecks:
             if pagination.type in {"click", "scroll"}:
                 mode = getattr(pagination, "mode", "append")
                 if (url, spec.item_selector, pagination.type, mode) not in self.advances:
+                    other_roots = sorted({
+                        item for page, item, kind, previous_mode in self.advances
+                        if page == url and item != spec.item_selector
+                        and kind == pagination.type and previous_mode == mode
+                    })[:3]
+                    root_hint = (
+                        f"Recorded progression uses different item roots {other_roots!r}; "
+                        "it does not verify the candidate's current root. " if other_roots else ""
+                    )
                     issues.append(
                         Feedback(
                             code="selector_failure",
                             message=(
-                                f"Verify {pagination.type}/{mode} record progression on the listing. "
+                                root_hint + f"Verify {pagination.type}/{mode} record progression on the listing. "
                                 "For append, click/scroll then wait_for_selector(min_count=N+1) or retest "
                                 "the same item selector; for replace, retest fields after clicking."
                             ),

@@ -10,7 +10,11 @@ class AgentError(RuntimeError):
 
 # 模型最终输出无法解析成合法抓取协议；工作流可尝试让 Agent 修复。
 class InvalidSpecError(AgentError):
-    pass
+    # 附带未通过验证的候选及探索线索；共享异常不导入具体业务模型。
+    def __init__(self, message: str, *, candidate=None, evidence_summary: dict | None = None):
+        super().__init__(message)
+        self.candidate = candidate
+        self.evidence_summary = evidence_summary
 
 
 # Agent 明确报告协议无法表达需求，携带原因和受影响字段。

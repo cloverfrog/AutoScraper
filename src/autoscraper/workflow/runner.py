@@ -129,6 +129,7 @@ def run_task(
         )
         # 首次生成也算一次尝试，因此总尝试数为 max_repairs + 1。
         previous_spec = None
+        previous_evidence = None
         for attempt in range(policy.max_repairs + 1):
             # 保守要求修复至少有三次请求余量；这是启动策略，不是 Step 到请求数的换算。
             # 预算反馈放在前面，同时保留此前的具体原因，不用泛化错误覆盖诊断。
@@ -162,6 +163,7 @@ def run_task(
                 outcome.attempts = attempt + 1
                 outcome.spec, outcome.data = None, None
                 candidate = None
+                repair_evidence = None
                 result = None
                 try:
                     # Step 上限独立于剩余请求数，只传递剩余任务时长。
@@ -170,6 +172,13 @@ def run_task(
                             "timeout_seconds": max(1, min(settings.timeout_seconds, int(seconds))),
                         }
                     )
+                    if attempt and previous_evidence is not None:
+                        emit(
+                            "repair.context",
+                            previous_spec=previous_spec.model_dump(mode="json")
+                            if previous_spec is not None else None,
+                            evidence_summary=previous_evidence,
+                        )
                     candidate = asyncio.run(
                         generate_spec(
                             url,
@@ -178,6 +187,7 @@ def run_task(
                             requirements=requirements,
                             feedback=outcome.feedback,
                             previous_spec=previous_spec,
+                            evidence_summary=previous_evidence,
                             llm=llm,
                             wait_llm=wait_llm,
                             clarification=clarification,
@@ -241,6 +251,8 @@ def run_task(
                     issues = [Feedback(code="selector_failure", message=str(exc)[:2000])]
                     outcome.spec, outcome.data = candidate, None
                 except InvalidSpecError as exc:
+                    candidate = exc.candidate
+                    repair_evidence = exc.evidence_summary
                     issues = [Feedback(code="invalid_spec", message=str(exc)[:2000])]
                 except LLMBudgetExceeded as exc:
                     # 单纯耗尽额度没有可修复的规则反馈，不能盲目花掉预留重新探索。
@@ -276,6 +288,7 @@ def run_task(
                     break
                 # 传回失败规则与具体反馈，让下一轮围绕已知问题修复而非从零猜测。
                 previous_spec = candidate
+                previous_evidence = repair_evidence
         return outcome
     except (AgentError, TimeoutError, LLMBudgetExceeded) as exc:
         outcome.feedback = [

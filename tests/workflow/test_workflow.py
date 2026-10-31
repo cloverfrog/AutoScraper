@@ -1123,3 +1123,55 @@ def test_no_repairs_uses_full_hard_limit(candidate, settings, workflow, monkeypa
     assert result.repair_reserve_calls == 0
     assert len(received) == result.attempts == 1
     assert result.status == "unfulfilled"
+
+
+# 被提交门槛拒绝的候选必须传给修复，但未修复时不能作为正式规则落地。
+@pytest.mark.parametrize("mode", ["repair", "no_repairs", "insufficient_budget"])
+def test_rejected_candidate_and_evidence_reach_repair(
+    candidate, settings, workflow, monkeypatch, mode,
+):
+    from autoscraper.agent.submission import SubmissionChecks
+    from autoscraper.workflow.validation import Feedback
+
+    module, model = workflow
+    checks = SubmissionChecks()
+    rejected = candidate.model_copy(update={"item_selector": ".wrong-root"})
+    checks.last_candidate = rejected
+    checks.last_issues = [Feedback(code="selector_failure", message="Item root changed")]
+    checks.remember({
+        "url": URL, "item_selector": "article", "count": 2, "status": "sample_passed",
+        "samples": [{"matches": 1, "values": ["A"]}],
+    }, "h2")
+    received = []
+
+    async def generate(url, task, run_settings, **kwargs):
+        received.append(kwargs)
+        model.calls += 1
+        if len(received) == 1:
+            assert kwargs["previous_spec"] is None and kwargs["evidence_summary"] is None
+            raise checks.rejection_error()
+        assert kwargs["previous_spec"] == rejected
+        assert kwargs["evidence_summary"] == checks.repair_summary()
+        assert kwargs["feedback"][0].code == "invalid_spec"
+        return candidate
+
+    monkeypatch.setattr(module, "generate_spec", generate)
+    monkeypatch.setattr(ScraperExecutor, "run", lambda *args: ScrapeResult(
+        records=[{"title": "A", "price": "1"}, {"title": "B", "price": "2"}],
+        stop_reason="max_items",
+    ))
+    if mode == "insufficient_budget":
+        settings.max_llm_calls = 2
+        settings.repair_reserve_calls = 0
+    policy = ValidationSettings(max_repairs=0 if mode == "no_repairs" else 2)
+    result = run_task(URL, TASK, settings, validation=policy)
+    if mode == "repair":
+        assert result.status == "validated"
+        assert result.spec == candidate
+        assert len(received) == result.llm_calls == 2
+    else:
+        assert result.status == "unfulfilled"
+        assert result.spec is None
+        assert len(received) == 1
+        assert any(item.code == "invalid_spec" for item in result.feedback)
+    assert result.history[0]["feedback"][0]["code"] == "invalid_spec"

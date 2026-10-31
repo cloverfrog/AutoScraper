@@ -53,6 +53,7 @@ class TracedTools(Tools):
         name, inputs = next(iter(params.items()))
         if checks and name == "done" and inputs.get("success") is not False and inputs.get("data"):
             candidate = ScraperSpec.model_validate(inputs["data"])
+            checks.last_candidate = candidate
             listing = await self._refresh_listing(candidate, kwargs.get("browser_session"))
             control = await self._refresh_control(candidate, kwargs.get("browser_session"))
             refreshed = await self._refresh_progress(candidate, kwargs.get("browser_session"))
@@ -71,6 +72,8 @@ class TracedTools(Tools):
                         {
                             "status": "candidate_rejected",
                             "feedback": [issue.model_dump() for issue in issues],
+                            "candidate": candidate.model_dump(mode="json"),
+                            "evidence_summary": checks.repair_summary(),
                         },
                         ensure_ascii=False,
                     )

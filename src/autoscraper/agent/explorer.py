@@ -103,6 +103,8 @@ answer; if the required plan cannot fit the protocol, report_unsupported instead
 relaxing it. Allowing an alternative does not establish equivalent content or order.
 
 Exploration:
+Prefer low-cost checks of uncertainties that could invalidate the overall approach before
+refining individual fields. Choose the order from page state and dependencies.
 1. Start with inspect_page(root_selector="") to see page structure and actual button/link classes.
    Infer selectors from its DOM evidence. A missing root also returns a body sample; use that
    evidence to fix selectors instead of guessing multiple roots. For loading content, use wait_for_selector
@@ -174,6 +176,7 @@ async def generate_spec(
     requirements: TaskRequirements | None = None,
     feedback: list[Feedback] | None = None,
     previous_spec: ScraperSpec | None = None,
+    evidence_summary: dict | None = None,
     llm=None,
     wait_llm=None,
     clarification: ClarificationSession | None = None,
@@ -194,6 +197,14 @@ async def generate_spec(
         )
         if previous_spec is not None:
             prompt += "\nPrevious failed candidate:\n" + previous_spec.model_dump_json()
+        if evidence_summary:
+            prompt += (
+                "\nPrevious exploration summary (historical leads, not current-session evidence):\n"
+                + json.dumps(evidence_summary, ensure_ascii=False)
+                + "\nPrefer targeted checks of the failed candidate and supplied selectors over "
+                "restarting discovery. Keep working selectors unless new observations justify "
+                "changing them. Revalidate relevant rules in this browser before submission."
+            )
         if feedback:
             prompt += "\nRepair these validation failures and retest:\n" + json.dumps(
                 [item.model_dump() for item in feedback], ensure_ascii=False
@@ -330,10 +341,7 @@ async def generate_spec(
                 # 证据门槛拒绝后耗尽步骤时，保留具体失败原因，而不是只剩泛化 Agent 失败。
                 checks = getattr(exploration_tools, "submission", None)
                 if checks and checks.last_issues:
-                    raise InvalidSpecError(
-                        "Submission rejected: "
-                        + "; ".join(issue.message for issue in checks.last_issues)[:4000]
-                    )
+                    raise checks.rejection_error()
                 if getattr(agent_llm, "budget_blocked", False):
                     raise LLMBudgetExceeded("Agent stopped at the LLM request budget boundary")
                 raise AgentError("Agent did not finish successfully within its limits")
@@ -347,10 +355,7 @@ async def generate_spec(
         # 框架可能吞掉请求异常，也可能直接抛出；两种路径都保留提交检查的具体原因。
         checks = getattr(exploration_tools, "submission", None)
         if checks and checks.last_issues:
-            raise InvalidSpecError(
-                "Submission rejected: "
-                + "; ".join(issue.message for issue in checks.last_issues)[:4000]
-            ) from None
+            raise checks.rejection_error() from None
         raise
     except TimeoutError as exc:
         raise AgentError(f"Agent timed out after {settings.timeout_seconds}s") from exc

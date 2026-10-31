@@ -175,7 +175,13 @@ def test_done_guard_rejects_before_builtin_completion():
         tools.act(actions.model_validate({"done": {"data": candidate().model_dump(mode="json")}}))
     )
     assert not result.is_done and not result.error
-    assert json.loads(result.extracted_content)["status"] == "candidate_rejected"
+    payload = json.loads(result.extracted_content)
+    assert payload["status"] == "candidate_rejected"
+    assert payload["candidate"] == candidate().model_dump(mode="json")
+    assert "evidence_summary" in payload
+    error = tools.submission.rejection_error()
+    assert error.candidate == candidate()
+    assert error.evidence_summary == payload["evidence_summary"]
 
 
 # 批量工具只发送数据参数，真实 Actor 返回结构能被提交证据正常登记。
@@ -451,3 +457,59 @@ def test_action_baseline_refreshes_stale_counts():
                 await browser.close()
 
     asyncio.run(run())
+
+
+# 复现日志中的根选择器漂移：详情已测、分页已推进，反馈应指出证据关联变化而非重新发现。
+def test_changed_root_reports_existing_detail_and_progress_evidence(page):
+    checks = SubmissionChecks()
+    listing_url = page.url
+    card = ('<article><b class="status">Available</b><a class="detail" href="/detail">Detail</a>'
+            '<div class="body"><h2>A</h2></div></article>')
+    spec = candidate(
+        version="2", fields={"name": {"selector": "h2"}, "status": {"selector": ".status"}},
+        detail={"url_selector": "a.detail", "fields": {"desc": {"selector": "p.description"}}},
+        pagination={"type": "click", "next_selector": "button.more"},
+    )
+    page.set_content(card + '<button class="more">More</button>')
+    for selector in ("h2", ".status"):
+        remember(page, checks, field=selector)
+    remember(page, checks, field="a.detail", attribute="href")
+    remember(page, checks, item="button.more", field="")
+    checks.begin_action("click", listing_url)
+    checks.remember_wait({"url": listing_url, "selector": "article", "status": "ready", "count": 2})
+    page.goto("https://fixture.test/detail")
+    page.set_content('<p class="description">Long description</p>')
+    remember(page, checks, item="html", field="p.description")
+    assert checks.check(spec) == []
+    page.goto(listing_url)
+    page.set_content(card * 2 + '<button class="more">More</button>')
+    for selector, attribute in (("h2", ""), (".status", ""), ("a.detail", "href")):
+        remember(page, checks, item=".body", field=selector, attribute=attribute)
+    changed = spec.model_copy(update={"item_selector": ".body"})
+    messages = [issue.message for issue in checks.check(changed)]
+    assert any("latest test failed" in message and "different item roots ['article']" in message
+               for message in messages)
+    assert any("Detail fields already passed" in message and "not linked" in message
+               for message in messages)
+    assert any("Recorded progression uses different item roots ['article']" in message
+               for message in messages)
+    assert not any("Test every detail field" in message for message in messages)
+    assert checks.check(spec) == []  # 有效的旧根仍可使用，新根不会继承它的证据。
+
+
+# 修复摘要需要限制上下文量，且不能把字段样本原文带入下一轮。
+def test_repair_summary_is_bounded_and_excludes_page_text():
+    checks = SubmissionChecks()
+    for index in range(40):
+        checks.remember({
+            "url": "https://fixture.test/", "item_selector": "article", "count": 1,
+            "status": "sample_passed",
+            "samples": [{"matches": 1, "values": ["PRIVATE_PAGE_TEXT"]}],
+        }, f".field-{index}")
+    summary = checks.repair_summary()
+    assert len(summary["tests"]) == 32
+    assert summary["omitted_tests"] == 8
+    assert "PRIVATE_PAGE_TEXT" not in json.dumps(summary)
+    assert all(test["passed"] for test in summary["tests"])
+    fresh = SubmissionChecks()
+    assert fresh.check(candidate())  # 摘要不构成新会话中的有效取证。
