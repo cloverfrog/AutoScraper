@@ -24,6 +24,7 @@ from autoscraper.scraping.errors import (
     ContentTimeout, NavigationError, PaginationActionError, ScrapeError,
 )
 from autoscraper.scraping.executor import ScraperExecutor
+from autoscraper.scraping.spec import ScraperSpec
 from .outcome import TaskOutcome, TaskStage
 from .requirements import extract_requirements
 from .validation import (
@@ -40,6 +41,7 @@ from autoscraper.observability.tracing import Trace, emit, labels, operation, tr
 # 同步任务入口：在有限预算内完成需求解析、探索、验证和可选完整抓取。
 # execute=False 也会试抓取，但可返回 sample_only；execute=True 需要完整数据验证通过。
 # ask_user 注入交互方式；trace 由装饰器管理，函数最终返回 TaskOutcome 而不写产物文件。
+# initial_spec 仅供首轮参考，不作为失败候选，也不参与独立需求解析。
 # access 在探索、修复与执行之间共享最新认证快照，不把凭据放入 TaskOutcome 或模型反馈。
 @traced_task
 def run_task(
@@ -47,6 +49,7 @@ def run_task(
     task: str,
     settings: AgentSettings,
     *,
+    initial_spec: ScraperSpec | None = None,
     validation: ValidationSettings | None = None,
     fields: list[str] | None = None,
     count: int | None = None,
@@ -186,6 +189,7 @@ def run_task(
                             run_settings,
                             requirements=requirements,
                             feedback=outcome.feedback,
+                            initial_spec=initial_spec if attempt == 0 else None,
                             previous_spec=previous_spec,
                             evidence_summary=previous_evidence,
                             llm=llm,

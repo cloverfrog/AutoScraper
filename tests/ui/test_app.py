@@ -292,3 +292,30 @@ def test_browser_optional_numbers_use_defaults(tmp_path, monkeypatch):
             browser.close()
     finally:
         app.close()
+
+
+# 上传参考规则和直接粘贴共用同一文本框，生成入口与执行入口保留独立协议。
+def test_agent_reference_upload_and_paste(tmp_path, monkeypatch):
+    manager = JobManager(tmp_path)
+    configs = []
+    monkeypatch.setattr(manager, "start", lambda config: configs.append(config) or "job-id")
+    app = build_app(manager)
+    start_fn = next(
+        fn for fn in app.fns.values() if getattr(fn.fn, "__name__", None) == "start_agent"
+    )
+    reference = '{"start_url": "https://example.com"}'
+    upload = next(
+        fn for fn in app.fns.values()
+        if getattr(fn.fn, "__name__", None) == "load_rule"
+        and fn.inputs[0].label == "上传参考 ScraperSpec JSON"
+    )
+    loaded = upload.fn(reference.encode("utf-8-sig"))
+    assert loaded == reference
+    assert upload.outputs[0].label == "参考规则 JSON（可粘贴或编辑）"
+    for value in (loaded, ""):
+        values = [component.value for component in start_fn.inputs]
+        index = next(i for i, c in enumerate(start_fn.inputs) if c is upload.outputs[0])
+        values[index] = value
+        start_fn.fn(*values)
+        assert configs[-1].initial_spec_json == value
+        assert configs[-1].spec_json == ""

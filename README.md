@@ -118,6 +118,18 @@ browser-use 的 75% 步数预警已通过局部 Agent 子类关闭，最后一�
 uv run --extra agent autoscraper-agent "https://books.toscrape.com/" "抓取前25本书的完整书名、价格和详情链接，需要分页" --spec-output output/books-agent.json
 ```
 
+**基于已有规则继续优化**：增加 `--spec-input`，在任务中写清完整目标和修改意见。
+Agent 首轮会参考旧规则，测试并复用仍有效的部分，根据当前任务调整字段、选择器、分页和详情规则，再走相同的验证与失败修复流程。
+
+```bash
+uv run --extra agent autoscraper-agent "https://books.toscrape.com/" "抓取前25本书，字段名为title、price、url；修正价格选择器，保留完整书名和绝对详情链接" --spec-input output/books-agent.json --spec-output output/books-updated.json
+```
+
+未提供 `--spec-input` 时行为不变。输入必须是合法的 ScraperSpec JSON；当前任务需求优先于旧规则。
+默认建议另存新文件；也允许输入、规则输出使用同一路径，但只有验证通过后才覆盖。
+任务失败不会覆盖输入文件，保留的未验证候选会另存且避开输入路径。数据输出和认证状态路径不能与输入协议相同。
+Python 接口对应 `run_task(url, task, settings, initial_spec=existing_spec)`，其中 `existing_spec` 为 `ScraperSpec` 对象，省略或传 `None` 则从零生成。
+
 **用已有规则抓取**：运行 Executor，不调用 LLM。
 
 ```bash
@@ -160,6 +172,7 @@ Agent 工作流判定为验证失败，不覆盖已有输出。只运行 Executo
 | 参数 | 用途 | 默认值 |
 | --- | --- | --- |
 | `--spec-output` | 规则输出路径，必填 | — |
+| `--spec-input` | 可选的已有 ScraperSpec JSON，供首轮探索参考并优化 | 从零生成 |
 | `--output` | 数据输出路径，可重复指定 CSV / JSON | 不抓取数据 |
 | `--headed` | 显示探索、试抓取和正式抓取浏览器 | 无头模式 |
 | `--auth-state` | 显式加载/保存此网站、账号的认证状态文件 | 仅本次任务中传递 |
@@ -455,7 +468,7 @@ uv run autoscraper-ui --host 100.x.y.z --reload
 
 `--host` 可指定开发机的 Tailscale IP，仅供可信设备访问，访问范围由本机网络和 Tailnet ACL 控制。浏览器窗口仍在服务所在的开发机上运行。`--reload` 使用 watchfiles 监控实际 `src/autoscraper/` 下的 Python 源码，变化后完整重启并保留启动参数；当前测试任务会中断，需自行重新运行。日志、JSON 和其他运行产物变化不会触发重启。不加 `--reload` 时仍为普通启动。
 
-打开终端给出的本机地址。在“Agent 生成规则”中输入 URL 和自然语言需求；默认只生成并试抓取验证，勾选“执行完整抓取”后才要求完整执行。在“执行已有规则”中上传或粘贴 ScraperSpec JSON，即可重复抓取，无需模型依赖或 API Key。高级设置覆盖模型、步骤和等待预算、超时、必需字段、数量及验证上限。可选的请求条数、验证超时、内容等待超时和导航超时填写 0 或留空均表示不覆盖默认值；修复次数和内容等待模型调用预算中的 0 仍表示零次。
+打开终端给出的本机地址。在“Agent 生成规则”中输入 URL 和自然语言需求，可展开“已有规则（可选）”上传或粘贴参考 ScraperSpec JSON，并在任务中说明修改意见；默认只生成并试抓取验证，勾选“执行完整抓取”后才要求完整执行。在“执行已有规则”中上传或粘贴 ScraperSpec JSON，即可重复抓取，无需模型依赖或 API Key。高级设置覆盖模型、步骤和等待预算、超时、必需字段、数量及验证上限。可选的请求条数、验证超时、内容等待超时和导航超时填写 0 或留空均表示不覆盖默认值；修复次数和内容等待模型调用预算中的 0 仍表示零次。
 
 页面持续显示 browser-use 的 INFO 日志，包括 Step、Memory、工具调用和参数；这些是模型自报信息，不代表独立验证事实。运行完成后可查看结构化摘要、验证反馈和最多 100 条预览，下载规则及完整 JSON/CSV 数据。`sample_only` 表示样本，`rule.unvalidated.json` 表示失败时保留的未验证候选，不能当作已验证规则。
 

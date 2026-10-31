@@ -2,6 +2,7 @@
 # 模型以脚本候选代替；提取测试使用本地 Chromium/路由，验证真实选择器行为而不付费。
 import asyncio
 import json
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -1175,3 +1176,106 @@ def test_rejected_candidate_and_evidence_reach_repair(
         assert len(received) == 1
         assert any(item.code == "invalid_spec" for item in result.feedback)
     assert result.history[0]["feedback"][0]["code"] == "invalid_spec"
+
+
+# 首轮参考协议不带失败反馈；候选仍须满足当前需求，缺字段后沿用原修复流程。
+@pytest.mark.parametrize("with_reference", [False, True])
+def test_initial_spec_is_reference_then_repair_uses_candidate(
+    candidate, settings, workflow, monkeypatch, with_reference
+):
+    reference = candidate.model_copy(deep=True)
+    reference.fields["price"].selector = ".old-price"
+    original = reference.model_dump_json()
+    broken = candidate.model_copy(deep=True)
+    del broken.fields["price"]
+    received = install_candidates(monkeypatch, workflow, [broken, candidate])
+    monkeypatch.setattr(
+        ScraperExecutor, "run", lambda *args: ScrapeResult(
+            records=[{"title": "A", "price": "1"}, {"title": "B", "price": "2"}],
+            stop_reason="max_items",
+        )
+    )
+    outcome = run_task(URL, TASK, settings, initial_spec=reference if with_reference else None)
+    assert outcome.status == "validated"
+    assert received[0]["initial_spec"] == (reference if with_reference else None)
+    assert received[0]["previous_spec"] is None
+    assert not received[0]["feedback"]
+    assert received[0]["requirements"].fields == ["title", "price"]
+    assert received[1]["initial_spec"] is None
+    assert received[1]["previous_spec"] == broken
+    assert received[1]["feedback"][0].code == "missing_required_field"
+    assert reference.model_dump_json() == original
+
+
+# CLI 输入可以与正式输出同名；失败及候选另存都不能破坏原始协议。
+@pytest.mark.parametrize("input_name", ["rule.json", "rule.unvalidated.json", "reference.json"])
+@pytest.mark.parametrize("status", ["validated", "unfulfilled"])
+def test_cli_initial_spec_and_input_preservation(
+    candidate, monkeypatch, tmp_path, capsys, input_name, status
+):
+    import autoscraper.cli.agent as cli
+    from autoscraper.workflow.outcome import TaskOutcome
+
+    input_path = tmp_path / input_name
+    output_path = tmp_path / "rule.json"
+    original = candidate.model_dump_json(indent=2)
+    input_path.write_text(original, encoding="utf-8-sig")
+    original_bytes = input_path.read_bytes()
+    updated = candidate.model_copy(deep=True)
+    updated.fields["price"].selector = ".updated-price"
+    received = []
+
+    def run(*args, **kwargs):
+        received.append(kwargs["initial_spec"])
+        return TaskOutcome(status=status, spec=updated, failure_stage="validation")
+
+    monkeypatch.setenv("AUTOSCRAPER_API_KEY", "fake")
+    monkeypatch.setattr(cli, "run_task", run)
+    monkeypatch.setattr("sys.argv", [
+        "autoscraper-agent", URL, TASK, "--spec-input", str(input_path),
+        "--spec-output", str(output_path),
+    ])
+    assert cli.main() == (0 if status == "validated" else 1)
+    report = json.loads(capsys.readouterr().out)
+    assert received == [candidate]
+    if status == "validated":
+        assert ScraperSpec.model_validate_json(output_path.read_text()) == updated
+    else:
+        assert Path(report["unvalidated_spec"]).resolve() != input_path.resolve()
+    if status != "validated" or input_path != output_path:
+        assert input_path.read_bytes() == original_bytes
+
+
+# 非法参考输入必须在启动模型前失败，也不能触碰正式输出。
+@pytest.mark.parametrize("payload", [None, "{bad json", "{}"])
+def test_cli_invalid_initial_spec_fails_before_workflow(monkeypatch, tmp_path, payload):
+    import autoscraper.cli.agent as cli
+
+    input_path, output_path = tmp_path / "input.json", tmp_path / "rule.json"
+    if payload is not None:
+        input_path.write_text(payload)
+    output_path.write_text("original")
+    monkeypatch.setattr(cli, "settings_from_env", lambda **kwargs: pytest.fail("Do not call model"))
+    monkeypatch.setattr("sys.argv", [
+        "autoscraper-agent", URL, TASK, "--spec-input", str(input_path),
+        "--spec-output", str(output_path),
+    ])
+    assert cli.main() == 1
+    assert output_path.read_text() == "original"
+
+
+# 数据导出和认证状态会独立写文件，不能借这些路径覆盖参考协议。
+@pytest.mark.parametrize("flag", ["--output", "--auth-state"])
+def test_cli_initial_spec_rejects_other_writers(candidate, monkeypatch, tmp_path, flag):
+    import autoscraper.cli.agent as cli
+
+    input_path = tmp_path / "input.json"
+    input_path.write_text(candidate.model_dump_json())
+    original = input_path.read_bytes()
+    monkeypatch.setattr(cli, "settings_from_env", lambda **kwargs: pytest.fail("Do not call model"))
+    monkeypatch.setattr("sys.argv", [
+        "autoscraper-agent", URL, TASK, "--spec-input", str(input_path),
+        "--spec-output", str(tmp_path / "rule.json"), flag, str(input_path),
+    ])
+    assert cli.main() == 1
+    assert input_path.read_bytes() == original

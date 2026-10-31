@@ -153,7 +153,10 @@ def test_spec_execution_exports_only_artifacts(tmp_path, monkeypatch):
 
 # Agent 模式复用环境配置和工作流；样本与未验证候选使用不同产物语义。
 @pytest.mark.parametrize("status,sample_only", [("validated", True), ("success", False), ("unfulfilled", False)])
-def test_agent_adapter_preserves_outcome_semantics(tmp_path, monkeypatch, status, sample_only):
+@pytest.mark.parametrize("with_reference", [False, True])
+def test_agent_adapter_preserves_outcome_semantics(
+    tmp_path, monkeypatch, status, sample_only, with_reference
+):
     import sys
     from types import ModuleType
 
@@ -177,6 +180,7 @@ def test_agent_adapter_preserves_outcome_semantics(tmp_path, monkeypatch, status
         assert kwargs["execute"]
         assert kwargs["fields"] == ["title"]
         assert kwargs["count"] == 1
+        assert kwargs["initial_spec"] == (spec if with_reference else None)
         assert callable(kwargs["ask_user"])
         return TaskOutcome(status=status, spec=spec, data=data, sample_only=sample_only)
 
@@ -185,6 +189,7 @@ def test_agent_adapter_preserves_outcome_semantics(tmp_path, monkeypatch, status
     job_id = manager.start(RunConfig(
         url="https://example.com", task="抓标题", execute=True, fields="title", count=1,
         agent_options={"max_wait_llm_calls": 0},
+        initial_spec_json=spec.model_dump_json() if with_reference else " ",
     ))
     wait_for(lambda: manager.get(job_id).done)
     state = manager.get(job_id).snapshot()
@@ -196,3 +201,25 @@ def test_agent_adapter_preserves_outcome_semantics(tmp_path, monkeypatch, status
         assert state["preview"] == []
     else:
         assert names == {"rule.json", "data.json", "data.csv"}
+
+
+# 非空参考协议先做结构校验，无效输入不启动模型，也不发布规则产物。
+@pytest.mark.parametrize("payload", ["{bad json", "{}"])
+def test_agent_invalid_reference_does_not_start_model(tmp_path, monkeypatch, payload):
+    import sys
+    from types import ModuleType
+
+    monkeypatch.setitem(sys.modules, "browser_use", ModuleType("browser_use"))
+    monkeypatch.setattr(
+        "autoscraper.cli.agent.settings_from_env",
+        lambda **kwargs: pytest.fail("Do not call model"),
+    )
+    manager = JobManager(tmp_path)
+    job_id = manager.start(RunConfig(
+        url="https://example.com", task="抓标题", initial_spec_json=payload,
+    ))
+    wait_for(lambda: manager.get(job_id).done)
+    state = manager.get(job_id).snapshot()
+    assert state["status"] == "unfulfilled"
+    assert state["files"] == []
+    assert "error" in state["summary"]
