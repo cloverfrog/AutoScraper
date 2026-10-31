@@ -26,6 +26,7 @@ class RunConfig:
     url: str = ""
     task: str = ""
     spec_json: str = ""
+    initial_spec_json: str = ""
     execute: bool = False
     headed: bool = False
     login: bool = False
@@ -207,6 +208,11 @@ class JobManager:
             from autoscraper.workflow.runner import run_task
             from autoscraper.workflow.validation import ValidationSettings
 
+            # 参考协议在调用模型前解析；空白输入沿用从零生成流程。
+            initial_spec = (
+                ScraperSpec.model_validate_json(config.initial_spec_json)
+                if config.initial_spec_json.strip() else None
+            )
             settings = settings_from_env(
                 **config.agent_options, headless=not config.headed,
                 executable_path=config.browser_path or None,
@@ -214,6 +220,7 @@ class JobManager:
             )
             outcome = run_task(
                 config.url, config.task, settings,
+                initial_spec=initial_spec,
                 validation=ValidationSettings(**config.validation_options),
                 fields=config.fields.split() or None, count=config.count,
                 execute=config.execute, trace=trace, access=access,

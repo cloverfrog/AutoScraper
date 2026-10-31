@@ -50,6 +50,7 @@ def build_app(manager):
         config = RunConfig(
             mode=mode, url=data["url"] or "", task=data["task"] or "",
             spec_json=data["spec_json"] or "",
+            initial_spec_json=data["initial_spec_json"] or "",
             execute=data["execute"], headed=data["headed"],
             login=data["login"] if mode == "spec" else False,
             auth_profile=(data["auth_profile"] or "").strip(),
@@ -142,6 +143,14 @@ def build_app(manager):
                     label="目标 URL", value="", placeholder="https://example.com",
                 )
                 controls["task"] = gr.Textbox(label="抓取任务", value="", lines=3)
+                with gr.Accordion("已有规则（可选）", open=False):
+                    initial_upload = gr.File(
+                        label="上传参考 ScraperSpec JSON", file_types=[".json"], type="binary",
+                    )
+                    controls["initial_spec_json"] = gr.Textbox(
+                        label="参考规则 JSON（可粘贴或编辑）", value="", lines=10,
+                        info="优先测试并复用有效规则，按当前任务调整；留空则从零生成。",
+                    )
                 controls["execute"] = gr.Checkbox(label="验证规则后执行完整抓取", value=False)
                 gr.Markdown("关闭完整抓取时仍会试抓取验证；样本结果不代表完整任务已完成。")
                 agent_start = gr.Button("生成规则", variant="primary")
@@ -238,6 +247,10 @@ def build_app(manager):
             select_preset, preset, form, queue=False, api_visibility="private",
         )
         upload.upload(load_rule, upload, controls["spec_json"], queue=False, api_visibility="private")
+        initial_upload.upload(
+            load_rule, initial_upload, controls["initial_spec_json"],
+            queue=False, api_visibility="private",
+        )
         agent_start.click(
             start_agent, list(controls.values()), [job_id, status],
             queue=False, api_visibility="private",

@@ -15,6 +15,7 @@ from autoscraper.agent.clarification import ClarificationRequest
 from autoscraper.browser.access import BrowserAccess
 from autoscraper.cli.interaction import wait_for_user
 from autoscraper.scraping.export import export_records
+from autoscraper.scraping.spec import ScraperSpec
 from autoscraper.workflow.validation import ValidationSettings
 from autoscraper.workflow.runner import run_task
 from autoscraper.observability.tracing import FileSink, Trace, emit, operation
@@ -89,6 +90,7 @@ def main() -> int:
     parser.add_argument("url")
     parser.add_argument("task")
     parser.add_argument("--spec-output", required=True, type=Path)
+    parser.add_argument("--spec-input", type=Path, help="Existing ScraperSpec JSON to refine")
     parser.add_argument("--output", type=Path, action="append", default=[])
     parser.add_argument("--model")
     parser.add_argument("--base-url")
@@ -147,6 +149,18 @@ def _execute(args, trace) -> int:
             raise ValueError("Rule output must be .json")
         if any(p.suffix.lower() not in {".json", ".csv"} for p in args.output):
             raise ValueError("Data output must be .json or .csv")
+        # 先读取参考协议；失败候选另存时也必须避开输入路径。
+        initial_spec = None
+        reserved = set(paths)
+        if args.spec_input is not None:
+            initial_spec = ScraperSpec.model_validate_json(
+                args.spec_input.read_text(encoding="utf-8-sig")
+            )
+            reserved.add(args.spec_input.resolve())
+            if args.spec_input.resolve() in {p.resolve() for p in args.output}:
+                raise ValueError("Reference rule and data output paths must be distinct")
+            if args.auth_state is not None and args.spec_input.resolve() == args.auth_state.resolve():
+                raise ValueError("Reference rule and authentication state paths must be distinct")
         settings = settings_from_env(
             **{
                 name: getattr(args, name)
@@ -183,6 +197,7 @@ def _execute(args, trace) -> int:
             args.url,
             args.task,
             settings,
+            initial_spec=initial_spec,
             validation=validation,
             fields=args.fields,
             count=args.count,
@@ -202,7 +217,7 @@ def _execute(args, trace) -> int:
             if outcome.spec is not None and outcome.failure_stage in {"validation", "execution"}:
                 try:
                     candidate_path = save_unvalidated_spec(
-                        outcome.spec, args.spec_output, set(paths)
+                        outcome.spec, args.spec_output, reserved
                     )
                     summary["unvalidated_spec"] = str(candidate_path)
                 except OSError as exc:

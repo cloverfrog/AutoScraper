@@ -325,8 +325,10 @@ def test_browser_use_supplies_schema_without_manual_duplicate():
 
 
 # 初始探索和修复都应保留任务约束、历史候选及剩余等待预算。
-@pytest.mark.parametrize("repair", [False, True])
-def test_exploration_prompt_preserves_task_context(monkeypatch, rule, repair):
+@pytest.mark.parametrize("context", ["new", "reference", "repair"])
+def test_exploration_prompt_preserves_task_context(monkeypatch, rule, context):
+    repair = context == "repair"
+    reference = context == "reference"
     bu = pytest.importorskip("browser_use")
     from autoscraper.scraping.spec import ScraperSpec
     from autoscraper.workflow.validation import Feedback
@@ -368,6 +370,7 @@ def test_exploration_prompt_preserves_task_context(monkeypatch, rule, repair):
             task,
             settings,
             requirements=requirements,
+            initial_spec=ScraperSpec.model_validate(rule) if reference else None,
             previous_spec=previous,
             evidence_summary={"tests": [{"item_selector": "article", "field_selector": "h2"}]} if repair else None,
             feedback=feedback if repair else None,
@@ -378,6 +381,13 @@ def test_exploration_prompt_preserves_task_context(monkeypatch, rule, repair):
     prompt = captured["task"]
     assert json.dumps(task, ensure_ascii=False) in prompt
     assert requirements.model_dump_json() in prompt
+    assert ("User-provided reference ScraperSpec (not a failed candidate):" in prompt) is reference
+    assert captured["tools"].submission.reference_spec == (
+        ScraperSpec.model_validate(rule) if reference or repair else None
+    )
+    if reference:
+        assert "current task and authoritative requirements take precedence" in prompt
+        assert "fields, selectors, pagination and detail rules" in prompt
     assert ("Previous failed candidate:" in prompt) is repair
     assert ("Repair these validation failures and retest:" in prompt) is repair
     assert ("historical leads, not current-session evidence" in prompt) is repair

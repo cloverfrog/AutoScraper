@@ -185,6 +185,7 @@ async def generate_spec(
     *,
     requirements: TaskRequirements | None = None,
     feedback: list[Feedback] | None = None,
+    initial_spec: ScraperSpec | None = None,
     previous_spec: ScraperSpec | None = None,
     evidence_summary: dict | None = None,
     llm=None,
@@ -197,6 +198,18 @@ async def generate_spec(
 
     observer = StepObserver() if current_trace() is not None else None
     prompt = build_task(url, task)
+    # 修复轮次使用实际失败候选，首轮参考规则不带失败语义，也不导入历史取证。
+    reference_spec = previous_spec if previous_spec is not None else initial_spec
+    if initial_spec is not None and previous_spec is None:
+        prompt += (
+            "\nUser-provided reference ScraperSpec (not a failed candidate):\n"
+            + initial_spec.model_dump_json()
+            + "\nThe current task and authoritative requirements take precedence over this reference. "
+            "Test the supplied rules in the current browser and reuse those that remain valid. "
+            "Adjust or remove fields, selectors, pagination and detail rules as needed; "
+            "do not preserve stale rules or rules that conflict with the current task. "
+            "The resulting candidate must still pass the normal validation process."
+        )
     clarification = clarification if clarification is not None else ClarificationSession()
     access = access if access is not None else BrowserAccess()
     prompt += clarification.prompt()
@@ -266,7 +279,7 @@ async def generate_spec(
             check_submission=True,
             requirements=requirements,
             listing_url=url,
-            reference_spec=previous_spec,
+            reference_spec=reference_spec,
         )
         agent_llm = llm if llm is not None else make_llm(settings)
         agent = ExplorationAgent(
@@ -323,7 +336,7 @@ async def generate_spec(
                 if exploration_tools.submission is not None:
                     from .submission import SubmissionChecks
                     exploration_tools.submission = SubmissionChecks(
-                        requirements, listing_url=url, reference_spec=previous_spec,
+                        requirements, listing_url=url, reference_spec=reference_spec,
                     )
                 agent.add_new_task(
                     "The user returned browser control. Observe the current page again; verify "
