@@ -381,7 +381,7 @@ def test_exploration_prompt_preserves_task_context(monkeypatch, rule, context):
     prompt = captured["task"]
     assert json.dumps(task, ensure_ascii=False) in prompt
     assert requirements.model_dump_json() in prompt
-    assert ("User-provided reference ScraperSpec (not a failed candidate):" in prompt) is reference
+    assert ("User-provided reference ScraperSpec:" in prompt) is reference
     assert captured["tools"].submission.reference_spec == (
         ScraperSpec.model_validate(rule) if reference or repair else None
     )

@@ -166,8 +166,10 @@ def test_navigation_error_types(error, expected):
     def fail(*args, **kwargs):
         raise error
 
+    # 导航器会注册并清理文档监听；测试替身需保留这两个接口，才能验证原始异常分类。
+    page = SimpleNamespace(goto=fail, on=lambda *args: None, remove_listener=lambda *args: None)
     with pytest.raises(expected):
-        navigate(SimpleNamespace(goto=fail), "https://fixture.test", 50)
+        navigate(page, "https://fixture.test", 50)
 
 
 # 等待和导航失败不应引导无效规则修复或重复报数量不足。
