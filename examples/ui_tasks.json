@@ -1,0 +1,36 @@
+[
+  {
+    "name": "图书列表（基础测试）",
+    "url": "https://books.toscrape.com/",
+    "task": "抓取前25本书，字段名为title、price、url，分别为完整书名、价格和详情链接。"
+  },
+  {
+    "name": "图书列表（详情页测试）",
+    "url": "https://books.toscrape.com/",
+    "task": "抓取前25本书，字段名为title、price、description，分别为完整书名、价格和详情描述。"
+  },
+  {
+    "name": "语录列表（延迟测试）",
+    "url": "https://quotes.toscrape.com/js-delayed",
+    "task": "抓取前25句语录，字段名为quote、author、tags，分别为语录、作者、标签"
+  },
+  {
+    "name": "汽车列表（Load more测试）",
+    "url": "https://webscraper.io/test-sites/load-more",
+    "task": "抓取前25条数据，字段名为name、desc、year、mileage、origin、status，分别为名称、简要描述、年份、里程数、原产地和当前出售状态"
+  },{
+    "name": "汽车列表（滚动测试）",
+    "url": "https://webscraper.io/test-sites/scroll",
+    "task": "抓取前25条数据，字段名为name、desc、year、mileage、origin、status，分别为名称、简要描述、年份、里程数、原产地和当前出售状态"
+  },
+  {
+    "name": "汽车列表（滚动页面详情测试）",
+    "url": "https://webscraper.io/test-sites/scroll",
+    "task": "抓取前25条数据，字段名为name、desc、year、mileage、origin、status，分别为名称、详情页面内详细描述、年份、里程数、原产地和当前出售状态"
+  },
+  {
+    "name": "登录页面测试",
+    "url": "https://www.saucedemo.com/",
+    "task": "抓取所有数据，字段名为name、desc、price，分别是名称、描述和价格"
+  }
+]
