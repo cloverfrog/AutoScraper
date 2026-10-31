@@ -202,7 +202,7 @@ async def generate_spec(
     reference_spec = previous_spec if previous_spec is not None else initial_spec
     if initial_spec is not None and previous_spec is None:
         prompt += (
-            "\nUser-provided reference ScraperSpec (not a failed candidate):\n"
+            "\nUser-provided reference ScraperSpec:\n"
             + initial_spec.model_dump_json()
             + "\nThe current task and authoritative requirements take precedence over this reference. "
             "Test the supplied rules in the current browser and reuse those that remain valid. "
