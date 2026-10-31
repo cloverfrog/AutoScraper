@@ -12,31 +12,13 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field, HttpUrl, SecretStr, model_validator
 
-from .budget import LLMBudgetExceeded
+from .errors import AgentError, InvalidSpecError, LLMBudgetExceeded, UnsupportedTaskError
 
 from .clarification import ClarificationSession
 from autoscraper.browser.access import BrowserAccess
 from autoscraper.scraping.spec import ScraperSpec
 from autoscraper.workflow.validation import Feedback, UnsupportedResult
 from autoscraper.workflow.requirements import TaskRequirements
-
-
-# 探索层统一异常，表示 Agent 无法在能力或预算范围内生成候选规则。
-class AgentError(RuntimeError):
-    pass
-
-
-# 模型最终输出无法解析成合法抓取协议；工作流可尝试让 Agent 修复。
-class InvalidSpecError(AgentError):
-    pass
-
-
-# Agent 明确报告协议无法表达需求，携带原因和受影响字段。
-class UnsupportedTaskError(AgentError):
-    # 保留不能满足的字段，使工作流能输出机器可读的失败反馈。
-    def __init__(self, reason: str, fields: list[str]):
-        super().__init__(reason)
-        self.fields = fields
 
 
 # Agent 运行配置：模型连接、探索上限、内容等待和浏览器选项。

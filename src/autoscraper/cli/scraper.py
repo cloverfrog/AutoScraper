@@ -10,7 +10,8 @@ from pathlib import Path
 from playwright.sync_api import Error as PlaywrightError
 from pydantic import ValidationError
 
-from autoscraper.scraping.executor import ContentTimeout, NavigationError, ScrapeError, ScraperExecutor
+from autoscraper.scraping.errors import ContentTimeout, NavigationError, ScrapeError
+from autoscraper.scraping.executor import ScraperExecutor
 from autoscraper.scraping.export import export_records
 from autoscraper.scraping.spec import ScraperSpec
 from autoscraper.browser.access import BrowserAccess, HandoffRequired

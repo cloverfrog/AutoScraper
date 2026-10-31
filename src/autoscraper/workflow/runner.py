@@ -11,26 +11,19 @@ from contextlib import nullcontext
 from playwright.sync_api import Error as PlaywrightError
 from autoscraper.browser.access import BrowserAccess, HandoffRequired
 
-from autoscraper.agent.budget import LLMBudgetExceeded
-from autoscraper.agent.explorer import (
-    AgentError,
-    AgentSettings,
-    InvalidSpecError,
-    UnsupportedTaskError,
-    generate_spec,
+from autoscraper.agent.errors import (
+    AgentError, InvalidSpecError, LLMBudgetExceeded, UnsupportedTaskError,
 )
+from autoscraper.agent.explorer import AgentSettings, generate_spec
 from autoscraper.agent.clarification import (
     ClarificationHandler,
     ClarificationRequired,
     ClarificationSession,
 )
-from autoscraper.scraping.executor import (
-    ContentTimeout,
-    PaginationActionError,
-    NavigationError,
-    ScrapeError,
-    ScraperExecutor,
+from autoscraper.scraping.errors import (
+    ContentTimeout, NavigationError, PaginationActionError, ScrapeError,
 )
+from autoscraper.scraping.executor import ScraperExecutor
 from .outcome import TaskOutcome, TaskStage
 from .requirements import extract_requirements
 from .validation import (
