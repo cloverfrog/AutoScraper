@@ -7,7 +7,7 @@
   {
     "name": "图书列表（详情页测试）",
     "url": "https://books.toscrape.com/",
-    "task": "抓取前25本书，字段名为title、price、description，分别为完整书名、价格和详情描述。",
+    "task": "抓取前25本书，字段名为title、price、description，分别为完整书名、价格和详情描述。"
   },
   {
     "name": "语录列表（延迟测试）",
