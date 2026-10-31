@@ -206,3 +206,68 @@ def test_books_first_100():
     assert result.errors == []
     assert result.records[0]["title"] == "A Light in the Attic"
     assert all(row["price"].startswith("£") for row in result.records)
+
+
+# 多元素按 DOM 顺序保留重复值和中文，去重同时支持默认全字段和显式列表键。
+@pytest.mark.parametrize("dedupe_by", [[], ["tags"]])
+def test_multi_element_extraction_and_dedupe(page, dedupe_by):
+    body = '<article><b> 中文  标签 </b><b>two</b><b>two</b></article>'
+    route_pages(page, {"https://fixture.test/1": body * 2 + '<article><b>other</b></article>'})
+    spec = make_spec(fields={
+        "tags": {"selector": "b", "extract": "texts"},
+        "count": {"selector": "b", "extract": "count"},
+        "zero": {"selector": ".missing", "extract": "count"},
+        "empty": {"selector": ".missing", "extract": "texts", "required": False},
+    }, dedupe_by=dedupe_by, pagination=None, max_items=2)
+    result = ScraperExecutor().run_page(spec, page)
+    assert result.errors == []
+    assert result.duplicates == 1
+    assert result.stop_reason == "max_items"
+    assert result.records == [
+        {"tags": ["中文 标签", "two", "two"], "count": 3, "zero": 0, "empty": []},
+        {"tags": ["other"], "count": 1, "zero": 0, "empty": []},
+    ]
+
+
+# 必填列表缺失或含空文本沿用单条错误策略，不将可选空集合变为 None。
+@pytest.mark.parametrize("body", ["<article></article>", "<article><b> </b></article>"])
+def test_required_texts_errors(page, body):
+    route_pages(page, {"https://fixture.test/1": body})
+    spec = make_spec(fields={"tags": {"selector": "b", "extract": "texts"}},
+                     dedupe_by=[], pagination=None)
+    result = ScraperExecutor().run_page(spec, page)
+    assert not result.records and len(result.errors) == 1
+    with pytest.raises(ScrapeError, match="Required field 'tags'"):
+        ScraperExecutor().run_page(spec.model_copy(update={"on_item_error": "fail"}), page)
+
+
+# 多元素扩展不放宽属性约束，也不允许 absolute_url 或任意转换作用于列表/计数。
+@pytest.mark.parametrize("extract", ["texts", "count"])
+@pytest.mark.parametrize("extra", [{"attribute": "href"}, {"transform": "absolute_url"},
+                                   {"transforms": []}])
+def test_invalid_multi_element_specs(extract, extra):
+    with pytest.raises(ValidationError):
+        make_spec(fields={"x": {"selector": "b", "extract": extract, **extra}}, dedupe_by=[])
+
+
+# 多元素的非法选择器仍报告规则错误，不能伪装为空集合或零。
+@pytest.mark.parametrize("extract", ["texts", "count"])
+def test_multi_element_invalid_css(page, extract):
+    route_pages(page, {"https://fixture.test/1": "<article></article>"})
+    with pytest.raises(ScrapeError):
+        ScraperExecutor().run_page(make_spec(
+            fields={"x": {"selector": "[", "extract": extract}}, dedupe_by=[]), page)
+
+
+# JSON 保留真实数组和整数；CSV 数组以 JSON 单元格编码，保留空数组、引号和中文。
+def test_multi_element_exports(tmp_path):
+    records = [{"tags": ['中文, "标签"', "two"], "zero": 0}, {"tags": [], "zero": 0}]
+    json_path = tmp_path / "multi.json"
+    export_records(records, json_path, ["tags", "zero"])
+    assert json.loads(json_path.read_text()) == records
+    csv_path = tmp_path / "multi.csv"
+    export_records(records, csv_path, ["tags", "zero"])
+    with csv_path.open(newline="") as stream:
+        rows = list(csv.DictReader(stream))
+    assert [json.loads(row["tags"]) for row in rows] == [record["tags"] for record in records]
+    assert [row["zero"] for row in rows] == ["0", "0"]

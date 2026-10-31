@@ -19,6 +19,7 @@ from .errors import (
 )
 from .spec import FieldSpec, ScraperSpec
 from autoscraper.browser.access import BrowserAccess, HandoffRequest
+from .values import FieldValue, has_field_value, record_identity
 from .progress import STATE_SCRIPT, state_options, progressed
 from .scrolling import scroll_step
 from autoscraper.observability.tracing import emit, operation
@@ -62,7 +63,7 @@ ScrapeStopReason = Literal[
 # 执行结果：记录、错误、访问计数和停止原因；有数据并不等于任务完整完成。
 @dataclass
 class ScrapeResult:
-    records: list[dict[str, str | None]] = field(default_factory=list)
+    records: list[dict[str, FieldValue]] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
     pages_visited: int = 0
     detail_pages_visited: int = 0
@@ -171,17 +172,27 @@ def css(root: Page | Locator, selector: str) -> Locator:
     return root.locator(f"css={selector}")
 
 
-# 在给定记录或详情页面内提取字段：每个字段至多匹配一个元素。
-# 必填值缺失/为空或匹配歧义会报错；可选值缺失记为 None，文本统一压缩空白。
+# 在给定记录或详情页面内提取字段：单值规则至多匹配一个元素，texts/count 允许多匹配。
+# 必填值缺失/为空或单值匹配歧义会报错；可选单值缺失记为 None，文本统一压缩空白。
 def extract_fields(
     item: Page | Locator, fields: dict[str, FieldSpec], base_url: str, *, wait: bool = False
-) -> dict[str, str | None]:
+) -> dict[str, FieldValue]:
     record = {}
     for name, rule in fields.items():
         matches = css(item, rule.selector)
         count = matches.count()  # 即使字段可选，CSS 语法非法也属于致命规则错误。
-        if wait and rule.required and count == 0:
+        if wait and rule.required and rule.extract != "count" and count == 0:
             wait_for_content(matches, base_url, None)
+        # count 的空集合是有效的零值；texts 保留 DOM 顺序及重复文本。
+        if rule.extract in {"texts", "count"}:
+            value = (
+                matches.count() if rule.extract == "count"
+                else [" ".join(text.split()) for text in matches.all_inner_texts()]
+            )
+            if rule.required and not has_field_value(value):
+                raise ItemError(f"Required field {name!r} is missing or empty")
+            record[name] = value
+            continue
         if matches.count() > 1:
             raise ItemError(f"Field {name!r} matched multiple elements")
         value = None
@@ -204,12 +215,12 @@ def extract_fields(
 
 
 # 提取列表记录的字段；详情字段由后续独立页面补充。
-def extract_item(item: Locator, spec: ScraperSpec, base_url: str) -> dict[str, str | None]:
+def extract_item(item: Locator, spec: ScraperSpec, base_url: str) -> dict[str, FieldValue]:
     return extract_fields(item, spec.fields, base_url)
 
 
 # 打开一条详情链接，按重定向后的 URL 处理相对链接，并等待必填字段。
-def extract_detail(page: Page, url: str, spec: ScraperSpec) -> dict[str, str | None]:
+def extract_detail(page: Page, url: str, spec: ScraperSpec) -> dict[str, FieldValue]:
     navigate(page, url, spec.timeout_ms)
     http_url(page.url, page.url)
     try:
@@ -410,7 +421,7 @@ class ScraperExecutor:
                         keys = spec.dedupe_by or list(spec.all_fields)
                         # 若去重键已完全包含在列表字段里，可提前跳过，节省详情页访问预算。
                         if all(key in record for key in keys):
-                            if tuple(record[key] for key in keys) in seen_records:
+                            if record_identity(record, keys) in seen_records:
                                 result.duplicates += 1
                                 continue
                         if spec.detail:
@@ -450,7 +461,7 @@ class ScraperExecutor:
                         continue
                     keys = spec.dedupe_by or list(spec.all_fields)
                     # 去重键含详情字段时，只能在合并后判重；仅完整记录才加入结果集合。
-                    identity_record = tuple(record[key] for key in keys)
+                    identity_record = record_identity(record, keys)
                     if identity_record in seen_records:
                         result.duplicates += 1
                         continue

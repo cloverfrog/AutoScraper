@@ -619,3 +619,69 @@ def test_page_work_guides_page_grouping_without_navigation_gate(finish_listing):
         assert current_url == detail_url  # 不因提交而强制回列表；缺证据时仍保持拒绝。
 
     asyncio.run(run())
+
+
+# 多元素字段必须有对应提取方式的证据，不能混用单值测试或其他多元素模式。
+@pytest.mark.parametrize("extract,selector,required,valid", [
+    ("texts", "b", True, True), ("texts", ".missing", True, False),
+    ("texts", ".missing", False, True), ("texts", "i", True, False),
+    ("count", ".missing", True, True), ("count", "b", True, True),
+])
+def test_multi_element_submission_evidence(page, extract, selector, required, valid):
+    page.set_content('<article><b>A</b><b>B</b><b>C</b><i> </i></article>')
+    fields = {"value": {"selector": selector, "extract": extract, "required": required}}
+    spec = candidate(fields=fields)
+    checks = SubmissionChecks(reference_spec=spec)
+    remember(page, checks, field=selector)
+    assert checks.check(spec)  # 原始单值测试不能作为多元素证据。
+    data = evaluate(page, BATCH_SELECTOR_SCRIPT, "article", fields)
+    field = data["results"]["value"]
+    checks.remember(field, selector)
+    assert (not checks.check(spec)) is valid
+    assert (checks.page_work(page.url)["candidate_pending"] == []) is valid
+    if selector == "b":
+        assert field["samples"][0]["values"] == (["A", "B", "C"] if extract == "texts" else [3])
+    assert checks.check(candidate(fields={"value": {"selector": selector}}))
+
+
+# 详情多元素证据同样必须关联已观察到的详情链接。
+def test_detail_multi_element_submission(page):
+    spec = candidate(version="2", fields={"title": {"selector": "p"}}, detail={
+        "url_selector": "a", "fields": {"tags": {"selector": "b", "extract": "texts"},
+                                          "zero": {"selector": ".missing", "extract": "count"}}})
+    checks = SubmissionChecks()
+    remember(page, checks)
+    remember(page, checks, field="a", attribute="href")
+    page.goto("https://fixture.test/detail")
+    page.set_content("<b>A</b><b>B</b>")
+    data = evaluate(page, BATCH_SELECTOR_SCRIPT, "html",
+                    {name: field.model_dump() for name, field in spec.detail.fields.items()})
+    for field in data["results"].values():
+        checks.remember(field, field["field_selector"])
+    assert checks.check(spec) == []
+
+
+# 同一选择器可同时声明文本、文本列表和计数，证据互不覆盖，失败也只覆盖同一模式。
+def test_same_selector_evidence_isolated_by_extraction_mode(page):
+    page.set_content('<article><b>A</b></article>')
+    fields = {mode: {"selector": "b", "extract": mode} for mode in ("text", "texts", "count")}
+    spec = candidate(fields=fields)
+    checks = SubmissionChecks(reference_spec=spec)
+    for field in evaluate(page, BATCH_SELECTOR_SCRIPT, "article", fields)["results"].values():
+        checks.remember(field, "b")
+    assert checks.check(spec) == []
+    assert checks.page_work(page.url)["candidate_pending"] == []
+    page.set_content('<article><b>A</b><b>B</b></article>')
+    remember(page, checks, field="b")
+    assert checks.check(spec)  # 单值多匹配失败，不影响其他模式的既有证据。
+    assert checks.check(candidate(fields={mode: fields[mode] for mode in ("texts", "count")})) == []
+
+
+# 切换提取方式不能把同一选择器的新测试误当成替换分页的内容推进。
+def test_changed_extraction_mode_is_not_replace_progress(page):
+    checks = SubmissionChecks()
+    remember(page, checks)
+    checks.begin_action("click", page.url)
+    data = evaluate(page, BATCH_SELECTOR_SCRIPT, "article", {"n": {"selector": "p", "extract": "count"}})
+    checks.remember(data["results"]["n"], "p")
+    assert (page.url, "article", "click", "replace") not in checks.advances

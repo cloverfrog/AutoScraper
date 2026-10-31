@@ -19,7 +19,7 @@ class ProtocolModel(BaseModel):
 class FieldSpec(ProtocolModel):
     # 列表字段相对当前记录匹配；详情字段相对整个详情文档匹配。
     selector: NonEmpty
-    extract: Literal["text", "attribute"] = "text"
+    extract: Literal["text", "attribute", "texts", "count"] = "text"
     attribute: NonEmpty | None = None
     transform: Literal["none", "absolute_url"] = "none"
     required: bool = True
@@ -29,6 +29,8 @@ class FieldSpec(ProtocolModel):
     def check_attribute(self):
         if (self.extract == "attribute") != (self.attribute is not None):
             raise ValueError("attribute must be set exactly when extract='attribute'")
+        if self.extract in {"texts", "count"} and self.transform != "none":
+            raise ValueError("absolute_url requires text or attribute extraction")
         return self
 
 

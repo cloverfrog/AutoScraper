@@ -20,4 +20,9 @@ def export_records(records: list[dict], path: Path, fields: list[str]) -> None:
         else:
             writer = csv.DictWriter(stream, fieldnames=fields)
             writer.writeheader()
-            writer.writerows(records)
+            # CSV 没有数组类型，使用 JSON 文本保存列表，避免 Python repr 和分隔符歧义。
+            writer.writerows(
+                {name: json.dumps(value, ensure_ascii=False) if isinstance(value, list) else value
+                 for name, value in record.items()}
+                for record in records
+            )

@@ -45,12 +45,13 @@ DOM 工具使用应用内固定、只读 JavaScript；模型只能传入经 JSON
 | --- | --- |
 | `invalid_css` | 非法 CSS；`error_parameter` 指明 `item_selector` 或 `field_selector`，`message` 提供浏览器错误 |
 | `no_items` | CSS 合法，但没有匹配记录 |
-| `sample_passed` | 已检查的每条样本均唯一匹配字段元素 |
+| `sample_passed` | 已检查样本的匹配数量符合提取方式；单值要求唯一，texts/count 允许多匹配，必填值另行检查 |
 | `sample_failed` | 至少一条样本字段零匹配或多匹配 |
 
 每条样本的 `status` 为 `no_match`、`single_match` 或 `multiple_matches`，其 `matches`
 是该记录内的字段匹配数，与顶层记录数无关。未传字段选择器时直接提取记录本身。
-最多检查前 5 条记录，每条最多返回 2 个值，每个值最多 300 字符；`tested_count` 和
+最多检查前 5 条记录，单值提取每条最多返回 2 个值，`texts` 返回样本内全部匹配文本，
+`count` 返回匹配数量，每个文本值最多 300 字符；`tested_count` 和
 `all_items_tested` 说明覆盖范围。`sample_passed` 只检查匹配数量，不保证属性存在、值非空
 或完整规则通过验证；仍须查看 `values`（缺失属性为 `null`）并执行确定性验证。
 浏览器连接、页面执行等其他异常继续沿用工具运行时错误流程，不误报为非法 CSS。
@@ -87,7 +88,30 @@ DOM 样本、历史窗口与输入任务长度也有限制。计费由接口提�
 `timeout_ms`；`--content-timeout-ms` 只覆盖内容等待。运行时验证失败保留的
 `*.unvalidated.json` 可直接交给该 CLI 重试，但文件名表示它还没有通过数据验证。
 
-参考完整示例 `examples/books.json`：`item_selector` 匹配每条列表记录；`fields` 中每个 CSS Selector 相对于该记录解析，必须至多匹配一个元素。`extract` 支持 `text` 或 `attribute`，后者必须指定 `attribute`。文本和属性值会去除首尾并合并连续空白；价格保持字符串，不隐式转换数值。
+参考完整示例 `examples/books.json`：`item_selector` 匹配每条列表记录；`fields` 中每个 CSS Selector 相对于该记录解析。列表字段与详情字段均支持以下 `extract`：
+
+| 方式 | 输出与匹配规则 |
+| --- | --- |
+| `text`（默认） | 单元素文本字符串，多匹配报错 |
+| `attribute` | 单元素属性字符串，必须指定 `attribute`，多匹配报错 |
+| `texts` | 所有匹配元素的文本列表，保留 DOM 顺序和重复项 |
+| `count` | 匹配元素数量（整数），零是有效值，无需等待匹配元素出现 |
+
+文本和属性值会去除首尾并合并连续空白；价格保持字符串，不隐式转换数值。
+必填 `texts` 必须是非空列表且每项文本非空；可选 `texts` 无匹配输出 `[]`。
+`texts` / `count` 不接受 `attribute` 或 `absolute_url` 转换，不提供转换流水线。
+计数只反映选择器匹配数，例如固定五个星形节点不能推断实际评分，应提取表示评分的类名。
+
+```json
+{
+  "tags": {"selector": ".tags a", "extract": "texts"},
+  "active_stars": {"selector": ".star.active", "extract": "count"}
+}
+```
+
+JSON 导出保留数组和整数；CSV 将文本列表编码为 JSON 单元格（如 `["中文", "tag"]`），计数输出数字文本。
+列表参与去重时保留顺序和重复项，原始结果不变。Agent 使用 `test_fields` 检查多元素字段，
+证据按页面、记录根、字段选择器、属性和提取方式隔离，单值测试不能替代 `texts` / `count` 测试。
 
 `transform: "absolute_url"` 使用当前页面最终 URL 解析相对链接，只接受 HTTP(S)。`required` 默认 true；可选字段缺失输出 null。未知协议字段、未知版本、无效数量及无效去重字段会在执行前被拒绝。CSS 语法在浏览器执行时验证。
 
@@ -113,7 +137,7 @@ DOM 样本、历史窗口与输入任务长度也有限制。计费由接口提�
 新追加节点中的重复数据仍按 `dedupe_by` 判重；替换和链接分页每批重新提取。
 按 `on_item_error=skip` 跳过的节点也视为已处理，不会在后续追加批次中自动重试。
 
-缺失必填字段、多匹配字段或不支持的字段 URL 按 `on_item_error` 跳过并记录错误，或立即失败。列表导航错误、列表 HTTP 4xx/5xx、无效选择器、异常分页立即失败，不自动重试。结果包含记录、错误、访问页数、重复条数和停止原因。CLI 成功退出 0；跳过错误并导出部分数据退出 2；致命错误退出 1 且不导出本次部分数据。导出文件存在时会覆盖；多个导出文件不保证事务性。
+缺失必填字段、单值字段多匹配或不支持的字段 URL 按 `on_item_error` 跳过并记录错误，或立即失败。列表导航错误、列表 HTTP 4xx/5xx、无效选择器、异常分页立即失败，不自动重试。结果包含记录、错误、访问页数、重复条数和停止原因。CLI 成功退出 0；跳过错误并导出部分数据退出 2；致命错误退出 1 且不导出本次部分数据。导出文件存在时会覆盖；多个导出文件不保证事务性。
 
 
 ## v2 详情页协议

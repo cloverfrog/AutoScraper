@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Literal
 from pydantic import Field
 
 from autoscraper.scraping.spec import NonEmpty, ProtocolModel, ScraperSpec
+from autoscraper.scraping.values import has_field_value
 from .requirements import TaskRequirements
 
 if TYPE_CHECKING:
@@ -207,7 +208,7 @@ def validate_data(
         name
         for name in requirements.fields
         if any(
-            not isinstance(row.get(name), str) or not row[name].strip() for row in result.records
+            not has_field_value(row.get(name)) for row in result.records
         )
     ]
     if missing:

@@ -140,8 +140,12 @@ only when remaining checks need it. Historical repair summaries are not current-
 
 Protocol semantics:
 - start_url is the starting listing URL; item_selector selects individual records.
-- Fields are relative to each record and match one element. Set attribute only for extract=attribute;
-  use transform=absolute_url for URL attributes. Preserve required fields; never omit or substitute.
+- Fields are relative to each record. text/attribute match one element; texts collects all matched
+  texts in DOM order; count returns the number of matches (zero is valid). Required texts must be
+  nonempty with nonempty entries; optional texts may be []. Set attribute only for extract=attribute;
+  use transform=absolute_url for URL attributes. texts/count do not support transforms.
+  Use test_fields for texts/count evidence.
+  Preserve required fields; never omit or substitute.
 - Detail extraction requires version="2": detail.url_selector uniquely matches a listing href;
   detail.fields are relative to the detail document. Preserve user-requested names there:
   if the user asks for description from details, use detail.fields.description, not
