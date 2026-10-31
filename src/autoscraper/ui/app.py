@@ -4,8 +4,6 @@
 
 import argparse
 import json
-import shlex
-import sys
 from pathlib import Path
 
 from autoscraper.ui.preferences import form_scripts
@@ -24,11 +22,14 @@ def load_presets():
 def build_app(manager):
     import gradio as gr
 
-    presets = load_presets()
+    # 页面加载或打开下拉框时读取文件，开发中修改预设不需要重启服务。
+    def refresh_presets(name):
+        names = list(load_presets())
+        return gr.Dropdown(choices=names, value=name if name in names else None)
 
     # 只覆盖预设中明确提供的字段，其他设置保留当前值。
     def select_preset(name):
-        preset = presets.get(name, {})
+        preset = load_presets().get(name, {})
         return [preset[key] if key in preset else gr.skip() for key in controls]
 
     # 控件值统一转换为入口配置；空白模型配置沿用 CLI 环境默认值。
@@ -136,7 +137,7 @@ def build_app(manager):
         with gr.Tabs():
             # 两页都提前挂载，页面加载时才能一次恢复隐藏页的表单值。
             with gr.Tab("Agent 生成规则", render_children=True):
-                preset = gr.Dropdown(label="测试任务预设", choices=list(presets), value=None)
+                preset = gr.Dropdown(label="测试任务预设", choices=[], value=None)
                 controls["url"] = gr.Textbox(
                     label="目标 URL", value="", placeholder="https://example.com",
                 )
@@ -222,6 +223,12 @@ def build_app(manager):
         form = list(controls.values())
         load_js, save_js, reset_js = form_scripts({key: c.value for key, c in controls.items()})
         app.load(fn=None, inputs=[], outputs=form, js=load_js, queue=False)
+        app.load(
+            refresh_presets, preset, preset, queue=False, api_visibility="private",
+        )
+        preset.focus(
+            refresh_presets, preset, preset, queue=False, api_visibility="private",
+        )
         gr.on(
             triggers=[c.change for c in form], fn=None, inputs=form, outputs=[],
             js=save_js, queue=False, trigger_mode="always_last",
@@ -281,12 +288,10 @@ def main():
         if args.reload:
             from watchfiles import PythonFilter, run_process
 
-            command = shlex.join([
-                sys.executable, "-m", "autoscraper.ui.app", "--host", args.host,
-                "--port", str(args.port), "--runtime-dir", str(args.runtime_dir), "--no-browser",
-            ])
+            # 直接启动函数子进程，避免 Windows 路径经过 POSIX shell 引号解析。
             run_process(
-                Path(__file__).resolve().parents[1], target=command,
+                Path(__file__).resolve().parents[1], target=serve,
+                args=(args.host, args.port, args.runtime_dir), kwargs={"inbrowser": False},
                 watch_filter=PythonFilter(),
             )
         else:

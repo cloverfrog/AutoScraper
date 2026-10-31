@@ -36,6 +36,75 @@ def test_launch_arguments(monkeypatch, host_args, expected_host):
     assert calls == [((expected_host, 7861, Path("custom-runtime")), {"inbrowser": True})]
 
 
+# 重载参数直接交给函数子进程，Windows 的空格、反斜杠路径不经过 shell 转义。
+def test_reload_launch_arguments(monkeypatch):
+    import watchfiles
+
+    runtime = r"C:\Users\开发 用户\AutoScraper\运行目录"
+    calls = []
+    monkeypatch.setattr(sys, "argv", ["autoscraper-ui", "--reload", "--host", "100.64.0.1",
+                                     "--port", "7861", "--runtime-dir", runtime])
+    monkeypatch.setattr(watchfiles, "run_process", lambda *args, **kw: calls.append((args, kw)))
+    assert ui_app.main() == 0
+    paths, options = calls[0]
+    assert paths == (Path(ui_app.__file__).resolve().parents[1],)
+    assert options["target"] is ui_app.serve
+    assert options["args"] == ("100.64.0.1", 7861, Path(runtime))
+    assert options["kwargs"] == {"inbrowser": False}
+
+
+# 服务启动后及页面打开后修改真实 JSON，列表和内容都应无需重启即可更新。
+def test_browser_presets_reload_from_file(tmp_path, monkeypatch):
+    from playwright.sync_api import expect, sync_playwright
+
+    monkeypatch.setattr(ui_app, "__file__", str(tmp_path / "src/autoscraper/ui/app.py"))
+    presets_path = tmp_path / "examples/ui_tasks.json"
+    presets_path.parent.mkdir()
+
+    def write_presets(tasks):
+        presets_path.write_text(json.dumps(tasks, ensure_ascii=False), encoding="utf-8")
+
+    write_presets([{"name": "旧预设", "task": "旧任务"}])
+    app = ui_app.build_app(JobManager(tmp_path / "runtime"))
+    port = unused_port()
+    try:
+        app.launch(server_name="127.0.0.1", server_port=port, share=False,
+                   prevent_thread_lock=True, quiet=True)
+        # 页面尚未打开时修改，验证不是在构建应用时固定列表。
+        write_presets([{"name": "启动后新增", "task": "新任务"}])
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch()
+            page = browser.new_page()
+            page.goto(f"http://127.0.0.1:{port}")
+            page.wait_for_timeout(500)
+            dropdown = page.get_by_label("测试任务预设", exact=True)
+            dropdown.click()
+            page.get_by_role("option", name="启动后新增", exact=True).click()
+            expect(page.get_by_label("抓取任务", exact=True)).to_have_value("新任务")
+
+            write_presets([
+                {"name": "启动后新增", "task": "已修改的任务"},
+                {"name": "页面打开后新增", "task": "新增任务"},
+            ])
+            page.get_by_label("抓取任务", exact=True).click()
+            dropdown.click()
+            page.get_by_role("option", name="页面打开后新增", exact=True).click()
+            expect(page.get_by_label("抓取任务", exact=True)).to_have_value("新增任务")
+            page.get_by_label("抓取任务", exact=True).click()
+            dropdown.click()
+            page.get_by_role("option", name="启动后新增", exact=True).click()
+            expect(page.get_by_label("抓取任务", exact=True)).to_have_value("已修改的任务")
+
+            write_presets([{"name": "刷新后的预设", "task": "刷新后的任务"}])
+            page.reload()
+            dropdown.click()
+            page.get_by_role("option", name="刷新后的预设", exact=True).click()
+            expect(page.get_by_label("抓取任务", exact=True)).to_have_value("刷新后的任务")
+            browser.close()
+    finally:
+        app.close()
+
+
 # 修改、预设、刷新和重置必须在真实浏览器中联动，包括零值及规则模式的表单。
 def test_browser_form_memory_and_presets(tmp_path, monkeypatch):
     from playwright.sync_api import expect, sync_playwright

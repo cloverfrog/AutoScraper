@@ -451,7 +451,7 @@ uv run autoscraper-ui
 uv run autoscraper-ui --host 100.x.y.z --reload
 ```
 
-表单会自动记在当前浏览器的 `localStorage` 中，刷新或重新打开相同地址后恢复；点击“恢复默认设置”重置表单。“测试任务预设”读取仓库内的 `examples/ui_tasks.json`，可直接添加用例；`name` 为显示名称，其他字段使用表单字段名（例如 `url`、`task`、`fields`、`count`），选择后仍可手动修改。
+表单会自动记在当前浏览器的 `localStorage` 中，刷新或重新打开相同地址后恢复；点击“恢复默认设置”重置表单。“测试任务预设”在页面加载和打开下拉框时读取仓库内的 `examples/ui_tasks.json`，修改文件后重新打开下拉框或刷新页面即可更新，无需重启服务；选择任务时也会读取最新内容。`name` 为显示名称，其他字段使用表单字段名（例如 `url`、`task`、`fields`、`count`），选择后仍可手动修改。
 
 `--host` 可指定开发机的 Tailscale IP，仅供可信设备访问，访问范围由本机网络和 Tailnet ACL 控制。浏览器窗口仍在服务所在的开发机上运行。`--reload` 使用 watchfiles 监控实际 `src/autoscraper/` 下的 Python 源码，变化后完整重启并保留启动参数；当前测试任务会中断，需自行重新运行。日志、JSON 和其他运行产物变化不会触发重启。不加 `--reload` 时仍为普通启动。
 
