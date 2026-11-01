@@ -1,0 +1,23 @@
+{
+  "version": "3",
+  "start_url": "http://127.0.0.1:8765/",
+  "network": {
+    "url_pattern": "http://127.0.0.1:8765/api/items",
+    "method": "GET",
+    "records_path": ["data", "items"],
+    "fields": {
+      "id": {"path": ["id"]},
+      "title": {"path": ["title"]},
+      "stock": {"path": ["stock"]},
+      "price": {"path": ["price"]},
+      "active": {"path": ["active"]}
+    },
+    "pagination": {"type": "click", "next_selector": "#next"}
+  },
+  "dedupe_by": ["id"],
+  "max_items": 10,
+  "max_pages": 5,
+  "timeout_ms": 3000,
+  "content_timeout_ms": 3000,
+  "on_item_error": "fail"
+}

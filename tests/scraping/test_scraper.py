@@ -109,7 +109,7 @@ def test_limits_and_cycle(page, limits, reason, count):
 def test_item_errors(page):
     route_pages(page, {"https://fixture.test/1": "<article><h3>missing URL</h3></article>"})
     result = ScraperExecutor().run_page(make_spec(), page)
-    assert result.records == []
+    assert result.records[0]["url"] is None
     assert len(result.errors) == 1
     with pytest.raises(ScrapeError, match="Required field"):
         ScraperExecutor().run_page(make_spec(on_item_error="fail"), page)
@@ -236,9 +236,10 @@ def test_required_texts_errors(page, body):
     spec = make_spec(fields={"tags": {"selector": "b", "extract": "texts"}},
                      dedupe_by=[], pagination=None)
     result = ScraperExecutor().run_page(spec, page)
-    assert not result.records and len(result.errors) == 1
-    with pytest.raises(ScrapeError, match="Required field 'tags'"):
-        ScraperExecutor().run_page(spec.model_copy(update={"on_item_error": "fail"}), page)
+    assert result.records[0]["tags"] == ([] if "<b>" not in body else [""])
+    assert not result.errors
+    assert ScraperExecutor().run_page(spec.model_copy(update={"on_item_error": "fail"}), page).records == result.records
+
 
 
 # 多元素扩展不放宽属性约束，也不允许 absolute_url 或任意转换作用于列表/计数。

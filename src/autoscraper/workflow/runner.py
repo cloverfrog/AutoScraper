@@ -24,6 +24,7 @@ from autoscraper.scraping.errors import (
     ContentTimeout, NavigationError, PaginationActionError, ScrapeError,
 )
 from autoscraper.scraping.executor import ScraperExecutor
+from autoscraper.scraping.network import NetworkError
 from autoscraper.scraping.spec import ScraperSpec
 from .outcome import TaskOutcome, TaskStage
 from .requirements import extract_requirements
@@ -248,6 +249,9 @@ def run_task(
                         }
                     )
                     return outcome
+                except NetworkError as exc:
+                    issues = [Feedback(code=exc.code, message=str(exc), recoverable=exc.recoverable)]
+                    outcome.spec, outcome.data = candidate, None
                 except (NavigationError, ContentTimeout, PaginationActionError) as exc:
                     # 环境/等待失败不证明规则错误，保留候选供排查但停止修复。
                     issues = [Feedback(code=exc.code, message=str(exc), recoverable=False)]
@@ -280,7 +284,7 @@ def run_task(
                      failure_stage=stage)
                 if candidate is not None and any(
                     item.code in {"navigation_timeout", "navigation_failure", "content_timeout",
-                                  "pagination_action_failure"}
+                                  "pagination_action_failure", "response_failure", "response_timeout"}
                     for item in issues
                 ):
                     outcome.failure_stage = stage

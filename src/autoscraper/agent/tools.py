@@ -15,7 +15,7 @@ from .clarification import ClarificationRequest, ClarificationSession
 from autoscraper.browser.access import BrowserAccess, HandoffRequest
 from .dom import INSPECT_SCRIPT, SELECTOR_SCRIPT, BATCH_SELECTOR_SCRIPT
 from .submission import SubmissionChecks, page_key
-from autoscraper.scraping.spec import FieldSpec, ScraperSpec
+from autoscraper.scraping.spec import FieldSpec, ScraperSpec, NetworkSource
 from .waiting import ContentWaiter
 from autoscraper.observability.tracing import current_trace, operation, summarize_tool_output, emit
 
@@ -51,9 +51,38 @@ class TracedTools(Tools):
         if not params:
             return await super().act(action, **kwargs)
         name, inputs = next(iter(params.items()))
+        capture = getattr(self, "network_capture", None)
+        if capture and name in {"navigate", "click", "scroll"}:
+            capture.actions.append((name, capture.buffer.sequence))
+            capture.actions = capture.actions[-40:]
         if checks and name == "done" and inputs.get("success") is not False and inputs.get("data"):
             candidate = ScraperSpec.model_validate(inputs["data"])
             checks.last_candidate = candidate
+            if candidate.network is not None:
+                from .network import rule_key
+                network_test = None
+                if capture:
+                    network_result = await self.registry.registry.actions["test_network"].function(
+                        source=candidate.network, dedupe_by=candidate.dedupe_by,
+                    )
+                    network_test = json.loads(network_result.extracted_content)
+                    checks.network_summary = network_test
+                await self._refresh_control(candidate, kwargs.get("browser_session"))
+                issues = checks.check(candidate)
+                if not capture or rule_key(candidate.network, candidate.dedupe_by) not in capture.evidence:
+                    from autoscraper.workflow.validation import Feedback
+                    issues.append(Feedback(code="json_path_failure", message=
+                        "Use test_network with the exact final network rule; verify initial-page "
+                        "fields and genuinely new records after the pagination action. "
+                        + json.dumps((network_test or {}).get("diagnostics", []), ensure_ascii=False)))
+                checks.last_issues = issues
+                if issues:
+                    return ActionResult(extracted_content=json.dumps({
+                        "status": "candidate_rejected", "candidate": candidate.model_dump(mode="json"),
+                        "feedback": [issue.model_dump() for issue in issues],
+                        "network_test": network_test, "evidence_summary": checks.repair_summary(),
+                    }))
+                return await super().act(action, **kwargs)
             listing = await self._refresh_listing(candidate, kwargs.get("browser_session"))
             control = await self._refresh_control(candidate, kwargs.get("browser_session"))
             refreshed = await self._refresh_progress(candidate, kwargs.get("browser_session"))
@@ -104,7 +133,7 @@ class TracedTools(Tools):
                         )
                 elif name == "wait_for_selector":
                     checks.remember_wait(data)
-                elif name == "explore_scroll" and data.get("count", 0) > data.get(
+                elif name == "explore_scroll" and not data.get("network") and data.get("count", 0) > data.get(
                     "initial_count", 0
                 ):
                     checks.advances.add(
@@ -168,7 +197,7 @@ class TracedTools(Tools):
     # 分页控件只需精确 CSS 计数，提交时自动完成这类确定性检查，节省模型调用。
     # 只在当前列表页取证；无匹配或多匹配仍拒绝，不替模型寻找或修正选择器。
     async def _refresh_control(self, candidate, browser_session):
-        pagination = candidate.pagination
+        pagination = candidate.network.pagination if candidate.network else candidate.pagination
         if not browser_session or not pagination or pagination.type not in {"click", "link"}:
             return None
         url = self.submission.actual_url(candidate.start_url)
@@ -176,7 +205,7 @@ class TracedTools(Tools):
             return None
         attribute = "href" if pagination.type == "link" else ""
         previous = self.submission.result(url, pagination.next_selector, "", attribute)
-        if self.submission.passed(previous, pagination.type == "link"):
+        if self.submission.passed(previous, pagination.type == "link", nonempty=pagination.type == "link"):
             return None
         page = await browser_session.must_get_current_page()
         result = json.loads(
@@ -229,8 +258,10 @@ def build_tools(
     requirements=None,
     listing_url: str | None = None,
     reference_spec: ScraperSpec | None = None,
+    network_capture=None,
 ) -> Tools:
     tools = TracedTools()
+    tools.network_capture = network_capture
     tools.submission = SubmissionChecks(
         requirements, listing_url=listing_url, reference_spec=reference_spec,
     ) if check_submission else None
@@ -238,6 +269,10 @@ def build_tools(
     for name in list(tools.registry.registry.actions):
         if name not in {"navigate", "done", "click", "scroll"}:
             tools.registry.exclude_action(name)
+
+    if network_capture is not None:
+        from .network import register_network_tools
+        register_network_tools(tools, network_capture, content_timeout_ms)
 
     if access is not None:
         # 工具只登记接管请求并终止本批动作，真正等待用户发生在 Agent.run 返回之后。
@@ -261,23 +296,50 @@ def build_tools(
         description="Explore infinite scroll with bounded scroll/wait/record-count checks. "
         "Use built-in scroll for plain scrolling; this tool checks loading/end CSS and "
         "record growth over multiple rounds in one step. Supports a CSS scroll container. "
+        "For network JSON pass the final NetworkSource in network and dedupe_by, omit item_selector; "
+        "this reuses scroll actions but counts new JSON records instead of DOM nodes. "
         "Returns counts, scrolls and stop_reason. Does not extract the final dataset."
     )
     async def explore_scroll(
         browser_session: BrowserSession,
-        item_selector: str,
+        item_selector: str = "",
         container_selector: str = "",
         loading_selector: str = "",
         end_selector: str = "",
         max_scrolls: int = 10,
         no_change_limit: int = 3,
         wait_ms: int = 1000,
+        network: NetworkSource | None = None,
+        dedupe_by: list[str] | None = None,
     ) -> ActionResult:
         from browser_use.tools.views import ScrollAction
 
         if not (1 <= max_scrolls <= 30 and 2 <= no_change_limit <= 10
                 and 1 <= wait_ms <= content_timeout_ms):
             return ActionResult(error="Invalid bounded scroll parameters")
+        if network is not None:
+            from .network import explore_network_scroll
+            network = NetworkSource.model_validate(network)
+            if network_capture is None or not network.pagination or network.pagination.type != "scroll":
+                return ActionResult(error="Network exploration requires an active capture and scroll rule")
+            page = await browser_session.must_get_current_page()
+
+            async def perform_scroll():
+                if network.pagination.container_selector:
+                    await page.evaluate(SCROLL_SCRIPT, network.pagination.container_selector)
+                    return None
+                return await builtin_scroll(
+                    params=ScrollAction(down=True, pages=1), browser_session=browser_session,
+                )
+
+            try:
+                data = await explore_network_scroll(
+                    tools, network_capture, page, network, dedupe_by or [], perform_scroll,
+                    max_scrolls, wait_ms, content_timeout_ms,
+                )
+                return ActionResult(extracted_content=json.dumps(data))
+            except Exception:
+                return ActionResult(error="Network scroll exploration failed")
         if not item_selector.strip() or any(">>" in value for value in (
             item_selector, container_selector, loading_selector, end_selector
         )):

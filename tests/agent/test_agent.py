@@ -5,6 +5,7 @@ import json
 import os
 from importlib import import_module
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -214,7 +215,7 @@ def test_selector_invalid_css(selector_page, item, field, parameter, count):
         ("p.card-text", "sample_failed", [2, 1], ["multiple_matches", "single_match"]),
         ("p.card-text:nth-of-type(1)", "sample_passed", [1, 1], ["single_match"] * 2),
         ("", "sample_passed", [1, 1], ["single_match"] * 2),
-        ("p.card-text:nth-of-type(2)", "sample_failed", [1, 0], ["single_match", "no_match"]),
+        ("p.card-text:nth-of-type(2)", "sample_passed", [1, 0], ["single_match", "no_match"]),
     ],
 )
 def test_selector_field_cardinality(selector_page, field, status, matches, sample_statuses):
@@ -363,6 +364,7 @@ def test_exploration_prompt_preserves_task_context(monkeypatch, rule, context):
         content_timeout_ms=4000,
     )
     monkeypatch.setattr(bu, "BrowserSession", Browser)
+    monkeypatch.setattr("autoscraper.agent.explorer.AgentResponseCapture.start", AsyncMock())
     monkeypatch.setattr(bu, "Agent", Agent)
     asyncio.run(
         generate_spec(
@@ -470,6 +472,7 @@ def test_runner_limits_validation_cleanup(monkeypatch, rule, outcome):
             )
 
     monkeypatch.setattr(bu, "BrowserSession", Browser)
+    monkeypatch.setattr("autoscraper.agent.explorer.AgentResponseCapture.start", AsyncMock())
     monkeypatch.setattr(bu, "Agent", Agent)
     monkeypatch.setattr(helpers, "make_llm", lambda settings: SimpleNamespace(budget_blocked=False))
     settings = AgentSettings(

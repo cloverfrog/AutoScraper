@@ -3,6 +3,7 @@
 import asyncio
 import json
 from pathlib import Path
+from unittest.mock import AsyncMock
 from types import SimpleNamespace
 
 import pytest
@@ -185,7 +186,7 @@ def test_spec_validation_is_independent(candidate):
     assert {item.code for item in issues} == {"missing_required_field", "count_mismatch"}
     assert issues[0].fields == ["description"]
     candidate.fields["price"].required = False
-    assert "price" in validate_spec(candidate, requirements)[0].fields
+    assert validate_spec(candidate, requirements)[0].fields == ["description"]
 
 
 # 检查空结果、必需字段值和超过数量上限等确定性数据反馈。
@@ -194,7 +195,7 @@ def test_spec_validation_is_independent(candidate):
     [
         ([], "empty_extraction"),
         ([{"title": "A"}], "missing_data"),
-        ([{"title": "A", "price": " "}], "missing_data"),
+
         ([{"title": "A", "price": "£1"}] * 3, "count_mismatch"),
     ],
 )
@@ -298,6 +299,7 @@ def test_explorer_unsupported_tool_is_a_failure_terminal(settings, monkeypatch):
             )
 
     monkeypatch.setattr(bu, "BrowserSession", Browser)
+    monkeypatch.setattr("autoscraper.agent.explorer.AgentResponseCapture.start", AsyncMock())
     monkeypatch.setattr(bu, "Agent", Agent)
     with pytest.raises(UnsupportedTaskError, match="login"):
         asyncio.run(
@@ -486,7 +488,8 @@ def test_preview_page_limit_does_not_hide_missing_data(
 
     def run(self, spec):
         seen.append(spec.max_pages)
-        return ScrapeResult(records=[{"title": "A", "price": ""}], stop_reason="max_pages")
+        return ScrapeResult(records=[{"title": "A", "price": None}],
+                            fields_found={"title": 1, "price": 0}, stop_reason="max_pages")
 
     monkeypatch.setattr(ScraperExecutor, "run", run)
     outcome = run_task(
@@ -621,7 +624,7 @@ def test_detail_field_validation(candidate):
     requirements = TaskRequirements(fields=["title", "description"], count=2)
     assert validate_spec(spec, requirements) == []
     spec.detail.fields["description"].required = False
-    assert validate_spec(spec, requirements)[0].fields == ["description"]
+    assert validate_spec(spec, requirements) == []
 
 
 # 真实详情选择器失败应可反馈、修复，并完成合并字段抓取。
@@ -1283,8 +1286,8 @@ def test_cli_initial_spec_rejects_other_writers(candidate, monkeypatch, tmp_path
 
 # 工作流必填检查支持合法列表及零计数，仍拒绝空列表、空文本和无效类型。
 @pytest.mark.parametrize("value,valid", [
-    (0, True), (2, True), (["A", "B"], True), ([], False), ([" "], False),
-    (["A", ""], False), (None, False), (False, False), (" ", False),
+    (0, True), (2, True), (["A", "B"], True), ([], True), ([" "], True),
+    (["A", ""], True), (None, True), (False, True), (-1.25, True), (float("inf"), False), (" ", True),
 ])
 def test_validate_multi_element_values(value, valid):
     result = ScrapeResult(records=[{"value": value}], stop_reason="no_pagination")

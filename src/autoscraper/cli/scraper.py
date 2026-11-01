@@ -13,6 +13,7 @@ from pydantic import ValidationError
 from autoscraper.scraping.errors import ContentTimeout, NavigationError, ScrapeError
 from autoscraper.scraping.executor import ScraperExecutor
 from autoscraper.scraping.export import export_records
+from autoscraper.scraping.network import NetworkError
 from autoscraper.scraping.spec import ScraperSpec
 from autoscraper.browser.access import BrowserAccess, HandoffRequired
 from autoscraper.cli.interaction import wait_for_user
@@ -84,7 +85,8 @@ def main() -> int:
                 ensure_ascii=False,
             )
         )
-        return 2 if result.errors or result.stop_reason == "detail_limit" else 0
+        network_truncated = spec.network is not None and result.stop_reason in {"scroll_limit", "max_pages"}
+        return 2 if result.errors or result.stop_reason == "detail_limit" or network_truncated else 0
     except HandoffRequired as exc:
         print(json.dumps({"status": "cancelled" if exc.cancelled else "needs_user",
                           "pending_handoff": exc.request.model_dump()}, ensure_ascii=False))
@@ -92,7 +94,7 @@ def main() -> int:
     except (OSError, ValueError, ValidationError, ScrapeError, PlaywrightError) as exc:
         code = (
             exc.code
-            if isinstance(exc, (NavigationError, ContentTimeout))
+            if isinstance(exc, (NavigationError, ContentTimeout, NetworkError))
             else "selector_failure"
             if isinstance(exc, ScrapeError)
             else "execution_failure"

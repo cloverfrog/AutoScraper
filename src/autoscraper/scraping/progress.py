@@ -3,12 +3,12 @@
 """Application-owned scripts shared by deterministic execution and bounded exploration."""
 
 # 追加列表只需记录数；替换列表才生成声明字段的快照，避免把动画等无关 DOM 变化当作推进。
-# 快照归一化与提取规则保持一致，并检查必填值，防止把加载中的空字段占位当作新一批记录。
+# 快照归一化与提取规则一致；真实空值也可推进，异步加载由显式 loading 标志区分。
 # 加载/结束标志按可见状态判断；bottom 仅作为连续无新增推断的前提，不独立证明结束。
 STATE_SCRIPT = """(o) => {
     const visible = selector => selector && [...document.querySelectorAll(selector)]
         .some(e => e.getClientRects().length && getComputedStyle(e).visibility !== 'hidden');
-    const items = [...document.querySelectorAll(o.item_selector)];
+    const items = o.item_selector ? [...document.querySelectorAll(o.item_selector)] : [];
     const root = o.container_selector ? document.querySelector(o.container_selector)
         : document.scrollingElement;
     if (!root) throw new Error('Scroll container not found');
@@ -21,10 +21,8 @@ STATE_SCRIPT = """(o) => {
         const value = el ? (f.extract === 'attribute' ? el.getAttribute(f.attribute) : (el.innerText ?? el.textContent)) : null;
         return value === null ? null : value.replace(/\\s+/g, ' ').trim();
     })) : [];
-    const ready = !o.fields || snapshot.every(values => Object.values(o.fields)
-        .every((f, i) => !f.required || (f.extract === 'count' ? true
-            : f.extract === 'texts' ? values[i].length > 0 && values[i].every(v => !!v)
-            : !!values[i])));
+    // 真实空值不代表尚未就绪；异步占位须通过显式 loading 标志区分。
+    const ready = true;
     return {ready, count: items.length, snapshot: JSON.stringify(snapshot),
         loading: !!visible(o.loading_selector), end: !!visible(o.end_selector),
         scroll_top: root.scrollTop, scroll_height: root.scrollHeight,
@@ -65,10 +63,21 @@ def state_options(spec):
 
 
 # 区分列表推进和去重后的新增：重复记录仍可能构成有效的新批次，去重交给执行器。
-# 替换模式必须同时满足非空、必填值就绪和字段快照变化；页码变化不参与完成判定。
+# 替换模式要求存在记录且字段快照变化；字段可为空，页码变化不参与完成判定。
 def progressed(before, after, mode):
     return (
         after["count"] > before["count"]
         if mode == "append"
         else after["count"] > 0 and after["ready"] and after["snapshot"] != before["snapshot"]
     )
+
+
+# 网络滚动只读取同一份几何/加载/结束状态，不查询或比较 DOM 记录。
+def network_scroll_options(pagination):
+    options = {"item_selector": "", "fields": None}
+    for key in ("container_selector", "loading_selector", "end_selector"):
+        value = getattr(pagination, key, None)
+        if value and ">>" in value:
+            raise ValueError("Use CSS selectors without selector chains")
+        options[key] = value
+    return options

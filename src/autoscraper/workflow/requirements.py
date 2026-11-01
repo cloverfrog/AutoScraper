@@ -70,7 +70,7 @@ async def extract_requirements(task: str, llm, fields=None, count=None) -> TaskR
                 "Do not see or use any generated scraping rule. Preserve exact field names "
                 "when given; otherwise choose short descriptive names. Count=null if absent. "
                 "The count is a reusable cap, not a minimum: fewer available records are valid. "
-                "All requested fields are mandatory. Only mark unsupported_capabilities when "
+                "All requested field names must be declared; actual empty/null values are valid. Only mark unsupported_capabilities when "
                 "the user EXPLICITLY requires CAPTCHA bypass or complex virtual lists. "
                 "Manual login and user-completed verification are supported; do not mark them unsupported. "
                 "Link, click, infinite scroll and one level of detail-page extraction are supported. "

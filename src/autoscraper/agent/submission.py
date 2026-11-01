@@ -29,6 +29,7 @@ class SubmissionChecks:
         self.advances = set()
         self.last_issues = []
         self.last_candidate = None
+        self.network_summary = None
 
     # 动作前固定字段和数量快照；后续工具结果不能覆盖用于比较的基线。
     def begin_action(self, kind, url):
@@ -55,7 +56,7 @@ class SubmissionChecks:
         self.tests[key] = result
         self.remember_count(result["url"], result["item_selector"], result.get("count"))
         # 保留曾测试通过的详情目标，替换列表后复核新链接不会抹掉先前详情页的有效证据。
-        if attribute == "href" and self.passed(result):
+        if attribute == "href" and self.passed(result, nonempty=True):
             self.links.setdefault(key[:4], set()).update(
                 urljoin(result["url"], value)
                 for sample in result["samples"]
@@ -85,9 +86,9 @@ class SubmissionChecks:
         mode = extract or ("attribute" if attribute else "text")
         return self.tests.get((self.actual_url(url), item_selector, selector, attribute or "", mode))
 
-    # 按提取方式检查样本：单值要求唯一，多元素允许多匹配；必填文本与列表还需非空。
+    # 样本检查定位与歧义，不把真实空值当失败；导航链接另行要求非空。
     @staticmethod
-    def passed(result, required=True, extract=None):
+    def passed(result, required=True, extract=None, *, nonempty=False):
         if not result or not result.get("count") or not result.get("samples"):
             return False
         mode = result.get("extract", "attribute" if result.get("attribute") else "text")
@@ -99,19 +100,21 @@ class SubmissionChecks:
                        and type(sample.get("matches")) is int and sample["matches"] >= 0
                        for sample in result["samples"])
         if mode == "texts":
-            return all(not required or has_field_value(sample.get("values"))
+            return all(isinstance(sample.get("values"), list)
+                       and all(isinstance(value, str) for value in sample["values"])
                        for sample in result["samples"])
-        return all(
-            sample.get("matches") == 1
-            and (
-                not required
-                or any(
-                    str(value).strip() for value in sample.get("values", []) if value is not None
-                )
+        if any(sample.get("matches") not in {0, 1} for sample in result["samples"]):
+            return False
+        values = [value for sample in result["samples"] for value in sample.get("values", [])]
+        if nonempty:
+            return all(sample.get("matches") == 1 for sample in result["samples"]) and any(
+                has_field_value(value) for value in values
             )
-            or (not required and sample.get("matches") == 0)
-            for sample in result["samples"]
-        )
+        return not required or result.get("resolved_count", sum(value is not None for value in values)) > 0
+
+    # 用户要求的字段需要定位证据，但这不等于每条记录都必须有非空值。
+    def needs_evidence(self, name, field):
+        return field.required or bool(self.requirements and name in self.requirements.fields)
 
     # 页内待办只依据本会话的实际测试生成；参考候选用于提示，不导入历史取证或阻止导航。
     def page_work(self, url):
@@ -127,16 +130,22 @@ class SubmissionChecks:
                 )
             }
         role = "listing" if is_listing else "detail" if page in detail_urls else "other"
+        if spec is not None and spec.network is not None:
+            return {
+                "url": page, "role": role, "candidate_pending": None,
+                "guidance": "This DOM summary does not report network evidence. Use test_network "
+                "with the exact source and dedupe_by; verify the initial page and pagination.",
+            }
         field_tests = sum(1 for test_url, _, field, _, _ in self.tests if test_url == page and field)
         pending = []
-        if spec is not None and role in {"listing", "detail"}:
+        if spec is not None and spec.network is None and role in {"listing", "detail"}:
             fields = spec.fields if is_listing else spec.detail.fields
             root = spec.item_selector if is_listing else "html"
             pending.extend(
                 f"field:{name}" for name, field in fields.items()
                 if not self.passed(
                     self.result(page, root, field.selector, field.attribute, field.extract),
-                    field.required, field.extract,
+                    self.needs_evidence(name, field), field.extract,
                 )
             )
             if is_listing and spec.detail and not self.passed(
@@ -148,7 +157,7 @@ class SubmissionChecks:
                 if pagination.type in {"click", "link"}:
                     control = self.result(page, pagination.next_selector, "",
                                           "href" if pagination.type == "link" else "")
-                    if not self.passed(control, pagination.type == "link") or control.get("count") != 1:
+                    if not self.passed(control, pagination.type == "link", nonempty=pagination.type == "link") or control.get("count") != 1:
                         pending.append("pagination_control")
                 if pagination.type in {"click", "scroll"}:
                     mode = getattr(pagination, "mode", "append")
@@ -177,7 +186,7 @@ class SubmissionChecks:
     # 修复只继承有界的选择器/URL/推进摘要，不复制原始页面文本或导入旧会话证据。
     def repair_summary(self):
         tests = list(self.tests.items())[-32:]
-        return {
+        summary = {
             "tests": [
                 {"url": url, "item_selector": item, "field_selector": selector,
                  "attribute": attribute, "extract": result.get("extract"), "status": result.get("status"),
@@ -191,6 +200,9 @@ class SubmissionChecks:
                 for url, item, kind, mode in sorted(self.advances)[:8]
             ],
         }
+        if self.network_summary is not None:
+            summary["network_test"] = self.network_summary
+        return summary
 
     # 拒绝原因与候选一起离开已结束的 Agent，避免工作流只能传回一段泛化错误。
     def rejection_error(self):
@@ -205,10 +217,20 @@ class SubmissionChecks:
     def check(self, spec: ScraperSpec):
         issues = validate_spec(spec, self.requirements) if self.requirements else []
         url = self.actual_url(spec.start_url)
+        if spec.network is not None:
+            pagination = spec.network.pagination
+            if pagination is not None and pagination.type != "scroll":
+                attribute = "href" if pagination.type == "link" else ""
+                control = self.result(url, pagination.next_selector, "", attribute)
+                if not self.passed(control, pagination.type == "link", nonempty=pagination.type == "link") or control.get("count") != 1:
+                    issues.append(Feedback(code="selector_failure", message=
+                        "Test the exact network pagination CSS control on the initial page "
+                        "using test_selector (href for link pagination)."))
+            return issues
 
-        def require(test_url, item, selector, attribute="", required=True, extract=None):
+        def require(test_url, item, selector, attribute="", required=True, extract=None, *, nonempty=False):
             result = self.result(test_url, item, selector, attribute, extract)
-            if not self.passed(result, required, extract):
+            if not self.passed(result, required, extract, nonempty=nonempty):
                 if result is None:
                     reason = "No test exists for this exact page/root/field combination."
                 else:
@@ -237,26 +259,23 @@ class SubmissionChecks:
                 ))
             return result
 
-        for field in spec.fields.values():
-            require(url, spec.item_selector, field.selector, field.attribute, field.required, field.extract)
+        for name, field in spec.fields.items():
+            require(url, spec.item_selector, field.selector, field.attribute, self.needs_evidence(name, field), field.extract)
         if spec.detail:
-            require(url, spec.item_selector, spec.detail.url_selector, "href")
+            require(url, spec.item_selector, spec.detail.url_selector, "href", nonempty=True)
             detail_urls = {
                 self.actual_url(value)
                 for value in self.links.get(
                     (url, spec.item_selector, spec.detail.url_selector, "href"), ()
                 )
             }
-            # 详情字段必须在某个已观察到的详情链接目标上全部通过，不能混用不同页面证据。
-            verified = any(
-                all(
-                    self.passed(
-                        self.result(detail_url, "html", field.selector, field.attribute, field.extract),
-                        field.required, field.extract,
-                    )
-                    for field in spec.detail.fields.values()
-                )
-                for detail_url in detail_urls
+            # 稀疏字段可在不同的已观察详情页定位，不强迫某一页包含全部字段。
+            verified = bool(detail_urls) and all(
+                any(self.passed(
+                    self.result(detail_url, "html", field.selector, field.attribute, field.extract),
+                    self.needs_evidence(name, field), field.extract,
+                ) for detail_url in detail_urls)
+                for name, field in spec.detail.fields.items()
             )
             if not verified:
                 tested_urls = {
@@ -266,9 +285,9 @@ class SubmissionChecks:
                     page for page in tested_urls if all(
                         self.passed(
                             self.result(page, "html", field.selector, field.attribute, field.extract),
-                            field.required, field.extract,
+                            self.needs_evidence(name, field), field.extract,
                         )
-                        for field in spec.detail.fields.values()
+                        for name, field in spec.detail.fields.items()
                     )
                 )[:3]
                 if passed_urls:
@@ -298,6 +317,7 @@ class SubmissionChecks:
                     "",
                     "href" if pagination.type == "link" else "",
                     pagination.type == "link",
+                    nonempty=pagination.type == "link",
                 )
                 if control and control.get("count") != 1:
                     issues.append(

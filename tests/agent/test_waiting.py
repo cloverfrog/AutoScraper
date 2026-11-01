@@ -304,13 +304,14 @@ def test_selector_wait_attaches_focused_cdp_target_and_preserves_browser():
     asyncio.run(run())
 
 
-# 详情提取的内容超时在跳过或终止路径中都保留错误分类。
+# 详情字段整列未定位时反馈可修复的规则错误，个别缺失不再直接视为内容超时。
 @pytest.mark.parametrize("mode", ["fail", "skip"])
-def test_detail_content_timeout_preserves_type(page, mode):
+def test_detail_never_resolved_field_is_recoverable(page, mode):
     spec = rule(
         version="2",
         on_item_error=mode,
-        content_timeout_ms=50,
+        timeout_ms=1000,
+        content_timeout_ms=500,
         detail={"url_selector": "a", "fields": {"author": {"selector": ".author"}}},
     )
     page.context.route(
@@ -325,14 +326,16 @@ def test_detail_content_timeout_preserves_type(page, mode):
         ),
     )
     if mode == "fail":
-        with pytest.raises(ContentTimeout):
+        from autoscraper.scraping.errors import ScrapeError
+        with pytest.raises(ScrapeError, match="author.*did not resolve"):
             ScraperExecutor().run_page(spec, page)
     else:
         result = ScraperExecutor().run_page(spec, page)
-        assert result.error_details[0].code == "content_timeout"
+        assert result.records[0]["author"] is None
+        assert result.error_details[0].code == "selector_failure"
         feedback = validate_data(result, TaskRequirements(fields=["quote", "author"]))
-        assert len(feedback) == 1
-        assert not feedback[0].recoverable
+        assert all(issue.recoverable for issue in feedback)
+        assert any(issue.fields == ["author"] for issue in feedback)
 
 
 # 每次进入下一列表页后都应重新等待列表内容。

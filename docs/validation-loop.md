@@ -16,8 +16,8 @@ uv run --extra agent autoscraper-agent "https://books.toscrape.com/" "抓取前2
 
 1. 从原始任务建立 `TaskRequirements`：必需字段、每次记录上限、筛选要求和显式不支持的能力。命令行的 `--fields` / `--count` 优先；先保留明确字段与上限，再用共享模型补充需求和筛选条件，不向该步骤提供候选规则。
 2. 将约束交给单 browser-use Agent。成功时仍提交原有 ScraperSpec；登录等人工操作交给 `wait_for_user`，用户继续后在同一浏览器恢复；发现复杂虚拟列表等不支持能力时调用 `report_unsupported`，立即结束。
-3. 独立检查规则：所有必需字段必须存在并标记 required；显式上限必须等于 max_items，不能按当前可用数量改小。沿用 Pydantic 协议校验，不扩展 ScraperSpec，不允许脚本。
-4. 使用现有 Executor 试跑候选规则，默认最多 100 条、5 页；导航超时沿用规则设置。检查提取异常、空结果、逐条缺失/空字段、超过上限和分页循环；自然结束时不要求凑足记录。
+3. 独立检查规则：所有请求字段必须声明，不强制 required 标记；显式上限必须等于 max_items，不能按当前可用数量改小。沿用 Pydantic 协议校验，不扩展 ScraperSpec，不允许脚本。
+4. 使用现有 Executor 试跑候选规则，默认最多 100 条、5 页；导航超时沿用规则设置。检查提取异常、空结果、整列从未定位的请求字段及不兼容类型、超过上限和分页循环；自然结束时不要求凑足记录。
 5. 可恢复的问题把错误码、字段、原因和上一份规则反馈给同一个 Agent 工作流，再生成并重新验证。默认最多修复两次，即总共最多三份候选规则；不会根据失败候选自行放宽需求；用户明确澄清后会更新当前需求，原始需求另存快照。不支持的能力、预算不足、需求解析失败、验证页数预算不足直接停止。
 6. 如要求数据输出且试跑未覆盖完整任务，执行原规则并校验全量结果。试跑已覆盖时直接复用数据。所有检查通过后才保存正式规则和数据文件；运行时导航/内容错误会单独保存一份明确标记为未验证的候选规则。
 
@@ -50,10 +50,9 @@ uv run --extra agent autoscraper-agent "https://books.toscrape.com/" "抓取前2
 可恢复反馈包括 `missing_required_field`、`count_mismatch`、`invalid_spec`、`selector_failure`、`empty_extraction`、`missing_data`。不可恢复反馈包括 `content_timeout`、`navigation_timeout`、`navigation_failure`、`unsupported_capability`、`validation_limit`、`invalid_requirements`、`agent_failure`、`budget_exhausted`。
 
 列表、分页和详情页导航超时报告 `navigation_timeout`；代理/DNS/连接故障及 HTTP
-错误状态（>=400）报告 `navigation_failure`。等待列表或详情必填元素出现超时报告
-`content_timeout`。均保留目标 URL 和原始错误，返回 `unfulfilled`，不交给 Agent Repair，
+错误状态（>=400）报告 `navigation_failure`。等待列表记录出现超时报告 `content_timeout`；详情单条字段缺失保存 null，整列未定位再反馈规则错误。均保留目标 URL 和原始错误，返回 `unfulfilled`，不交给 Agent Repair，
 不自动重试。详情页 `on_item_error=skip` 仍保留类型，避免因缺少记录触发规则修复。
-CSS 语法错误、多匹配字段和未发生等待超时的必填字段缺失等规则问题仍可进入有限修复。
+CSS 语法错误、多匹配字段和整列字段从未定位等规则问题仍可进入有限修复。
 
 HTTP 错误文档可能通过 JavaScript 跳转到正常 SPA 入口。执行器在原导航预算内，
 最多等待 1 秒让错误页发起主文档跳转；跳转开始后，其加载及后续跳转仍共用原超时。
@@ -97,7 +96,7 @@ Agent 澄清有有效回答时，先用共享模型独立修订当前需求，�
 校验语义，不证明入口等价或任意语义约束。`validation_scope` 对此做出明确说明。
 提问判断及语义约束遵守依赖主 Agent，不宣称强制拦截所有入口替换。
 
-字段校验检查名称、必填性及非空数据，不验证任意字段的业务语义。未给出精确字段名的自然语言需求依赖一次模型解释，可以通过 `--fields` / `--count` 消除这部分歧义。不把所有名为 description 的字段一概判为详情页字段；由网页实际证据决定。v2 支持一层详情提取，字段完整性检查使用列表与详情字段的并集。
+字段校验检查声明、类型和实际定位证据，允许真实空值与个别缺失，不验证任意字段的业务语义。未给出精确字段名的自然语言需求依赖一次模型解释，可以通过 `--fields` / `--count` 消除这部分歧义。不把所有名为 description 的字段一概判为详情页字段；由网页实际证据决定。v2 支持一层详情提取，字段完整性检查使用列表与详情字段的并集。
 
 验证不通过时不会写规则或数据，因此不会用不完整数据覆盖已有成功文件。文件系统 I/O 错误下的多文件事务性不属于本次验证机制。
 
@@ -120,8 +119,8 @@ Agent 澄清有有效回答时，先用共享模型独立修订当前需求，�
 
 详情预算与列表页预算独立。试跑通过 `--validation-detail-pages`（默认 100）限制详情导航次数，
 失败导航也消耗预算。`detail_limit` 生成不可恢复的 `validation_limit`，不会被当作正常结束或任务成功。
-详情明确的字段规则错误通过既有反馈进入有限修复；等待详情必填元素超时报告
-不可恢复的 `content_timeout`，导航超时为 `navigation_timeout`，其他导航错误为
+详情明确的字段规则错误通过既有反馈进入有限修复；单条字段等待后仍缺失保存 null，
+整列从未定位则反馈规则错误。导航超时为 `navigation_timeout`，其他导航错误为
 `navigation_failure`。失败时仍保留原有输出文件。
 CLI 新增 `detail_pages` 计数，CSV 和 JSON 都导出合并字段。
 

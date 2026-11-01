@@ -488,3 +488,56 @@ uv run autoscraper-ui --host 100.x.y.z --reload
 - `.agent-runtime/ui/traces/`：原有 Trace 记录，禁止网页下载。
 
 安装 UI 不影响 `autoscraper` 和 `autoscraper-agent` 的使用；CLI 的路径和交互行为保持不变。
+
+## 浏览器网络 JSON 数据源
+
+当字段只存在于 Fetch/XHR 的 JSON 响应中时，Agent 可以生成 v3 网络规则。
+采集在首次导航前安装，`list_network_responses` 列出候选元数据，
+`inspect_network_response` 查看有界样本，`test_network` 测试原样规则及去重键。
+旧 v1/v2 DOM 规则继续使用原执行路径，CLI/UI 的操作方式不变。
+
+可先启动不依赖外网的示例页面：
+
+```bash
+uv run python examples/network_demo.py
+```
+
+在另一个终端执行已有网络规则（不调用模型）：
+
+```bash
+uv run autoscraper examples/books.network.json --output output/network-books.json --output output/network-books.csv
+```
+
+也可以让 Agent 从页面发现这些字段并生成规则：
+
+```bash
+uv run --extra agent autoscraper-agent "http://127.0.0.1:8765/" "抓取前10本书，字段为id、title、stock、price、active，包括页面未展示的库存、价格和启用状态，点击Next抓取后续数据" --fields id title stock price active --count 10 --spec-output output/network-rule.json --output output/network-data.json
+```
+
+页面只显示书名，接口额外包含库存、小数价格及布尔值；示例共两条，按钮禁用后正常结束。
+规则通过浏览器导航和点击触发请求，不拼装或重放 API，不下载资源文件。
+支持初始加载、Next 链接、点击和无限滚动分页；不支持 DOM/网络字段混合或网络详情关联。
+网络协议、缓存限制和分页完成语义见 [协议参考](docs/reference.md#浏览器网络-json-v3)。
+
+
+同一个示例服务还提供 `http://127.0.0.1:8765/scroll`。将示例规则的 `start_url` 改为此地址，
+并将 `network.pagination` 改为以下配置，即可验证 DOM 节点数不变的网络滚动加载：
+
+```json
+{"type":"scroll","loading_selector":"#loading","end_selector":"#end","max_scrolls":20,"no_change_limit":3}
+```
+
+Agent 使用原有 `explore_scroll(network=最终网络规则, dedupe_by=最终去重键)`，不需要 DOM
+记录选择器。页面和容器滚动复用现有动作；`container_selector` 指定唯一容器。
+网络滚动只有成功提取并去重后的新增记录才算推进。`max_pages` 统计初始批次与新增数据批次，
+空滚动/重复批次只消耗 `max_scrolls`。`end_marker` 表示明确结束；没有结束标志时，
+到底、无加载且无在途响应后连续多轮无新增，才返回启发式的 `no_more_content`。
+已观察到的加载或响应等待超时会失败，`scroll_limit`/`max_pages` 是预算截断。
+
+
+字段名要求与值完整性分开：用户要求的字段必须在规则中声明，但源数据中的 `[]`、`""`、
+`null`、零和 false 都会保留。个别 JSON 键/DOM 元素缺失输出 null，不丢弃整条记录；
+整列请求字段从未定位、类型不兼容或错误的记录根仍会反馈修复。
+旧规则的 `required` 兼容保留为整次运行的定位证据要求，不再限制每条值非空。
+网络工具的 `diagnostics` 给出响应、记录、字段、路径和原因，`field_coverage` 给出定位计数，
+无需通过反复删除字段猜测失败原因。详见协议参考中的字段语义说明。

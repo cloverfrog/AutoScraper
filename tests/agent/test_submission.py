@@ -232,7 +232,7 @@ def test_invalid_css_after_click_is_recorded_as_failed_evidence(page):
         (0, "button.more", ".old", "p", False, True),
         (0, "button.more", "p", ".missing", False, False),
         (0, "button.more", "p", "p,b", False, False),
-        (0, "button.more", "p", "i.empty", False, False),
+        (0, "button.more", "p", "i.empty", False, True),
         (0, "button.more", "p", "[", False, False),
         (0, "button.more", ".old", "p", True, False),
     ],
@@ -623,8 +623,8 @@ def test_page_work_guides_page_grouping_without_navigation_gate(finish_listing):
 
 # 多元素字段必须有对应提取方式的证据，不能混用单值测试或其他多元素模式。
 @pytest.mark.parametrize("extract,selector,required,valid", [
-    ("texts", "b", True, True), ("texts", ".missing", True, False),
-    ("texts", ".missing", False, True), ("texts", "i", True, False),
+    ("texts", "b", True, True), ("texts", ".missing", True, True),
+    ("texts", ".missing", False, True), ("texts", "i", True, True),
     ("count", ".missing", True, True), ("count", "b", True, True),
 ])
 def test_multi_element_submission_evidence(page, extract, selector, required, valid):
@@ -641,7 +641,7 @@ def test_multi_element_submission_evidence(page, extract, selector, required, va
     assert (checks.page_work(page.url)["candidate_pending"] == []) is valid
     if selector == "b":
         assert field["samples"][0]["values"] == (["A", "B", "C"] if extract == "texts" else [3])
-    assert checks.check(candidate(fields={"value": {"selector": selector}}))
+    assert bool(checks.check(candidate(fields={"value": {"selector": selector}}))) == (selector != "i")
 
 
 # 详情多元素证据同样必须关联已观察到的详情链接。

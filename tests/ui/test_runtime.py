@@ -223,3 +223,24 @@ def test_agent_invalid_reference_does_not_start_model(tmp_path, monkeypatch, pay
     assert state["status"] == "unfulfilled"
     assert state["files"] == []
     assert "error" in state["summary"]
+
+
+# 网络滚动/批次预算耗尽须显示部分结果，同时保留导出文件及旧 DOM 状态语义。
+@pytest.mark.parametrize("network", [True, False])
+@pytest.mark.parametrize("stop_reason", ["scroll_limit", "max_pages", "no_more_content"])
+def test_network_budget_is_partial_in_spec_ui(tmp_path, monkeypatch, network, stop_reason):
+    data = dict(start_url="https://fixture.test/", item_selector="article",
+                fields=dict(title=dict(selector="h1")))
+    if network:
+        data = dict(version="3", start_url="https://fixture.test/", network=dict(
+            url_pattern="https://fixture.test/api", records_path=[], fields=dict(title=dict(path=["title"])),
+            pagination=dict(type="scroll")))
+    monkeypatch.setattr("autoscraper.ui.runtime.ScraperExecutor.run", lambda self, spec: ScrapeResult(
+        records=[dict(title="Book")], stop_reason=stop_reason))
+    manager = JobManager(tmp_path)
+    job_id = manager.start(RunConfig(mode="spec", spec_json=json.dumps(data)))
+    wait_for(lambda: manager.get(job_id).done)
+    state = manager.get(job_id).snapshot()
+    assert state["status"] == ("partial" if network and stop_reason != "no_more_content" else "success")
+    assert state["preview"] == [dict(title="Book")]
+    assert {Path(path).name for path in state["files"]} == {"rule.json", "data.json", "data.csv"}
