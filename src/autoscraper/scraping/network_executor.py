@@ -23,9 +23,17 @@ class ResponseTimeout(NetworkError):
     code = "response_timeout"
 
 
+# 网络响应完成后控件可能仍在渲染；隐藏控件和缺失/禁用控件一样需要等待稳定。
+def next_control(page, pagination):
+    from .executor import next_button
+
+    button = next_button(page, pagination.next_selector)
+    return button if button is not None and button.is_visible() else None
+
+
 # 每个批次的输入窗口以请求开始序号划分；完成读取不等于字段提取或数据新增。
 def run_network(spec, page):
-    from .executor import ScrapeFailure, ScrapeResult, css, http_url, navigate, next_button
+    from .executor import ScrapeFailure, ScrapeResult, css, http_url, navigate
 
     source = spec.network
     result = ScrapeResult(fields_found={name: 0 for name in spec.all_fields})
@@ -150,7 +158,15 @@ def run_network(spec, page):
                 all_complete = bool(entries) and not pending
                 busy = state is not None and state["loading"]
                 if added and all_complete and not busy and now - last_completion >= 0.1:
-                    break
+                    # 响应静默不代表分页控件已经就绪；沿用本批截止时间，不另开等待预算。
+                    if is_scroll or pagination is None:
+                        break
+                    ended = (
+                        getattr(pagination, "end_selector", None)
+                        and css(page, pagination.end_selector).is_visible()
+                    )
+                    if ended or next_control(page, pagination) is not None or now >= deadline:
+                        break
                 # 无请求或全重复的滚动只记为一次安静观察，允许继续滚动/重试。
                 # 已观察到加载或在途请求时必须等到完成，不能将超时累计为启发式无新增。
                 if is_scroll and (scrolls or reconcile) and not added and not busy and not pending:
@@ -194,7 +210,7 @@ def run_network(spec, page):
                 page, pagination.end_selector
             ).is_visible():
                 terminal = "end_marker"
-            elif next_button(page, pagination.next_selector) is None:
+            elif next_control(page, pagination) is None:
                 terminal = "no_next"
             # 空数组只有明确结束条件才能自然结束；有记录但全部重复始终报告无推进。
             if not added and (extracted or not terminal):
@@ -209,7 +225,7 @@ def run_network(spec, page):
                 result.stop_reason = "max_pages"
                 return result
             if pagination.type == "link":
-                button = next_button(page, pagination.next_selector)
+                button = next_control(page, pagination)
                 href = button.get_attribute("href")
                 if not href:
                     raise JsonPathError("Network link pagination requires a nonempty href")

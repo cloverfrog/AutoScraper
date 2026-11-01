@@ -444,3 +444,46 @@ def test_network_budget_cli_returns_partial(tmp_path, monkeypatch, network, stop
         records=[dict(title="Book")], stop_reason=stop_reason))
     assert main() == (2 if network and stop_reason != "no_more_content" else 0)
     assert json.loads(output.read_text()) == [dict(title="Book")]
+
+
+# JSON 已完成时 Next 仍可能在渲染；等待使用原批次预算，不能在 100ms 静默后提前结束。
+@pytest.mark.parametrize("pagination", ["click", "link"])
+@pytest.mark.parametrize("state", ["disabled", "removed", "hidden"])
+@pytest.mark.parametrize("content_timeout_ms,expected", [(250, 1), (800, 2)])
+def test_network_waits_for_delayed_next_control(page, pagination, state, content_timeout_ms, expected):
+    control = '<button id="next">Next</button>' if pagination == "click" else '<a id="next" href="/2">Next</a>'
+    changes = {
+        "disabled": ("next.disabled=true", "next.disabled=false") if pagination == "click" else
+                    ("next.setAttribute('aria-disabled','true')", "next.removeAttribute('aria-disabled')"),
+        "removed": ("next.remove()", "document.body.append(next)"),
+        "hidden": ("next.hidden=true", "next.hidden=false"),
+    }
+    change, restore = changes[state]
+    body = '<main></main>' + control + '''<script>
+    const next=document.querySelector('#next');
+    let n=location.pathname==='/2' ? 1 : 0;
+    async function load() {
+      await (await fetch('/api/items?page='+(++n))).json();
+      document.querySelector('main').textContent='Book '+n;
+      if(n===1) {CHANGE; setTimeout(() => {RESTORE}, 400)} else next.remove();
+    }
+    CLICK
+    load();</script>'''
+    body = body.replace('CHANGE', change).replace('RESTORE', restore)
+    body = body.replace('CLICK', 'next.onclick=load;' if pagination == 'click' else '')
+
+    def route(r):
+        if '/api/items?' in r.request.url:
+            number = int(r.request.url.rsplit('=', 1)[1])
+            r.fulfill(content_type='application/json', body=json.dumps(dict(data=dict(items=[
+                dict(id=number, title='Book', stock=number, price=0, active=False),
+            ]))))
+        else:
+            r.fulfill(content_type='text/html', body=body)
+    page.route('**/*', route)
+    data = rule(max_items=2, content_timeout_ms=content_timeout_ms).model_dump()
+    data['network']['pagination'] = dict(type=pagination, next_selector='#next')
+    result = ScraperExecutor().run_page(ScraperSpec.model_validate(data), page)
+    assert [row['id'] for row in result.records] == list(range(1, expected+1))
+    assert result.pages_visited == expected
+    assert result.stop_reason == ('max_items' if expected == 2 else 'no_next')
