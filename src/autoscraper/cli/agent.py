@@ -112,7 +112,7 @@ def main() -> int:
         help="Return needs_clarification/needs_user instead of prompting",
     )
     parser.add_argument("--fields", nargs="+", help="Authoritative required field names")
-    parser.add_argument("--count", type=int, help="Authoritative requested record count")
+    parser.add_argument("--count", type=int, help="Maximum unique records per run; natural exhaustion may return fewer")
     parser.add_argument("--max-repairs", type=int, default=2)
     parser.add_argument("--validation-items", type=int, default=100)
     parser.add_argument("--validation-pages", type=int, default=5)

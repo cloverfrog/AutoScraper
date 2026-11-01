@@ -55,15 +55,14 @@ def test_local_filter_uses_listing_field_names(candidate):
     assert validate_spec(spec, requirements) == []
 
 
-# 全部筛除自然结束是正常空结果；有目标数量时只报告不可修复的数量不足。
+# 全部筛除自然结束是正常空结果，数量上限不会变成最少记录要求。
 @pytest.mark.parametrize("count", [None, 2])
 def test_empty_filtered_result_is_not_selector_failure(count):
     result = ScrapeResult(items_extracted=3, filtered_out=2, filter_unknown=1,
                           filter_unknown_reasons={"price: not numeric": 1}, stop_reason="no_next")
     issues = validate_data(result, TaskRequirements(fields=["title"], count=count))
     assert not any(issue.code == "empty_extraction" for issue in issues)
-    assert [issue.code for issue in issues] == (["insufficient_items"] if count else [])
-    assert all(not issue.recoverable for issue in issues)
+    assert issues == []
 
 
 # 真正的提取错误不能因为同批存在筛除记录而被忽略。
@@ -136,8 +135,8 @@ def test_mixed_url_and_local_filtering(candidate):
     assert "city" not in spec.fields
 
 
-# 无匹配时转入用户决策而非选择器修复；未知原因仍通过摘要返回。
-def test_workflow_empty_filtered_result_asks_instead_of_repair(candidate, settings, workflow, monkeypatch):
+# 无匹配但列表自然结束时正常完成，保留原数量上限及未知原因。
+def test_workflow_empty_filtered_result_keeps_cap(candidate, settings, workflow, monkeypatch):
     module, _ = workflow
     async def parse(*args):
         return TaskRequirements(fields=["title", "price"], count=2, filters=[PRICE])
@@ -148,6 +147,6 @@ def test_workflow_empty_filtered_result_asks_instead_of_repair(candidate, settin
         items_extracted=2, filtered_out=1, filter_unknown=1, filter_unknown_reasons={"price: missing mapping": 1},
         stop_reason="no_next"))
     result = run_task(test_workflow.URL, "价格低于2元，前2条", settings, execute=True)
-    assert result.status == "needs_clarification" and result.attempts == 1
-    assert result.pending_clarification and result.requirements.count == 2
+    assert result.status == "success" and result.attempts == 1
+    assert not result.pending_clarification and result.requirements.count == result.spec.max_items == 2
     assert result.summary()["filter_unknown_reasons"] == {"price: missing mapping": 1}

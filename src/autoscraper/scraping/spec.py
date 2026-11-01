@@ -177,7 +177,8 @@ class ScraperSpec(ProtocolModel):
     filters: list[FilterSpec] = Field(default_factory=list)
     pagination: PaginationSpec | None = None
     # max_pages 统计已处理列表批次；滚动重试另受 max_scrolls 约束。
-    max_items: int = Field(default=100, ge=1, le=1_000_000)
+    max_items: int = Field(default=100, ge=1, le=1_000_000,
+        description="Reusable upper limit per run; natural exhaustion may return fewer records")
     max_pages: int = Field(default=100, ge=1, le=100_000)
     timeout_ms: int = Field(default=15_000, ge=1, le=120_000)
     # 未指定独立内容等待上限时，执行器回退到 timeout_ms。

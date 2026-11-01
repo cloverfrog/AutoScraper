@@ -1,4 +1,4 @@
-# 澄清后的需求同步：复现用户同意 21 条，但旧验证仍要求 25 条的失败路径。
+# 明确修改可复用上限后的需求同步：只有用户主动改变上限才更新协议。
 # 浏览器和模型使用脚本替身；真实生成恢复、提交门槛、预算和工作流验证继续执行。
 import asyncio
 import json
@@ -22,9 +22,9 @@ TASK = "抓取球队为Boston Bruins的前25条，字段名为name、year、win_
 BASE = TaskRequirements(fields=["name", "year", "win_rate"], count=25,
     filters=[{"field": "team", "operator": "eq", "value": "Boston Bruins"}])
 REQUEST = ClarificationRequest(
-    question="Only 21 Boston Bruins records are available. Return all 21 or keep requesting 25?",
-    explanation="The filtered listing reports 21 records and has no next page.",
-    options=["Return all 21 available Boston Bruins records", "Keep requesting 25 records"],
+    question="Change the reusable upper limit from 25 to 21, or keep the limit at 25?",
+    explanation="The user may explicitly revise the reusable cap; current availability alone does not change it.",
+    options=["Set the reusable upper limit to 21 records", "Keep the reusable upper limit at 25 records"],
 )
 ROWS = [{"name": "Boston Bruins", "year": str(1990 + i), "win_rate": "0.55"} for i in range(21)]
 
@@ -185,9 +185,8 @@ def test_approved_count_reaches_submission_and_execution(monkeypatch):
 @pytest.mark.parametrize("answer", [REQUEST.options[1], "You may use another listing URL, but keep 25 records"])
 def test_unapproved_count_is_not_lowered(monkeypatch, answer):
     outcome, captured, _, _ = execute_scenario(monkeypatch, answer=answer, count=25)
-    assert outcome.status == "unfulfilled" and outcome.requirements.count == 25
-    assert outcome.original_requirements.count == 25
-    assert outcome.feedback[0].code in {"insufficient_items", "invalid_spec"}
+    assert outcome.status == "success" and outcome.requirements.count == 25
+    assert outcome.original_requirements.count == 25 and not outcome.feedback
     assert outcome.spec.max_items == 25 and captured["executions"] == 1
 
 
@@ -236,14 +235,14 @@ def test_revision_preserves_explicit_user_changes():
     assert "Agent proposals, not authorization" in captured[0][0].content
 
 
-# 执行后发现不足时由工作流直接询问，接受 21 条后不再重建 Agent 或重复抓取。
-def test_count_changed_after_execution_reuses_result(monkeypatch):
+# 当次只有 21 条并不改变可复用的 25 条上限，也不触发澄清或重新生成。
+def test_fewer_records_preserve_cap_without_clarification(monkeypatch):
     outcome, captured, model, _ = execute_scenario(monkeypatch, failure="workflow_question", repairs=1)
     assert outcome.status == "success" and outcome.attempts == 1
     assert outcome.history[0]["feedback"] == []
-    assert outcome.spec.max_items == outcome.requirements.count == 21
+    assert outcome.spec.max_items == outcome.requirements.count == 25
     assert outcome.original_requirements.count == 25 and model.calls == 2
-    assert not captured["updates"] and captured["executions"] == 1
+    assert not outcome.clarifications and not captured["updates"] and captured["executions"] == 1
     assert len(captured["agents"]) == 1
 
 

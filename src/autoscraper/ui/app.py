@@ -175,8 +175,8 @@ def build_app(manager):
             with gr.Row():
                 controls["fields"] = gr.Textbox(label="必需字段（空格分隔，仅 Agent）", value="")
                 controls["count"] = gr.Number(
-                    label="请求条数（可选，仅 Agent）", precision=0, minimum=0,
-                    placeholder="不额外限定条数", info="0 或留空表示不覆盖。",
+                    label="每次抓取上限（可选，仅 Agent）", precision=0, minimum=0,
+                    placeholder="沿用任务中的上限", info="0 或留空表示不覆盖；记录少于上限时全部保存。",
                 )
             with gr.Row():
                 for key, label, value in (

@@ -11,10 +11,11 @@ from pydantic import Field, field_validator
 from autoscraper.scraping.spec import FilterCondition, NonEmpty, ProtocolModel
 
 
-# 独立于生成规则的用户约束：必需字段、目标数量、筛选条件和明确要求的不支持能力。
+# 独立于生成规则的用户约束：必需字段、数量上限、筛选条件和明确要求的不支持能力。
 class TaskRequirements(ProtocolModel):
     fields: list[NonEmpty] = Field(min_length=1, max_length=50)
-    count: int | None = Field(default=None, ge=1, le=1_000_000)
+    count: int | None = Field(default=None, ge=1, le=1_000_000,
+        description="Reusable upper limit on matching unique records, not a minimum")
     filters: list[FilterCondition] = Field(default_factory=list)
     unsupported_capabilities: list[Literal["captcha_bypass", "virtual_list"]] = (
         Field(default_factory=list)
@@ -65,9 +66,10 @@ async def extract_requirements(task: str, llm, fields=None, count=None) -> TaskR
     response = await llm.ainvoke(
         [
             SystemMessage(
-                content="Extract the user's required field names and requested record count. "
+                content="Extract the user's required field names and requested record upper limit. "
                 "Do not see or use any generated scraping rule. Preserve exact field names "
                 "when given; otherwise choose short descriptive names. Count=null if absent. "
+                "The count is a reusable cap, not a minimum: fewer available records are valid. "
                 "All requested fields are mandatory. Only mark unsupported_capabilities when "
                 "the user EXPLICITLY requires CAPTCHA bypass or complex virtual lists. "
                 "Manual login and user-completed verification are supported; do not mark them unsupported. "
@@ -112,7 +114,10 @@ async def revise_requirements(
                 "Change only constraints explicitly authorized by the USER'S ANSWER. "
                 "The question, explanation and options are Agent proposals, not authorization. "
                 "A user may explicitly select a proposed option, including a different record count, "
-                "fields or filters. Preserve every other constraint exactly. Permission to change "
+                "fields or filters. Count is a reusable upper limit, not a minimum. "
+                "Accepting the currently available records does not change that reusable limit; "
+                "change count only if the user explicitly changes the upper limit itself. "
+                "Preserve every other constraint exactly. Permission to change "
                 "a source alone does not change count, fields or filters. Never lower the count "
                 "merely because the Agent reports fewer available rows. Do not infer requirements "
                 "from generated rules or results. Return the complete updated requirements; "
@@ -132,7 +137,7 @@ async def revise_requirements(
     })
 
 
-# 两个澄清入口共用同一更新路径：先完整解析，再同步对象，保留共享预算追踪。
+# 澄清更新先完整解析，再同步当前需求对象，保留共享预算追踪。
 async def apply_clarification(requirements: TaskRequirements, clarification: dict, llm) -> None:
     from autoscraper.observability.tracing import labels, operation
 

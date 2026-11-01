@@ -17,7 +17,6 @@ from autoscraper.agent.errors import (
 from autoscraper.agent.explorer import AgentSettings, generate_spec
 from autoscraper.agent.clarification import (
     ClarificationHandler,
-    ClarificationRequest,
     ClarificationRequired,
     ClarificationSession,
 )
@@ -27,7 +26,7 @@ from autoscraper.scraping.errors import (
 from autoscraper.scraping.executor import ScraperExecutor
 from autoscraper.scraping.spec import ScraperSpec
 from .outcome import TaskOutcome, TaskStage
-from .requirements import apply_clarification, extract_requirements
+from .requirements import extract_requirements
 from .validation import (
     Feedback,
     ValidationSettings,
@@ -35,7 +34,6 @@ from .validation import (
     validate_execution_data,
     validate_preview_data,
     validate_spec,
-    needs_count_clarification,
 )
 from autoscraper.observability.tracing import Trace, emit, labels, operation, traced_task
 
@@ -98,16 +96,6 @@ def run_task(
                 result = await extract_requirements(task, llm, fields, count)
                 details.update(result.model_dump())
                 return result
-
-    # 执行结束后的自由回答复用同一澄清解析与预算，再交给 Agent 处理新的任务意图。
-    async def shortfall_requirements_call():
-        try:
-            async with asyncio.timeout(remaining()):
-                await apply_clarification(outcome.requirements, clarification.history[-1], llm)
-        except (TimeoutError, LLMBudgetExceeded):
-            raise
-        except Exception as exc:
-            raise AgentError("Could not update requirements after user clarification") from exc
 
     # 先建立独立需求基准，后续生成和修复都必须满足它，不能用候选规则反推需求。
     try:
@@ -233,53 +221,6 @@ def run_task(
                             with operation("execution"):
                                 result = executor.run(candidate)
                             issues, complete = validate_execution_data(result, requirements)
-                        if needs_count_clarification(result, issues):
-                            available = len(result.records)
-                            requested = requirements.count
-                            # 挂起时也保留已验证的部分结果，供调用方查看实际数量和诊断。
-                            outcome.spec, outcome.data = candidate, result
-                            acceptance = (
-                                f"接受现有 {available} 条记录" if available
-                                else "接受空结果，不再要求数量"
-                            )
-                            keep_target = f"保留 {requested} 条要求，结束本次任务"
-                            clarification.pending = ClarificationRequest(
-                                question=f"原要求 {requested} 条，当前得到 {available} 条匹配记录，是否接受现有结果？",
-                                explanation="按当前抓取规则，列表已自然结束，没有提取错误。"
-                                    f"已取得 {available} 条去重后的匹配记录，"
-                                    f"另有 {result.filter_unknown} 条因筛选值无法判断而跳过。"
-                                    "可以接受现有结果，或保留原数量要求并结束本次任务。",
-                                options=[acceptance, keep_target],
-                            )
-                            clarification.answer_pending()
-                            answer = clarification.history[-1]["answer"]
-                            if answer == acceptance:
-                                # 明确选择已有结果只改数量，无须模型解释，也不重跑抓取。
-                                with operation("requirements_update") as details:
-                                    details["before"] = requirements.model_dump()
-                                    requirements.count = available or None
-                                    details["after"] = requirements.model_dump()
-                                if available:
-                                    candidate = candidate.model_copy(update={"max_items": available})
-                                emit("spec.clarified", spec=candidate.model_dump(mode="json"))
-                                issues = validate_spec(candidate, requirements)
-                                if not issues:
-                                    issues, complete = validate_execution_data(result, requirements)
-                            elif answer == keep_target:
-                                for issue in issues:
-                                    issue.recoverable = False
-                            else:
-                                # 自由回答可能改变来源或筛选范围，交回 Agent，不能擅自复用旧结果。
-                                asyncio.run(shortfall_requirements_call())
-                                if requirements.unsupported_capabilities:
-                                    raise UnsupportedTaskError(
-                                        "Current ScraperSpec cannot represent: "
-                                        + ", ".join(requirements.unsupported_capabilities), []
-                                    )
-                                issues = [Feedback(code="invalid_spec", message=
-                                    "User supplied new instructions after the listing ended. "
-                                    "Generate a new rule using current requirements and clarification history.")]
-                                complete = False
                         outcome.sample_only = not complete
                     outcome.spec, outcome.data = candidate, result
                 except HandoffRequired as exc:

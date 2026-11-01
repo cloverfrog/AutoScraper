@@ -14,10 +14,10 @@ uv run --extra agent autoscraper-agent "https://books.toscrape.com/" "抓取前2
 
 ## 流程
 
-1. 从原始任务建立 `TaskRequirements`：必需字段、显式请求数量和显式不支持的能力。命令行的 `--fields` / `--count` 优先；明确写出的字段标识符和常见数量表达直接解析，其他自然语言最多调用一次 LLM，且不向该步骤提供候选规则。
+1. 从原始任务建立 `TaskRequirements`：必需字段、每次记录上限、筛选要求和显式不支持的能力。命令行的 `--fields` / `--count` 优先；先保留明确字段与上限，再用共享模型补充需求和筛选条件，不向该步骤提供候选规则。
 2. 将约束交给单 browser-use Agent。成功时仍提交原有 ScraperSpec；登录等人工操作交给 `wait_for_user`，用户继续后在同一浏览器恢复；发现复杂虚拟列表等不支持能力时调用 `report_unsupported`，立即结束。
-3. 独立检查规则：所有必需字段必须存在并标记 required；显式数量必须等于 max_items。沿用 Pydantic 协议校验，不扩展 ScraperSpec，不允许脚本。
-4. 使用现有 Executor 试跑候选规则，默认最多 100 条、5 页；导航超时沿用规则设置。检查提取异常、空结果、逐条缺失/空字段、数量不足和分页循环。
+3. 独立检查规则：所有必需字段必须存在并标记 required；显式上限必须等于 max_items，不能按当前可用数量改小。沿用 Pydantic 协议校验，不扩展 ScraperSpec，不允许脚本。
+4. 使用现有 Executor 试跑候选规则，默认最多 100 条、5 页；导航超时沿用规则设置。检查提取异常、空结果、逐条缺失/空字段、超过上限和分页循环；自然结束时不要求凑足记录。
 5. 可恢复的问题把错误码、字段、原因和上一份规则反馈给同一个 Agent 工作流，再生成并重新验证。默认最多修复两次，即总共最多三份候选规则；不会根据失败候选自行放宽需求；用户明确澄清后会更新当前需求，原始需求另存快照。不支持的能力、预算不足、需求解析失败、验证页数预算不足直接停止。
 6. 如要求数据输出且试跑未覆盖完整任务，执行原规则并校验全量结果。试跑已覆盖时直接复用数据。所有检查通过后才保存正式规则和数据文件；运行时导航/内容错误会单独保存一份明确标记为未验证的候选规则。
 
@@ -47,7 +47,7 @@ uv run --extra agent autoscraper-agent "https://books.toscrape.com/" "抓取前2
 
 ## 反馈和边界
 
-可恢复反馈包括 `missing_required_field`、`count_mismatch`、`invalid_spec`、`selector_failure`、`empty_extraction`、`missing_data`、`insufficient_items`。不可恢复反馈包括 `content_timeout`、`navigation_timeout`、`navigation_failure`、`unsupported_capability`、`validation_limit`、`invalid_requirements`、`agent_failure`、`budget_exhausted`。
+可恢复反馈包括 `missing_required_field`、`count_mismatch`、`invalid_spec`、`selector_failure`、`empty_extraction`、`missing_data`。不可恢复反馈包括 `content_timeout`、`navigation_timeout`、`navigation_failure`、`unsupported_capability`、`validation_limit`、`invalid_requirements`、`agent_failure`、`budget_exhausted`。
 
 列表、分页和详情页导航超时报告 `navigation_timeout`；代理/DNS/连接故障及 HTTP
 错误状态（>=400）报告 `navigation_failure`。等待列表或详情必填元素出现超时报告
@@ -84,9 +84,10 @@ DOM 摘要不变时跳过模型调用；LLM 失败报告 `llm_error`，不冒充
 Agent 澄清有有效回答时，先用共享模型独立修订当前需求，再恢复 Agent；提交门槛和执行验证使用同一份当前需求。
 只有用户明确授权才改字段、数量或筛选，Agent 的问题和可选方案本身不授权变更。解析失败或预算不足时停止。
 `original_requirements` 保存原始快照，`requirements` 报告当前需求；修订调用与耗时计入原有预算。
-列表自然结束且仅有数量不足时，工作流也会直接询问用户，无需先进入选择器修复。
-明确选择接受现有记录会同步数量并复用已验证结果，不增加模型调用；保留原要求则结束为未完成。
-未回答返回 `needs_clarification`，自由回答走修订及重新生成流程；预算截断和提取错误不触发此数量询问。
+`count` / `max_items` 始终表示可复用的每次抓取上限，而非最少数量。
+列表自然结束且无错误时直接成功，即使当次记录少于上限；不会降低上限或触发数量不足询问。
+明确接受当次结果不改变后续运行上限，只有用户主动修改上限本身时才同步需求。
+预算截断和提取错误仍按原策略报告，不能将它们当成自然结束。
 没有回答时工作流返回 `needs_clarification`，不会试抓取、修复或发布文件，CLI 退出码 4。
 显式要求不支持的能力仍可直接返回 `unsupported`，不必为了澄清而重新询问明确要求。
 
