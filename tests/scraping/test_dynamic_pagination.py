@@ -548,3 +548,32 @@ def test_replace_multi_element_snapshot(page, extract):
     assert result.errors == [] and result.pages_visited == 2
     assert [row["value"] for row in result.records] == (
         [["A", "B"], ["A", "C"]] if extract == "texts" else [2, 0])
+
+
+# 筛选后的数量不能作为分页推进基线；追加前缀含被筛掉的记录时也只处理一次。
+@pytest.mark.parametrize("mode", ["append", "replace"])
+def test_filtering_does_not_stop_dynamic_pagination(page, mode):
+    body = """<main><article><span>drop</span></article></main>
+    <button onclick="document.querySelector('main').MODE = '<article><span>keep</span></article>';
+    this.disabled=true">Next</button>"""
+    body = body.replace("MODE", "innerHTML" if mode == "replace" else "innerHTML +")
+    body = body.replace("innerHTML + =", "innerHTML +=")
+    result = run(page, body, dict(type="click", next_selector="button", mode=mode),
+        filters=[{"field": "title", "operator": "eq", "value": "keep"}], max_items=1)
+    assert result.records == [{"title": "keep"}]
+    assert result.pages_visited == 2 and result.stop_reason == "max_items"
+    assert result.filtered_out == 1 and result.items_extracted == 2
+
+
+# 滚动仍依据原始节点增长推进，即使初始记录全部被筛除。
+def test_filtering_keeps_scroll_progress(page):
+    body = '''<style>article {height:900px}</style><main><article><span>drop</span></article></main>
+    <i id="end" hidden>End</i><script>let loaded=false;
+    window.addEventListener('scroll', () => {if(loaded) return; loaded=true;
+    setTimeout(() => {document.querySelector('main').insertAdjacentHTML('beforeend',
+    '<article><span>keep</span></article>');document.querySelector('#end').hidden=false},30)});
+    </script>'''
+    result = run(page, body, dict(type="scroll", end_selector="#end"),
+        filters=[{"field": "title", "operator": "eq", "value": "keep"}], content_timeout_ms=500)
+    assert result.records == [{"title": "keep"}] and result.filtered_out == 1
+    assert result.items_extracted == 2 and result.stop_reason == "end_marker"

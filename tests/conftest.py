@@ -27,3 +27,21 @@ def isolated_run_logs(tmp_path_factory, monkeypatch):
 
     monkeypatch.setattr(FileSink, "__init__", isolated_init)
     return temporary_root
+
+
+# 非需求解析测试显式固定无筛选条件，避免其模型替身被用来解析自然语言。
+# 字段/数量不完整时仍走真实解析；实际解析、筛选保留和调用预算另有专用覆盖。
+@pytest.fixture
+def explicit_unfiltered_requirements(monkeypatch):
+    from autoscraper.workflow import runner
+    from autoscraper.workflow.requirements import TaskRequirements, explicit_requirements
+
+    original = runner.extract_requirements
+
+    async def extract(task, llm, fields=None, count=None):
+        fields, count = explicit_requirements(task, fields, count)
+        if fields is not None and count is not None:
+            return TaskRequirements(fields=fields, count=count)
+        return await original(task, llm, fields, count)
+
+    monkeypatch.setattr(runner, "extract_requirements", extract)

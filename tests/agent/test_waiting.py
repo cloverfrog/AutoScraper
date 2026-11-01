@@ -172,7 +172,7 @@ def test_navigation_error_types(error, expected):
         navigate(page, "https://fixture.test", 50)
 
 
-# 等待和导航失败不应引导无效规则修复或重复报数量不足。
+# 等待和导航失败不应引导无效的选择器修复。
 @pytest.mark.parametrize("code", ["content_timeout", "navigation_timeout"])
 def test_timeout_feedback_does_not_suggest_repair_or_missing_rows(code):
     feedback = validate_data(

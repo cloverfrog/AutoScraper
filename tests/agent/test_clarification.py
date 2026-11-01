@@ -173,13 +173,17 @@ def test_generation_resumes_same_agent_or_returns_pending(monkeypatch, answer):
     settings = AgentSettings(api_key="fake", model="test", base_url="https://llm.test", max_steps=4)
     from autoscraper.agent.explorer import UnsupportedTaskError
 
+    # 澄清后的独立解析仍使用同一个模型；本用例的回答只涉及入口，不修改数量。
+    model = SimpleNamespace(ainvoke=AsyncMock(return_value=SimpleNamespace(
+        completion=TaskRequirements(fields=["quote"], count=1))))
+
     async def run():
         return await generate_spec(
             URL,
             "前1条语录，字段名为quote",
             settings,
             requirements=TaskRequirements(fields=["quote"], count=1),
-            llm=object(),
+            llm=model,
             wait_llm=SimpleNamespace(max_calls=0, calls=0),
             clarification=session,
         )
@@ -195,6 +199,7 @@ def test_generation_resumes_same_agent_or_returns_pending(monkeypatch, answer):
     else:
         assert str(asyncio.run(run()).start_url) == RULE["start_url"]
         assert captured["runs"] == 2
+    assert model.ainvoke.await_count == (0 if answer is None else 1)
     assert captured["instances"] == 1
     assert captured["killed"]
 
@@ -263,7 +268,7 @@ def test_human_wait_excluded_from_timeout(monkeypatch):
 
 # 多轮修复应共享问答、调用预算和人工等待累计值。
 @pytest.mark.parametrize("mode", ["answer", "pending", "budget"])
-def test_workflow_shares_answers_budget_and_waiting_time(monkeypatch, mode):
+def test_workflow_shares_answers_budget_and_waiting_time(monkeypatch, mode, explicit_unfiltered_requirements):
     pytest.importorskip("browser_use")
     import autoscraper.agent.llm as helpers
     import autoscraper.workflow.runner as workflow
@@ -385,7 +390,7 @@ def test_cli_pending_preserves_existing_outputs(monkeypatch, capsys, tmp_path, n
 
 # 用真实本地 Chromium 与脚本模型验证框架的暂停/继续和不支持终态。
 @pytest.mark.parametrize("mode", ["clarification", "unsupported"])
-def test_real_agent_continues_with_browser_and_history(monkeypatch, tmp_path, mode):
+def test_real_agent_continues_with_browser_and_history(monkeypatch, tmp_path, mode, explicit_unfiltered_requirements):
     """Exercise pinned browser-use run/add_new_task with real local Chromium, no paid LLM."""
     pytest.importorskip("browser_use")
     import threading

@@ -52,6 +52,8 @@ class TaskOutcome:
     clarifications: list[dict] = field(default_factory=list)
     pending_clarification: dict | None = None
     pending_handoff: dict | None = None  # 只报告待操作原因，不附带认证快照。
+    # 原始需求独立保存；requirements 是澄清后供提交及执行验证共同使用的当前需求。
+    original_requirements: TaskRequirements | None = None
 
     # 生成 CLI/追踪共用的 JSON 摘要；区分 Agent 返回、实际执行和任务是否完成。
     # spec_valid 目前仅表示已得到协议模型，不能单凭它判断需求和数据验证是否通过。
@@ -70,6 +72,9 @@ class TaskOutcome:
             "fulfillment_basis": "clarified_task" if self.clarifications else "original_task",
             "sample_only": self.sample_only,
             "requirements": self.requirements.model_dump() if self.requirements else None,
+            "original_requirements": (
+                self.original_requirements.model_dump() if self.original_requirements else None
+            ),
             "attempts": self.attempts,
             "agent_step_limit": self.agent_step_limit,
             "max_llm_calls": self.max_llm_calls,
@@ -81,6 +86,10 @@ class TaskOutcome:
             "pages": self.data.pages_visited if self.data else 0,
             "detail_pages": self.data.detail_pages_visited if self.data else 0,
             "stop_reason": self.data.stop_reason if self.data else None,
+            "items_extracted": self.data.items_extracted if self.data else 0,
+            "filtered_out": self.data.filtered_out if self.data else 0,
+            "filter_unknown": self.data.filter_unknown if self.data else 0,
+            "filter_unknown_reasons": self.data.filter_unknown_reasons if self.data else {},
             "feedback": [item.model_dump() for item in self.feedback],
             "validation_history": self.history,
             "original_url": self.original_url,

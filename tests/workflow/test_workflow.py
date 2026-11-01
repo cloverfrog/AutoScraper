@@ -59,7 +59,7 @@ def settings():
 
 # 替换主模型工厂，记录整次工作流共享的模型调用数。
 @pytest.fixture
-def workflow(monkeypatch):
+def workflow(monkeypatch, explicit_unfiltered_requirements):
     pytest.importorskip("browser_use")
     import autoscraper.workflow.runner as module
     import autoscraper.agent.llm as models
@@ -188,14 +188,14 @@ def test_spec_validation_is_independent(candidate):
     assert "price" in validate_spec(candidate, requirements)[0].fields
 
 
-# 检查空结果、必需字段值和数量不足等确定性数据反馈。
+# 检查空结果、必需字段值和超过数量上限等确定性数据反馈。
 @pytest.mark.parametrize(
     "rows,code",
     [
         ([], "empty_extraction"),
         ([{"title": "A"}], "missing_data"),
         ([{"title": "A", "price": " "}], "missing_data"),
-        ([{"title": "A", "price": "£1"}], "insufficient_items"),
+        ([{"title": "A", "price": "£1"}] * 3, "count_mismatch"),
     ],
 )
 def test_data_checks(rows, code):
@@ -477,7 +477,7 @@ def test_preview_page_limit_preserves_execution_decisions(
     assert outcome.summary()["task_fulfilled"] is (status == "success")
 
 
-# 验证预算截断只能豁免数量不足，不能掩盖真实字段缺失。
+# 验证预算截断不能掩盖真实字段缺失。
 def test_preview_page_limit_does_not_hide_missing_data(
     candidate, settings, workflow, monkeypatch
 ):

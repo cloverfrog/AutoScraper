@@ -58,7 +58,7 @@ def test_app_start_defaults_and_zero_wait_budget(tmp_path, monkeypatch, optional
     values = [component.value for component in start_fn.inputs]
     index = next(i for i, c in enumerate(start_fn.inputs) if c.label == "内容等待模型调用预算")
     values[index] = 0
-    optional_labels = ("请求条数", "验证超时", "内容等待超时", "规则导航超时")
+    optional_labels = ("每次抓取上限", "验证超时", "内容等待超时", "规则导航超时")
     for i, component in enumerate(start_fn.inputs):
         if component.label.startswith(optional_labels):
             values[i] = optional_value
@@ -269,7 +269,7 @@ def test_browser_optional_numbers_use_defaults(tmp_path, monkeypatch):
             page = browser.new_page()
             page.goto(f"http://127.0.0.1:{port}")
             page.get_by_role("button", name=re.compile("高级设置")).click()
-            labels = ("请求条数", "验证超时", "内容等待超时", "规则导航超时")
+            labels = ("每次抓取上限", "验证超时", "内容等待超时", "规则导航超时")
             for value in (None, 0, 1234):
                 if value is not None:
                     for label in labels:

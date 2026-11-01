@@ -30,7 +30,6 @@ class Feedback(ProtocolModel):
         "pagination_action_failure",
         "empty_extraction",
         "missing_data",
-        "insufficient_items",
         "unsupported_capability",
         "validation_limit",
         "agent_failure",
@@ -86,7 +85,7 @@ def build_preview_spec(spec: ScraperSpec, policy: ValidationSettings) -> Scraper
     return preview
 
 
-# 执行前比较候选规则与独立需求：必需字段、目标数量和 Agent 允许的执行上限。
+# 执行前比较候选规则与独立需求：必需字段、可复用数量上限和 Agent 允许的执行预算。
 def validate_spec(spec: ScraperSpec, requirements: TaskRequirements) -> list[Feedback]:
     issues = []
     missing = [
@@ -108,9 +107,12 @@ def validate_spec(spec: ScraperSpec, requirements: TaskRequirements) -> list[Fee
         issues.append(
             Feedback(
                 code="count_mismatch",
-                message=f"max_items must equal requested count {requirements.count}",
+                message=f"Preserve requested upper limit {requirements.count} in max_items; "
+                        "fewer records on this run must not lower the reusable limit",
             )
         )
+    # 筛选要求保留在 Agent 上下文；这里不以声明逐项匹配推断 URL 的实际筛选语义。
+    # 本地 filters 的字段引用、操作符和转换参数由协议模型校验，实际判断由执行器完成。
     if spec.max_pages > 100 or spec.timeout_ms > 30000:
         issues.append(
             Feedback(code="invalid_spec", message="Use max_pages <= 100 and timeout_ms <= 30000")
@@ -129,13 +131,11 @@ def validate_preview_data(
     execute: bool,
 ) -> tuple[list[Feedback], bool]:
     """返回试抓取反馈及是否已抓完；无反馈仍可能只代表样本验证通过。"""
-    target = min(requirements.count, preview.max_items) if requirements.count else None
-    issues = validate_data(result, requirements, expected_count=target)
+    issues = validate_data(result, requirements)
     if result.stop_reason == "max_pages" and preview.max_pages < spec.max_pages:
         # 验证预算截断不说明规则有误；需要导出时允许继续完整执行。
-        # 只移除数量不足反馈，提取错误和详情预算耗尽仍按原规则处理。
-        issues = [item for item in issues if item.code != "insufficient_items"]
-        if not execute and (target is None or len(result.records) < target):
+        # 部分样本不能说明已抓完；提取错误和详情预算耗尽仍按原规则处理。
+        if not execute and len(result.records) < spec.max_items:
             issues.append(
                 Feedback(
                     code="validation_limit",
@@ -167,11 +167,9 @@ def validate_execution_data(
     return issues, complete
 
 
-# 统一检查运行错误、空结果、必需值、分页循环及数量不足。
-# expected_count 可为试抓取设置较小目标；返回空列表只表示这些确定性检查通过。
-def validate_data(
-    result: ScrapeResult, requirements: TaskRequirements, *, expected_count: int | None = None
-) -> list[Feedback]:
+# 统一检查运行错误、空结果、必需值、分页循环和数量上限；不要求凑足记录。
+# 返回空列表只表示这些确定性检查通过，是否自然结束由调用方结合停止原因判断。
+def validate_data(result: ScrapeResult, requirements: TaskRequirements) -> list[Feedback]:
     issues = []
     if result.stop_reason == "scroll_limit":
         issues.append(Feedback(code="validation_limit", recoverable=False,
@@ -201,9 +199,11 @@ def validate_data(
     if any(not item.recoverable for item in issues):
         # 超时、导航失败或预算截断后的记录不足，不足以说明规则需要修复。
         return issues
-    if not result.records:
+    filtered = result.filtered_out + result.filter_unknown
+    if not result.records and not (filtered and filtered == result.items_extracted):
         issues.append(Feedback(code="empty_extraction", message="No records were extracted"))
         return issues
+    # 已提取的记录全部被筛选跳过不说明选择器有误，继续检查其他执行反馈。
     missing = [
         name
         for name in requirements.fields
@@ -223,13 +223,9 @@ def validate_data(
         issues.append(
             Feedback(code="selector_failure", message="Next link caused a pagination cycle")
         )
-    target = expected_count if expected_count is not None else requirements.count
-    if target is not None and len(result.records) < target:
-        issues.append(
-            Feedback(
-                code="insufficient_items",
-                message=f"Expected {target} unique records; got {len(result.records)} "
-                f"(stop_reason={result.stop_reason})",
-            )
-        )
+    if requirements.count is not None and len(result.records) > requirements.count:
+        issues.append(Feedback(
+            code="count_mismatch", recoverable=False,
+            message=f"Result exceeds requested upper limit {requirements.count}",
+        ))
     return issues

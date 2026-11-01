@@ -241,7 +241,7 @@ def protected_site(unauthenticated_status=200):
 
 
 def test_authenticated_workflow_transfers_and_refreshes_cookie_and_local_storage(
-    monkeypatch, tmp_path
+    monkeypatch, tmp_path, explicit_unfiltered_requirements
 ):
     bu = pytest.importorskip("browser_use")
     import autoscraper.agent.llm as models

@@ -18,7 +18,7 @@ from .clarification import ClarificationSession
 from autoscraper.browser.access import BrowserAccess
 from autoscraper.scraping.spec import ScraperSpec
 from autoscraper.workflow.validation import Feedback, UnsupportedResult
-from autoscraper.workflow.requirements import TaskRequirements
+from autoscraper.workflow.requirements import TaskRequirements, apply_clarification
 
 
 # Agent 运行配置：模型连接、探索上限、内容等待和浏览器选项。
@@ -146,6 +146,11 @@ Protocol semantics:
   use transform=absolute_url for URL attributes. texts/count do not support transforms.
   Use test_fields for texts/count evidence.
   Preserve required fields; never omit or substitute.
+- Preserve filtering requirements. First consider the site's existing search/query URL; prefer
+  native URL filtering when it meets the task, and use listing filters when no suitable URL filter
+  is available. filters use AND; optional transforms
+  (regex_extract, regex_replace, map, to_number) affect comparisons only, never saved field values.
+  contains means substring for text or exact membership for texts; ordering comparisons use numbers.
 - Detail extraction requires version="2": detail.url_selector uniquely matches a listing href;
   detail.fields are relative to the detail document. Preserve user-requested names there:
   if the user asks for description from details, use detail.fields.description, not
@@ -159,9 +164,10 @@ Protocol semantics:
   click/scroll may declare observed loading_selector/end_selector; never invent these markers.
   Missing/disabled click controls or visible end markers end naturally. Available buttons without
   record changes time out. Scroll at bottom with repeated no-growth infers no_more_content.
-  Virtual lists, nested details, custom scripts, regex or numeric transforms are unsupported.
-- max_items counts merged unique records: use the requested count, otherwise 100. max_pages counts
-  processed list batches: keep <=100; timeout_ms <=30000; on_item_error=fail. Budget enough detail attempts.
+  Virtual lists, nested details and custom scripts are unsupported.
+- max_items caps merged unique records at the requested limit (default 100); natural exhaustion may return fewer.
+  max_pages counts processed list batches: keep <=100; timeout_ms <=30000; on_item_error=fail.
+  Budget enough detail attempts.
   dedupe_by uses required stable identifier fields, otherwise [].
 
 Completion:
@@ -182,6 +188,7 @@ failure; never submit a partial rule as success."""
 # 运行一轮探索/修复，返回尚待独立验证的候选规则。
 # llm、wait_llm 和 clarification 可由工作流复用，以共享预算及澄清历史。
 # 待澄清时暂停 Agent 动作，回答后在同一浏览器和历史上继续；退出时始终回收浏览器。
+# 传入的 requirements 在用户明确澄清后原地同步，让提交门槛与工作流共享当前基准。
 async def generate_spec(
     url: str,
     task: str,
@@ -316,13 +323,16 @@ async def generate_spec(
         started = time.monotonic()
         initial_waiting = clarification.waiting_seconds
         initial_handoff_waiting = access.waiting_seconds
-        while True:
-            # 会话可能继承上轮等待记录；只扣除本轮新增的人工等待时间。
+        # 人工等待不占任务时间；澄清后的模型解析仍计入同一剩余时限。
+        def remaining_seconds():
             active_seconds = (
                 time.monotonic() - started - clarification.waiting_seconds + initial_waiting
                 - access.waiting_seconds + initial_handoff_waiting
             )
-            async with asyncio.timeout(max(0, settings.timeout_seconds - active_seconds)):
+            return max(0, settings.timeout_seconds - active_seconds)
+
+        while True:
+            async with asyncio.timeout(remaining_seconds()):
                 try:
                     history = await agent.run(
                         max_steps=settings.max_steps,
@@ -351,9 +361,31 @@ async def generate_spec(
             if clarification.pending is not None:
                 # ask_user 已终止动作批次；先在超时块外获取回答，再继续原 Agent。
                 clarification.answer_pending()
+                requirements_prompt = ""
+                if requirements is not None:
+                    try:
+                        async with asyncio.timeout(remaining_seconds()):
+                            await apply_clarification(
+                                requirements, clarification.history[-1], agent_llm,
+                            )
+                    except (LLMBudgetExceeded, TimeoutError):
+                        raise
+                    except Exception as exc:
+                        raise AgentError("Could not update requirements after user clarification") from exc
+                    if requirements.unsupported_capabilities:
+                        raise UnsupportedTaskError(
+                            "Current ScraperSpec cannot represent: "
+                            + ", ".join(requirements.unsupported_capabilities), []
+                        )
+                    requirements_prompt = (
+                        "\nCurrent authoritative requirements after the user's answer "
+                        "(supersede earlier constraints and re-evaluate prior feedback):\n"
+                        + requirements.model_dump_json()
+                    )
                 agent.add_new_task(
-                    "Continue the original scraping task with this clarification."
+                    "Continue the scraping task with this clarification."
                     + clarification.prompt()
+                    + requirements_prompt
                 )
                 continue
             final = history.final_result()

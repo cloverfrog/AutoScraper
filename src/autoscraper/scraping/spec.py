@@ -3,9 +3,13 @@
 # 本模块只依赖 Pydantic；跨字段约束也在模型校验器中统一检查。
 """Versioned, JSON-serializable protocol. No browser or agent dependencies."""
 
+import re
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator, model_validator
+from pydantic import (
+    BaseModel, ConfigDict, Field, HttpUrl, StrictFloat, StrictInt, StrictStr,
+    field_validator, model_validator,
+)
 
 NonEmpty = Annotated[str, Field(min_length=1)]
 
@@ -32,6 +36,85 @@ class FieldSpec(ProtocolModel):
         if self.extract in {"texts", "count"} and self.transform != "none":
             raise ValueError("absolute_url requires text or attribute extraction")
         return self
+
+
+# 比较值只接受文本和有限数值，不隐式把布尔值或字符串转换成数字。
+FilterValue = StrictStr | StrictInt | Annotated[StrictFloat, Field(allow_inf_nan=False)]
+
+
+# 与页面表示无关的用户条件，供需求上下文与本地筛选协议共用。
+class FilterCondition(ProtocolModel):
+    field: NonEmpty
+    operator: Literal["eq", "ne", "contains", "lt", "lte", "gt", "gte"]
+    value: FilterValue
+
+    # 大小比较只接受数值目标；contains 只接受文本目标。
+    @model_validator(mode="after")
+    def check_comparison(self):
+        if not self.field.strip():
+            raise ValueError("filter field must not be whitespace")
+        if self.operator in {"lt", "lte", "gt", "gte"} and isinstance(self.value, str):
+            raise ValueError("ordering comparisons require a numeric value")
+        if self.operator == "contains" and not isinstance(self.value, str):
+            raise ValueError("contains requires a string value")
+        return self
+
+
+# 正则提取取第一次匹配，默认整体匹配，也可显式选择编号或命名捕获组。
+class RegexExtract(ProtocolModel):
+    op: Literal["regex_extract"]
+    pattern: NonEmpty
+    group: int | NonEmpty = 0
+
+    @model_validator(mode="after")
+    def check_regex(self):
+        try:
+            compiled = re.compile(self.pattern)
+        except re.error as exc:
+            raise ValueError(f"Invalid regex: {exc}") from exc
+        if isinstance(self.group, int):
+            valid = 0 <= self.group <= compiled.groups
+        else:
+            valid = self.group in compiled.groupindex
+        if not valid:
+            raise ValueError("regex_extract group does not exist")
+        return self
+
+
+# 正则替换使用 Python 替换语法，默认替换全部匹配；无匹配保留原文。
+class RegexReplace(ProtocolModel):
+    op: Literal["regex_replace"]
+    pattern: NonEmpty
+    replacement: str = ""
+
+    @model_validator(mode="after")
+    def check_regex(self):
+        try:
+            re.sub(self.pattern, self.replacement, "")
+        except (re.error, IndexError) as exc:
+            raise ValueError(f"Invalid regex replacement: {exc}") from exc
+        return self
+
+
+# 固定枚举仅接受显式映射，未列出的输入在运行时记为无法判断。
+class MapValue(ProtocolModel):
+    op: Literal["map"]
+    values: dict[str, FilterValue] = Field(min_length=1)
+
+
+# 严格数值解析不提供额外选项，符号清理应由前置操作显式声明。
+class ToNumber(ProtocolModel):
+    op: Literal["to_number"]
+
+
+FilterTransform = Annotated[
+    RegexExtract | RegexReplace | MapValue | ToNumber, Field(discriminator="op")
+]
+
+
+# 仅为本地比较声明临时转换，不修改 FieldSpec 或原始记录。
+class FilterSpec(FilterCondition):
+    transforms: list[FilterTransform] = Field(default_factory=list, max_length=10)
 
 
 # 链接分页：唯一 Next 元素提供 href，执行器继续使用 URL 导航和循环检测。
@@ -91,9 +174,11 @@ class ScraperSpec(ProtocolModel):
     item_selector: NonEmpty
     fields: dict[NonEmpty, FieldSpec] = Field(min_length=1)
     detail: DetailSpec | None = None
+    filters: list[FilterSpec] = Field(default_factory=list)
     pagination: PaginationSpec | None = None
     # max_pages 统计已处理列表批次；滚动重试另受 max_scrolls 约束。
-    max_items: int = Field(default=100, ge=1, le=1_000_000)
+    max_items: int = Field(default=100, ge=1, le=1_000_000,
+        description="Reusable upper limit per run; natural exhaustion may return fewer records")
     max_pages: int = Field(default=100, ge=1, le=100_000)
     timeout_ms: int = Field(default=15_000, ge=1, le=120_000)
     # 未指定独立内容等待上限时，执行器回退到 timeout_ms。
@@ -124,6 +209,8 @@ class ScraperSpec(ProtocolModel):
                 raise ValueError("detail requires protocol version '2'")
             if self.fields.keys() & self.detail.fields.keys():
                 raise ValueError("Listing and detail field names must not overlap")
+        if any(condition.field not in self.fields for condition in self.filters):
+            raise ValueError("filters must reference listing fields")
         if set(self.dedupe_by) - self.all_fields.keys():
             raise ValueError("dedupe_by must reference declared fields")
         if any(not self.all_fields[name].required for name in self.dedupe_by):
