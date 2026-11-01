@@ -185,11 +185,11 @@ def test_scroll_without_reaching_bottom_does_not_infer_end(page):
 
 # 替换期间短暂清空字段不代表新批次就绪，必须等待必填值恢复。
 def test_replace_waits_through_empty_field_placeholder(page):
-    body = """<article><span>A</span></article>
-    <button onclick="document.querySelector('span').textContent='';
-    setTimeout(() => {document.querySelector('span').textContent='B';this.remove()}, 80)">
+    body = """<article><span>A</span></article><i id="loading" hidden>Loading</i>
+    <button onclick="document.querySelector('#loading').hidden=false;document.querySelector('span').textContent='';
+    setTimeout(() => {document.querySelector('span').textContent='B';document.querySelector('#loading').hidden=true;this.remove()}, 80)">
     Next</button>"""
-    result = run(page, body, dict(type="click", mode="replace", next_selector="button"))
+    result = run(page, body, dict(type="click", mode="replace", next_selector="button", loading_selector="#loading"))
     assert [r["title"] for r in result.records] == ["A", "B"]
     assert not result.errors
 
@@ -298,7 +298,7 @@ def pending_batch_during_detail(
     scheduled = False
 
     # 第一次详情提取期间新增 B；结束状态与 B 同时出现，不能先结束后漏提取。
-    def extract_detail(detail_page, url, candidate):
+    def extract_detail(detail_page, url, candidate, **kwargs):
         nonlocal scheduled
         if not scheduled:
             scheduled = True
@@ -314,7 +314,7 @@ def pending_batch_during_detail(
             }, 20)""",
                 {"terminal": terminal, "replace": replace, "duplicate": duplicate},
             )
-        return original(detail_page, url, candidate)
+        return original(detail_page, url, candidate, **kwargs)
 
     monkeypatch.setattr(executor, "extract_detail", extract_detail)
     return ScraperExecutor().run_page(spec, page)
@@ -531,8 +531,9 @@ def test_skipped_append_prefix_is_not_retried(listing_page):
         ),
         listing_page,
     )
-    assert [record["title"] for record in result.records] == ["B"]
-    assert result.detail_pages_visited == 2 and len(result.errors) == 1
+    assert [record["title"] for record in result.records] == ["A", "B"]
+    assert result.records[0]["description"] == ""
+    assert result.detail_pages_visited == 2 and not result.errors
     assert result.stop_reason == "no_next"
 
 

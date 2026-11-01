@@ -171,7 +171,17 @@ def test_detail_item_errors(site, mode, failure):
     elif failure == "timeout":
         routes[BASE + "book-1/index.html"] = '<script src="/never.js"></script>' + description(1)
         page.context.route("**/never.js", lambda route: None)
-    if mode == "fail":
+    if failure == "empty":
+        result = ScraperExecutor().run_page(spec, page)
+        assert result.records[0]["description"] == "" and not result.errors
+    elif failure == "field":
+        if mode == "fail":
+            with pytest.raises(ScrapeError, match="Required field 'description'"):
+                ScraperExecutor().run_page(spec, page)
+        else:
+            result = ScraperExecutor().run_page(spec, page)
+            assert result.records[0]["description"] is None and len(result.errors) == 1
+    elif mode == "fail":
         with pytest.raises(ScrapeError, match="item 1 detail="):
             ScraperExecutor().run_page(spec, page)
     else:
@@ -287,10 +297,6 @@ def test_dedupe_before_or_after_detail(site, keys, expected_visits):
         {"detail": {"url_selector": "a", "fields": {" ": {"selector": "p"}}}},
         {"detail": {"url_selector": "a", "fields": {"d": {"selector": "p"}}, "max_pages": 0}},
         {"detail": {"url_selector": "a", "fields": {"d": {"selector": "p"}}, "script": "x"}},
-        {
-            "detail": {"url_selector": "a", "fields": {"d": {"selector": "p", "required": False}}},
-            "dedupe_by": ["d"],
-        },
     ],
 )
 def test_protocol_constraints(change):

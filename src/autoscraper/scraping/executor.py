@@ -19,7 +19,7 @@ from .errors import (
 )
 from .spec import FieldSpec, ScraperSpec
 from autoscraper.browser.access import BrowserAccess, HandoffRequest
-from .values import FieldValue, has_field_value, record_identity
+from .values import FieldValue, record_identity
 from .filtering import evaluate_filters
 from .progress import STATE_SCRIPT, state_options, progressed
 from .scrolling import scroll_step
@@ -78,6 +78,8 @@ class ScrapeResult:
     # pagination_cycle 表示重复分页链接，工作流将其视为规则错误。
     stop_reason: ScrapeStopReason = ""
     error_details: list[ScrapeFailure] = field(default_factory=list)
+    # 记录路径/选择器实际定位次数，区分显式空值与整列规则失效。
+    fields_found: dict[str, int] | None = None
 
 
 # 按主文档请求跟踪导航，排除 iframe/资源响应；SPA 恢复原 URL 时也能识别新文档。
@@ -179,24 +181,31 @@ def css(root: Page | Locator, selector: str) -> Locator:
 
 
 # 在给定记录或详情页面内提取字段：单值规则至多匹配一个元素，texts/count 允许多匹配。
-# 必填值缺失/为空或单值匹配歧义会报错；可选单值缺失记为 None，文本统一压缩空白。
+# 空文本/列表保留，单条缺失记为 None；选择器语法和单值匹配歧义仍报错。
 def extract_fields(
-    item: Page | Locator, fields: dict[str, FieldSpec], base_url: str, *, wait: bool = False
+    item: Page | Locator, fields: dict[str, FieldSpec], base_url: str, *, wait: bool = False,
+    fields_found: dict[str, int] | None = None
 ) -> dict[str, FieldValue]:
     record = {}
+    found = []
+    if fields_found is not None:
+        for name in fields:
+            fields_found.setdefault(name, 0)
     for name, rule in fields.items():
         matches = css(item, rule.selector)
         count = matches.count()  # 即使字段可选，CSS 语法非法也属于致命规则错误。
         if wait and rule.required and rule.extract != "count" and count == 0:
-            wait_for_content(matches, base_url, None)
+            try:
+                wait_for_content(matches, base_url, None)
+            except ContentTimeout:
+                pass  # 单条缺失保留 null；整列是否失效在运行结束后统一检查。
         # count 的空集合是有效的零值；texts 保留 DOM 顺序及重复文本。
         if rule.extract in {"texts", "count"}:
             value = (
                 matches.count() if rule.extract == "count"
                 else [" ".join(text.split()) for text in matches.all_inner_texts()]
             )
-            if rule.required and not has_field_value(value):
-                raise ItemError(f"Required field {name!r} is missing or empty")
+            found.append(name)
             record[name] = value
             continue
         if matches.count() > 1:
@@ -210,27 +219,32 @@ def extract_fields(
             )
             if value is not None:
                 value = " ".join(value.split())
-        if not value:
-            if rule.required:
-                raise ItemError(f"Required field {name!r} is missing or empty")
-            value = None
-        if value is not None and rule.transform == "absolute_url":
+        if value is not None:
+            found.append(name)
+        if value and rule.transform == "absolute_url":
             value = http_url(base_url, value)
         record[name] = value
+    if fields_found is not None:
+        for name in found:
+            fields_found[name] = fields_found.get(name, 0) + 1
     return record
 
 
 # 提取列表记录的字段；详情字段由后续独立页面补充。
-def extract_item(item: Locator, spec: ScraperSpec, base_url: str) -> dict[str, FieldValue]:
-    return extract_fields(item, spec.fields, base_url)
+def extract_item(
+    item: Locator, spec: ScraperSpec, base_url: str, *, fields_found=None
+) -> dict[str, FieldValue]:
+    return extract_fields(item, spec.fields, base_url, fields_found=fields_found)
 
 
-# 打开一条详情链接，按重定向后的 URL 处理相对链接，并等待必填字段。
-def extract_detail(page: Page, url: str, spec: ScraperSpec) -> dict[str, FieldValue]:
+# 打开详情链接，按重定向后的 URL 处理相对链接，并对已声明字段有界等待。
+def extract_detail(
+    page: Page, url: str, spec: ScraperSpec, *, fields_found=None
+) -> dict[str, FieldValue]:
     navigate(page, url, spec.timeout_ms)
     http_url(page.url, page.url)
     try:
-        return extract_fields(page, spec.detail.fields, page.url, wait=True)
+        return extract_fields(page, spec.detail.fields, page.url, wait=True, fields_found=fields_found)
     except PlaywrightTimeout as exc:
         raise ContentTimeout(url, f"Detail field extraction timed out: {exc}") from exc
 
@@ -374,11 +388,34 @@ class ScraperExecutor:
     # 串行处理列表、详情和分页，维护链接循环检测、记录去重及列表/详情/滚动预算。
     # 调用方拥有列表 Page，本函数只负责关闭自己创建的详情 Page。
     def run_page(self, spec: ScraperSpec, page: Page) -> ScrapeResult:
-        """Accept a caller-owned page; detail rules need an explicit BrowserContext."""
         if spec.network is not None:
             from .network_executor import run_network
-            return run_network(spec, page)
-        result = ScrapeResult()
+            result = run_network(spec, page)
+        else:
+            result = self._run_dom_page(spec, page)
+        # required 保留为整列定位证据要求，不再禁止真实空值或个别记录缺失。
+        usable_records = bool(result.records or result.filtered_out or result.filter_unknown)
+        for name, rule in spec.all_fields.items():
+            if (
+                usable_records and rule.required
+                and name in result.fields_found and result.fields_found[name] == 0
+            ):
+                message = f"Required field {name!r} did not resolve in any extracted record"
+                if spec.on_item_error == "fail":
+                    from .network import JsonPathError
+                    if spec.network is not None:
+                        raise JsonPathError(message)
+                    raise ScrapeError(message)
+                result.errors.append(message)
+                result.error_details.append(ScrapeFailure(
+                    code="json_path_failure" if spec.network else "selector_failure",
+                    message=message, url=str(spec.start_url),
+                ))
+        return result
+
+    # DOM 主循环与网络执行保持独立，共用最终的整列定位检查。
+    def _run_dom_page(self, spec: ScraperSpec, page: Page) -> ScrapeResult:
+        result = ScrapeResult(fields_found={name: 0 for name in spec.fields})
         seen_records: set[tuple] = set()
         seen_pages: set[str] = set()
         page.set_default_timeout(spec.timeout_ms)
@@ -426,7 +463,7 @@ class ScraperExecutor:
                     detail_url = None
                     try:
                         item = items.nth(index)
-                        record = extract_item(item, spec, page.url)
+                        record = extract_item(item, spec, page.url, fields_found=result.fields_found)
                         result.items_extracted += 1
                         decision = evaluate_filters(record, spec.filters)
                         if decision.matched is not True:
@@ -458,7 +495,9 @@ class ScraperExecutor:
                                 return result
                             # 先扣预算再导航；失败的详情请求也计入尝试次数。
                             result.detail_pages_visited += 1
-                            record.update(extract_detail(detail_page, detail_url, spec))
+                            record.update(extract_detail(
+                                detail_page, detail_url, spec, fields_found=result.fields_found,
+                            ))
                     except ItemError as exc:
                         message = f"{page.url} item {index + 1} detail={detail_url!r}: {exc}"
                         if spec.on_item_error == "fail":

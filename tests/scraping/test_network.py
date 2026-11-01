@@ -63,7 +63,7 @@ def setup(page, *, mode="normal", terminal=True):
             dict(id=item_id, title="Book", stock=40+number, price=-1.25, active=False)
         ]
         if mode == "bad_record":
-            items.insert(0, dict(id=99, title="Bad", price=0, active=False))
+            items.insert(0, dict(id=99, title="Bad", stock={}, price=0, active=False))
         body = json.dumps(dict(data=dict(items=items)))
         if mode == "invalid":
             body = "{invalid"

@@ -61,10 +61,16 @@ SELECTOR_SCRIPT = """(itemSelector, fieldSelector, attribute, extract = attribut
             attribute ? el.getAttribute(attribute)?.slice(0, 300) ?? null
                       : (el.innerText || '').trim().slice(0, 300))};
     });
+    // 定位计数检查全部记录，值仍只返回五条样本；稀疏字段不能被前五条缺失误判。
+    result.resolved_count = items.filter(item => {
+        const matches = fieldSelector && fieldSelector !== ':scope' ? [...item.querySelectorAll(fieldSelector)] : [item];
+        return extract === 'texts' || extract === 'count' || matches.length === 1 &&
+            (!attribute || matches[0].hasAttribute(attribute));
+    }).length;
     result.tested_count = result.samples.length;
     result.all_items_tested = result.tested_count === result.count;
     result.status = !items.length ? 'no_items'
-        : result.samples.every(sample => extract === 'count' || extract === 'texts' || sample.matches === 1)
+        : result.samples.every(sample => extract === 'count' || extract === 'texts' || sample.matches <= 1) && result.resolved_count > 0
             ? 'sample_passed' : 'sample_failed';
     return result;
 }"""

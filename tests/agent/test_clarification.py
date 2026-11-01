@@ -295,7 +295,7 @@ def test_workflow_shares_answers_budget_and_waiting_time(monkeypatch, mode, expl
             if mode == "budget":
                 model.calls = 4
             broken = ScraperSpec.model_validate(RULE)
-            broken.fields["quote"].required = False
+            broken.fields = {"wrong_quote": broken.fields["quote"]}
             return broken
         assert model.calls == 2
         assert session is received[0]["clarification"]

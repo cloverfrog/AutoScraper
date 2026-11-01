@@ -10,8 +10,8 @@ from typing import TYPE_CHECKING, Literal
 from pydantic import Field
 
 from autoscraper.scraping.spec import NonEmpty, ProtocolModel, ScraperSpec
-from autoscraper.scraping.values import has_field_value
 from .requirements import TaskRequirements
+from autoscraper.scraping.values import is_supported_value
 
 if TYPE_CHECKING:
     from autoscraper.scraping.executor import ScrapeResult
@@ -95,16 +95,16 @@ def validate_spec(spec: ScraperSpec, requirements: TaskRequirements) -> list[Fee
     missing = [
         name
         for name in requirements.fields
-        if name not in spec.all_fields or not spec.all_fields[name].required
+        if name not in spec.all_fields
     ]
     if missing:
         issues.append(
             Feedback(
                 code="missing_required_field",
                 fields=missing,
-                message=("Preserve every requested field name and mark it required in network.fields."
+                message=("Preserve every requested field name in network.fields."
                          if spec.network else
-                         "Preserve every requested field name and mark it required in fields or detail.fields. "
+                         "Preserve every requested field name in fields or detail.fields. "
                         "For detailed description use detail.fields.description; do not rename it "
                         "to detail_description or substitute a short listing description"),
             )
@@ -210,21 +210,28 @@ def validate_data(result: ScrapeResult, requirements: TaskRequirements) -> list[
         issues.append(Feedback(code="empty_extraction", message="No records were extracted"))
         return issues
     # 已提取的记录全部被筛选跳过不说明选择器有误，继续检查其他执行反馈。
-    missing = [
-        name
-        for name in requirements.fields
-        if any(
-            not has_field_value(row.get(name)) for row in result.records
-        )
-    ]
+    missing = []
+    usable_records = bool(result.records or result.filtered_out or result.filter_unknown)
+    for name in requirements.fields:
+        if result.fields_found is not None and name in result.fields_found:
+            unresolved = result.fields_found[name] == 0 and usable_records
+        else:
+            unresolved = bool(result.records) and not any(name in row for row in result.records)
+        if unresolved:
+            missing.append(name)
     if missing:
         issues.append(
             Feedback(
                 code="missing_data",
                 fields=missing,
-                message="Requested fields must have nonempty values in every row",
+                message="Requested field paths/selectors did not resolve in any extracted record; real empty values are valid",
             )
         )
+    invalid = [name for name in requirements.fields
+               if any(name in row and not is_supported_value(row[name]) for row in result.records)]
+    if invalid:
+        issues.append(Feedback(code="missing_data", fields=invalid,
+                               message="Extracted fields contain unsupported value types"))
     if result.stop_reason == "pagination_cycle":
         issues.append(
             Feedback(code="selector_failure", message="Next link caused a pagination cycle")

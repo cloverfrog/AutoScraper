@@ -20,14 +20,14 @@ class ProtocolModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-# 单个字段的提取规则：相对 CSS、文本/属性读取、URL 转换和必填标记。
+# 单个字段的提取规则：相对 CSS、文本/属性读取、URL 转换和运行定位证据标记。
 class FieldSpec(ProtocolModel):
     # 列表字段相对当前记录匹配；详情字段相对整个详情文档匹配。
     selector: NonEmpty
     extract: Literal["text", "attribute", "texts", "count"] = "text"
     attribute: NonEmpty | None = None
     transform: Literal["none", "absolute_url"] = "none"
-    required: bool = True
+    required: bool = Field(default=True, description="Require at least one resolved field in the run; empty values are valid")
 
     # 约束属性名只在 extract='attribute' 时出现，避免规则含义不明确。
     @model_validator(mode="after")
@@ -174,7 +174,7 @@ JsonPath = Annotated[list[StrictStr | Annotated[StrictInt, Field(ge=0)]], Field(
 
 class JsonFieldSpec(ProtocolModel):
     path: JsonPath
-    required: bool = True
+    required: bool = Field(default=True, description="Require at least one resolved field in the run; empty values are valid")
 
 
 # 网络分页只声明浏览器动作；每个响应独立提供一批记录，不借用 DOM 的 append/replace。
@@ -229,7 +229,7 @@ class ScraperSpec(ProtocolModel):
     timeout_ms: int = Field(default=15_000, ge=1, le=120_000)
     # 未指定独立内容等待上限时，执行器回退到 timeout_ms。
     content_timeout_ms: int | None = Field(default=None, ge=1, le=120_000)
-    # 空列表表示用所有字段的组合去重；指定字段必须必填，避免缺失值误合并记录。
+    # 空列表表示所有字段组合去重；指定标识为空时回退整条记录，避免误合并。
     dedupe_by: list[NonEmpty] = Field(default_factory=list)
     # skip 保留其他成功记录并累计错误；fail 立即终止本次执行。
     on_item_error: Literal["skip", "fail"] = "skip"
@@ -249,7 +249,7 @@ class ScraperSpec(ProtocolModel):
             return self.network.fields
         return {**self.fields, **(self.detail.fields if self.detail else {})}
 
-    # 统一检查版本、字段重名和去重键；去重键只能引用已声明且必填的字段。
+    # 统一检查版本、字段重名和去重键；去重键只能引用已声明字段，空标识在执行时回退。
     @model_validator(mode="after")
     def check_dedupe(self):
         if self.network is not None:
@@ -269,6 +269,4 @@ class ScraperSpec(ProtocolModel):
             raise ValueError("filters must reference listing fields")
         if set(self.dedupe_by) - self.all_fields.keys():
             raise ValueError("dedupe_by must reference declared fields")
-        if any(not self.all_fields[name].required for name in self.dedupe_by):
-            raise ValueError("dedupe_by fields must be required")
         return self

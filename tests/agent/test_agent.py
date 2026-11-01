@@ -215,7 +215,7 @@ def test_selector_invalid_css(selector_page, item, field, parameter, count):
         ("p.card-text", "sample_failed", [2, 1], ["multiple_matches", "single_match"]),
         ("p.card-text:nth-of-type(1)", "sample_passed", [1, 1], ["single_match"] * 2),
         ("", "sample_passed", [1, 1], ["single_match"] * 2),
-        ("p.card-text:nth-of-type(2)", "sample_failed", [1, 0], ["single_match", "no_match"]),
+        ("p.card-text:nth-of-type(2)", "sample_passed", [1, 0], ["single_match", "no_match"]),
     ],
 )
 def test_selector_field_cardinality(selector_page, field, status, matches, sample_statuses):

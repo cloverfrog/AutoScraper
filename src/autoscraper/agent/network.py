@@ -9,9 +9,8 @@ from urllib.parse import urldefrag
 
 from autoscraper.observability.tracing import Sanitizer
 from autoscraper.scraping.network import (
-    NetworkError, endpoint, extract_json_record, matches, record_items,
+    NetworkError, JsonFieldError, endpoint, extract_json_record, matches, record_items,
 )
-from autoscraper.scraping.errors import ItemError
 from autoscraper.scraping.spec import NetworkSource
 from autoscraper.scraping.values import record_identity
 
@@ -83,7 +82,7 @@ def register_network_tools(tools, capture, timeout_ms):
         source = NetworkSource.model_validate(source)
         # 改后重测失败必须移除旧证据，不能让过去的成功覆盖当前错误。
         dedupe_by = dedupe_by or []
-        if any(name not in source.fields or not source.fields[name].required for name in dedupe_by):
+        if any(name not in source.fields for name in dedupe_by):
             return output(dict(status="failed", errors=["invalid_dedupe_by"]))
         key = rule_key(source, dedupe_by)
         capture.evidence.discard(key)
@@ -94,23 +93,46 @@ def register_network_tools(tools, capture, timeout_ms):
         extracted = added = 0
         batches = []
         errors = []
+        fields_found = {name: 0 for name in source.fields}
+        diagnostics = []
         for entry in entries:
             before = added
             if not entry.complete or entry.error:
                 errors.append(entry.error or "body_pending")
                 continue
             try:
-                for item in record_items(entry.body, source):
-                    record = extract_json_record(item, source)
-                    extracted += 1
-                    identity = record_identity(record, dedupe_by or list(source.fields))
-                    if identity not in seen:
-                        seen.add(identity)
-                        added += 1
-                batches.append(dict(id=entry.id, page=urldefrag(entry.page_url).url,
-                                    added=added - before))
-            except (NetworkError, ItemError):
-                errors.append("json_path_or_field_failure")
+                items = record_items(entry.body, source)
+            except NetworkError as exc:
+                errors.append("records_path_failure")
+                if len(diagnostics) < 8:
+                    diagnostics.append(dict(response_id=entry.id, path=source.records_path,
+                                            reason=str(exc)))
+                continue
+            for index, item in enumerate(items, 1):
+                try:
+                    record = extract_json_record(item, source, fields_found=fields_found)
+                except JsonFieldError as exc:
+                    if "json_path_or_field_failure" not in errors:
+                        errors.append("json_path_or_field_failure")
+                    if len(diagnostics) < 8:
+                        diagnostics.append(dict(response_id=entry.id, record_index=index,
+                            field=exc.field, path=exc.path, reason=exc.reason))
+                    continue
+                extracted += 1
+                identity = record_identity(record, dedupe_by or list(source.fields))
+                if identity not in seen:
+                    seen.add(identity)
+                    added += 1
+            batches.append(dict(id=entry.id, page=urldefrag(entry.page_url).url,
+                                added=added - before))
+        requested = set(tools.submission.requirements.fields) if (
+            tools.submission and tools.submission.requirements
+        ) else set()
+        for name, field in source.fields.items():
+            if extracted and not fields_found[name] and (field.required or name in requested):
+                errors.append("field_never_resolved")
+                if len(diagnostics) < 8:
+                    diagnostics.append(dict(field=name, path=field.path, reason="path_missing_in_all_records"))
         initial_url = tools.submission.actual_url(tools.submission.listing_url) if tools.submission else ""
         initial = any(batch["page"] == initial_url and batch["added"] for batch in batches)
         progress = source.pagination is None or any(
@@ -125,7 +147,9 @@ def register_network_tools(tools, capture, timeout_ms):
                            responses=sum(entry.status > 0 for entry in entries),
                            extracted=extracted, added=added,
                            initial_page_verified=initial, pagination_verified=progress,
-                           errors=errors[:5]))
+                           errors=errors[:5], diagnostics=diagnostics,
+                           field_coverage={name: dict(found=count, missing=extracted-count)
+                                           for name, count in fields_found.items()}))
 
 
 # 现有 explore_scroll 的网络分支：动作由调用方复用，状态不读取 DOM 记录数。

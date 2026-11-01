@@ -28,7 +28,7 @@ def run_network(spec, page):
     from .executor import ScrapeFailure, ScrapeResult, css, http_url, navigate, next_button
 
     source = spec.network
-    result = ScrapeResult()
+    result = ScrapeResult(fields_found={name: 0 for name in spec.all_fields})
     seen = set()
     visited = set()
     page.set_default_timeout(spec.timeout_ms)
@@ -101,15 +101,16 @@ def run_network(spec, page):
                     last_completion = monotonic()
                     if entry.error:
                         raise NetworkError(f"Matched response could not be read as JSON: {entry.error}")
-                    for item in record_items(entry.body, source):
+                    for record_index, item in enumerate(record_items(entry.body, source), 1):
                         try:
-                            record = extract_json_record(item, source)
+                            record = extract_json_record(item, source, fields_found=result.fields_found)
                         except ItemError as exc:
+                            message = f"response={entry.id} record={record_index}: {exc}"
                             if spec.on_item_error == "fail":
-                                raise JsonPathError(str(exc)) from None
-                            result.errors.append(str(exc))
+                                raise JsonPathError(message) from None
+                            result.errors.append(message)
                             result.error_details.append(ScrapeFailure(
-                                code="json_path_failure", message=str(exc), url=source.url_pattern,
+                                code="json_path_failure", message=message, url=source.url_pattern,
                             ))
                             continue
                         extracted += 1

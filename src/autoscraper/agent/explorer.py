@@ -106,6 +106,13 @@ Built-in scroll also records action baselines for a subsequent test_network. Scr
 exhaustion is truncation; no_more_content is only a bottom/no-loading/no-pending heuristic.
 New responses, extracted records and unique new records are different; repeated/empty batches
 are not progress, missing responses are timeouts. Submission requires test_network evidence.
+Requested fields must be DECLARED, not nonempty in every record. Preserve [], "", null, 0 and
+false. Missing individual keys become null; if a field path never resolves in any record,
+inspect the bounded diagnostics and repair that path. Incompatible types remain errors.
+required is a legacy run-level evidence flag, not a per-row nonempty constraint; setting false
+must never remove requested fields or hide a path that never resolves. Test_network reports
+response/record/field/path/reason without raw data. Do not retry unchanged failed inputs or
+scroll far beyond the requested sample merely to diagnose a single field.
 The CSS workflow below applies only to DOM rules; do not invent CSS fields for JSON data.
 
 Boundaries:
@@ -168,8 +175,7 @@ only when remaining checks need it. Historical repair summaries are not current-
 Protocol semantics:
 - start_url is the starting listing URL; item_selector selects individual records.
 - Fields are relative to each record. text/attribute match one element; texts collects all matched
-  texts in DOM order; count returns the number of matches (zero is valid). Required texts must be
-  nonempty with nonempty entries; optional texts may be []. Set attribute only for extract=attribute;
+  texts in DOM order; count returns the number of matches (zero is valid). Empty arrays, empty strings and null are valid source values; individual missing fields become null. Set attribute only for extract=attribute;
   use transform=absolute_url for URL attributes. texts/count do not support transforms.
   Use test_fields for texts/count evidence.
   Preserve required fields; never omit or substitute.
@@ -195,7 +201,7 @@ Protocol semantics:
 - max_items caps merged unique records at the requested limit (default 100); natural exhaustion may return fewer.
   max_pages counts processed list batches: keep <=100; timeout_ms <=30000; on_item_error=fail.
   Budget enough detail attempts.
-  dedupe_by uses required stable identifier fields, otherwise [].
+  dedupe_by uses stable identifier fields, otherwise []; empty identifiers fall back to full-record identity.
 
 Completion:
 Submit selectors derived from observed DOM, and inspect sample values for their meaning.

@@ -60,22 +60,27 @@ class TracedTools(Tools):
             checks.last_candidate = candidate
             if candidate.network is not None:
                 from .network import rule_key
+                network_test = None
                 if capture:
-                    await self.registry.registry.actions["test_network"].function(
+                    network_result = await self.registry.registry.actions["test_network"].function(
                         source=candidate.network, dedupe_by=candidate.dedupe_by,
                     )
+                    network_test = json.loads(network_result.extracted_content)
+                    checks.network_summary = network_test
                 await self._refresh_control(candidate, kwargs.get("browser_session"))
                 issues = checks.check(candidate)
                 if not capture or rule_key(candidate.network, candidate.dedupe_by) not in capture.evidence:
                     from autoscraper.workflow.validation import Feedback
                     issues.append(Feedback(code="json_path_failure", message=
                         "Use test_network with the exact final network rule; verify initial-page "
-                        "fields and genuinely new records after the pagination action."))
+                        "fields and genuinely new records after the pagination action. "
+                        + json.dumps((network_test or {}).get("diagnostics", []), ensure_ascii=False)))
                 checks.last_issues = issues
                 if issues:
                     return ActionResult(extracted_content=json.dumps({
                         "status": "candidate_rejected", "candidate": candidate.model_dump(mode="json"),
                         "feedback": [issue.model_dump() for issue in issues],
+                        "network_test": network_test, "evidence_summary": checks.repair_summary(),
                     }))
                 return await super().act(action, **kwargs)
             listing = await self._refresh_listing(candidate, kwargs.get("browser_session"))
@@ -200,7 +205,7 @@ class TracedTools(Tools):
             return None
         attribute = "href" if pagination.type == "link" else ""
         previous = self.submission.result(url, pagination.next_selector, "", attribute)
-        if self.submission.passed(previous, pagination.type == "link"):
+        if self.submission.passed(previous, pagination.type == "link", nonempty=pagination.type == "link"):
             return None
         page = await browser_session.must_get_current_page()
         result = json.loads(
