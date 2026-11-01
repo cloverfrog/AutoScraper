@@ -148,8 +148,7 @@ Protocol semantics:
   Preserve required fields; never omit or substitute.
 - Preserve filtering requirements. First consider the site's existing search/query URL; prefer
   native URL filtering when it meets the task, and use listing filters when no suitable URL filter
-  is available. A requested count is an upper limit, not evidence that that many records exist.
-  filters use AND; optional transforms
+  is available. filters use AND; optional transforms
   (regex_extract, regex_replace, map, to_number) affect comparisons only, never saved field values.
   contains means substring for text or exact membership for texts; ordering comparisons use numbers.
 - Detail extraction requires version="2": detail.url_selector uniquely matches a listing href;
@@ -166,11 +165,9 @@ Protocol semantics:
   Missing/disabled click controls or visible end markers end naturally. Available buttons without
   record changes time out. Scroll at bottom with repeated no-growth infers no_more_content.
   Virtual lists, nested details and custom scripts are unsupported.
-- max_items is a reusable upper limit on merged unique records: use the requested cap, otherwise 100.
-  Natural exhaustion with fewer records is successful. Keep this cap unchanged across runs;
-  do not lower it or ask to lower it merely because today's listing contains fewer records.
-  max_pages counts
-  processed list batches: keep <=100; timeout_ms <=30000; on_item_error=fail. Budget enough detail attempts.
+- max_items caps merged unique records at the requested limit (default 100); natural exhaustion may return fewer.
+  max_pages counts processed list batches: keep <=100; timeout_ms <=30000; on_item_error=fail.
+  Budget enough detail attempts.
   dedupe_by uses required stable identifier fields, otherwise [].
 
 Completion:
