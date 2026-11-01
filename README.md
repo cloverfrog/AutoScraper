@@ -220,6 +220,8 @@ Agent 执行轨迹默认保存至 `.agent-runtime/runs/<开始时间>_<run_id>/`
 系统在 Agent 恢复前同步当前需求，提交与执行验证均以新需求为准；只同意换入口不会自动放宽其他约束。
 例如原先要求 25 条、随后同意返回全部 21 条时，后续按 21 条验证。修订解析使用共享模型预算，
 摘要的 `original_requirements` 保留原始需求，`requirements` 保存当前需求。
+若抓取到列表末尾仍不足目标数量，系统会询问是否接受现有记录。选择接受可直接完成，
+不会再修改选择器或重跑抓取；保留原要求则结束本次任务。自由回答会交回 Agent 处理，避免错误复用旧范围的数据。
 
 留空、输入结束、中断回答、非交互 stdin 或使用 `--non-interactive` 时，不默认选择，
 返回 `status: "needs_clarification"` 和退出码 **4**。最终 JSON 的 `pending_clarification`

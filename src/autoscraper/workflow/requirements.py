@@ -130,3 +130,17 @@ async def revise_requirements(
     return TaskRequirements.model_validate({
         **requirements.model_dump(), **updated.model_dump(exclude_unset=True),
     })
+
+
+# 两个澄清入口共用同一更新路径：先完整解析，再同步对象，保留共享预算追踪。
+async def apply_clarification(requirements: TaskRequirements, clarification: dict, llm) -> None:
+    from autoscraper.observability.tracing import labels, operation
+
+    with labels(source="requirements"), operation("requirements_update") as details:
+        details["before"] = requirements.model_dump()
+        updated = await revise_requirements(requirements, clarification, llm)
+        requirements.fields = updated.fields
+        requirements.count = updated.count
+        requirements.filters = updated.filters
+        requirements.unsupported_capabilities = updated.unsupported_capabilities
+        details["after"] = requirements.model_dump()

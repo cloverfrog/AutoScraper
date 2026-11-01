@@ -18,7 +18,7 @@ from .clarification import ClarificationSession
 from autoscraper.browser.access import BrowserAccess
 from autoscraper.scraping.spec import ScraperSpec
 from autoscraper.workflow.validation import Feedback, UnsupportedResult
-from autoscraper.workflow.requirements import TaskRequirements, revise_requirements
+from autoscraper.workflow.requirements import TaskRequirements, apply_clarification
 
 
 # Agent 运行配置：模型连接、探索上限、内容等待和浏览器选项。
@@ -146,8 +146,10 @@ Protocol semantics:
   use transform=absolute_url for URL attributes. texts/count do not support transforms.
   Use test_fields for texts/count evidence.
   Preserve required fields; never omit or substitute.
-- Preserve filtering requirements. Prefer an observed working URL query when available; otherwise
-  use filters on listing fields before detail visits. filters use AND; optional transforms
+- Preserve filtering requirements. First consider the site's existing search/query URL; prefer
+  native URL filtering when it meets the task, and use listing filters when no suitable URL filter
+  is available. A requested count is a target, not evidence that that many records exist.
+  filters use AND; optional transforms
   (regex_extract, regex_replace, map, to_number) affect comparisons only, never saved field values.
   contains means substring for text or exact membership for texts; ordering comparisons use numbers.
 - Detail extraction requires version="2": detail.url_selector uniquely matches a listing href;
@@ -203,7 +205,7 @@ async def generate_spec(
     access: BrowserAccess | None = None,
 ) -> ScraperSpec:
     """Generate a candidate. The workflow separately validates it before publication."""
-    from autoscraper.observability.tracing import StepObserver, current_trace, labels, operation
+    from autoscraper.observability.tracing import StepObserver, current_trace
 
     observer = StepObserver() if current_trace() is not None else None
     prompt = build_task(url, task)
@@ -362,18 +364,10 @@ async def generate_spec(
                 requirements_prompt = ""
                 if requirements is not None:
                     try:
-                        with labels(source="requirements"), operation("requirements_update") as details:
-                            details["before"] = requirements.model_dump()
-                            async with asyncio.timeout(remaining_seconds()):
-                                updated = await revise_requirements(
-                                    requirements, clarification.history[-1], agent_llm,
-                                )
-                            # 同步共享对象，提交门槛、后续修复和工作流验证立即使用同一基准。
-                            requirements.fields = updated.fields
-                            requirements.count = updated.count
-                            requirements.filters = updated.filters
-                            requirements.unsupported_capabilities = updated.unsupported_capabilities
-                            details["after"] = requirements.model_dump()
+                        async with asyncio.timeout(remaining_seconds()):
+                            await apply_clarification(
+                                requirements, clarification.history[-1], agent_llm,
+                            )
                     except (LLMBudgetExceeded, TimeoutError):
                         raise
                     except Exception as exc:

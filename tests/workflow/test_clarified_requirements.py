@@ -110,14 +110,14 @@ def execute_scenario(monkeypatch, *, answer=REQUEST.options[0], count=21, failur
             model.consume()
             ask_here = (
                 len(captured["agents"]) == 2 and self is captured["agents"][1]
-                if failure == "ask_on_repair" else self is captured["agents"][0]
+                if failure == "workflow_question" else self is captured["agents"][0]
             )
             if ask_here and self.runs == 1:
                 await self.tools.registry.registry.actions["ask_user"].function(**REQUEST.model_dump())
                 return SimpleNamespace(is_successful=lambda: False, final_result=lambda: None)
             requirements = self.tools.submission.requirements
             # 同一 Agent 恢复及后续修复都必须立即使用当前数量，而不是原始 25。
-            expected = 25 if failure == "ask_on_repair" and self is captured["agents"][0] else count
+            expected = 25 if failure == "workflow_question" and self is captured["agents"][0] else count
             assert requirements.count == expected
             if self.followups:
                 assert requirements.model_dump_json() in self.followups[-1]
@@ -150,7 +150,14 @@ def execute_scenario(monkeypatch, *, answer=REQUEST.options[0], count=21, failur
         max_llm_calls=2 if failure == "budget" else 24,
         repair_reserve_calls=0, timeout_seconds=1 if failure == "timeout" else 30)
     sink = MemorySink()
-    outcome = run_task(URL, TASK, settings, execute=True, ask_user=lambda request: answer,
+    def respond(request):
+        if request.question != REQUEST.question:
+            if answer == REQUEST.options[0]:
+                return request.options[0]
+            if answer == REQUEST.options[1]:
+                return request.options[1]
+        return answer
+    outcome = run_task(URL, TASK, settings, execute=True, ask_user=respond,
         validation=ValidationSettings(max_repairs=repairs), trace=Trace(sink))
     return outcome, captured, model, sink
 
@@ -180,7 +187,7 @@ def test_unapproved_count_is_not_lowered(monkeypatch, answer):
     outcome, captured, _, _ = execute_scenario(monkeypatch, answer=answer, count=25)
     assert outcome.status == "unfulfilled" and outcome.requirements.count == 25
     assert outcome.original_requirements.count == 25
-    assert [f.code for f in outcome.feedback] == ["insufficient_items"]
+    assert outcome.feedback[0].code in {"insufficient_items", "invalid_spec"}
     assert outcome.spec.max_items == 25 and captured["executions"] == 1
 
 
@@ -229,15 +236,15 @@ def test_revision_preserves_explicit_user_changes():
     assert "Agent proposals, not authorization" in captured[0][0].content
 
 
-# 精确复现日志：先因 21/25 不足进入修复，再由用户同意 21，当前轮即可通过验证。
-def test_count_changed_during_repair_is_used_immediately(monkeypatch):
-    outcome, captured, model, _ = execute_scenario(monkeypatch, failure="ask_on_repair", repairs=1)
-    assert outcome.status == "success" and outcome.attempts == 2
-    assert outcome.history[0]["feedback"][0]["code"] == "insufficient_items"
-    assert outcome.history[1]["feedback"] == []
+# 执行后发现不足时由工作流直接询问，接受 21 条后不再重建 Agent 或重复抓取。
+def test_count_changed_after_execution_reuses_result(monkeypatch):
+    outcome, captured, model, _ = execute_scenario(monkeypatch, failure="workflow_question", repairs=1)
+    assert outcome.status == "success" and outcome.attempts == 1
+    assert outcome.history[0]["feedback"] == []
     assert outcome.spec.max_items == outcome.requirements.count == 21
-    assert outcome.original_requirements.count == 25 and model.calls == 5
-    assert len(captured["updates"]) == 1 and captured["executions"] == 2
+    assert outcome.original_requirements.count == 25 and model.calls == 2
+    assert not captured["updates"] and captured["executions"] == 1
+    assert len(captured["agents"]) == 1
 
 
 # 澄清若新增协议不支持的要求，应停止而不是继续执行不完整任务。

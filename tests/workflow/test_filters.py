@@ -136,8 +136,8 @@ def test_mixed_url_and_local_filtering(candidate):
     assert "city" not in spec.fields
 
 
-# 没有匹配记录时不启动选择器修复；未知原因仍通过摘要返回给调用方。
-def test_workflow_empty_filtered_result_does_not_repair(candidate, settings, workflow, monkeypatch):
+# 无匹配时转入用户决策而非选择器修复；未知原因仍通过摘要返回。
+def test_workflow_empty_filtered_result_asks_instead_of_repair(candidate, settings, workflow, monkeypatch):
     module, _ = workflow
     async def parse(*args):
         return TaskRequirements(fields=["title", "price"], count=2, filters=[PRICE])
@@ -148,7 +148,6 @@ def test_workflow_empty_filtered_result_does_not_repair(candidate, settings, wor
         items_extracted=2, filtered_out=1, filter_unknown=1, filter_unknown_reasons={"price: missing mapping": 1},
         stop_reason="no_next"))
     result = run_task(test_workflow.URL, "价格低于2元，前2条", settings, execute=True)
-    assert result.status == "unfulfilled" and result.attempts == 1
-    assert [issue.code for issue in result.feedback] == ["insufficient_items"]
-    assert not result.feedback[0].recoverable
+    assert result.status == "needs_clarification" and result.attempts == 1
+    assert result.pending_clarification and result.requirements.count == 2
     assert result.summary()["filter_unknown_reasons"] == {"price: missing mapping": 1}

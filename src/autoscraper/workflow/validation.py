@@ -241,3 +241,13 @@ def validate_data(
             )
         )
     return issues
+
+
+# 自然结束后的单纯数量不足需要用户决定是否接受现有结果，不属于选择器修复。
+# 预算截断、提取错误等仍走各自反馈，不能把未完成遍历误报为可用记录总数。
+def needs_count_clarification(result: ScrapeResult, issues: list[Feedback]) -> bool:
+    return (
+        result.stop_reason in {"no_next", "no_pagination", "end_marker", "no_more_content"}
+        and not result.errors and not result.error_details
+        and bool(issues) and all(issue.code == "insufficient_items" for issue in issues)
+    )
