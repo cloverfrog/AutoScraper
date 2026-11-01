@@ -125,11 +125,13 @@ def run_network(spec, page):
                         result.items_extracted += 1
                         # 推进按提取后的原始记录判重；被筛除的数据仍证明网站返回了新批次。
                         identity = record_identity(record, spec.dedupe_by or list(spec.all_fields))
-                        if identity in seen:
+                        duplicate = identity in seen
+                        if duplicate:
                             result.duplicates += 1
-                            continue
-                        seen.add(identity)
-                        added += 1
+                        else:
+                            seen.add(identity)
+                            added += 1
+                        # 筛选统计覆盖每条成功提取记录，包括重复项，与 items_extracted 一致。
                         decision = evaluate_filters(record, spec.filters)
                         if decision.matched is not True:
                             if decision.matched is False:
@@ -140,6 +142,8 @@ def run_network(spec, page):
                                 result.filter_unknown_reasons[reason] = (
                                     result.filter_unknown_reasons.get(reason, 0) + 1
                                 )
+                            continue
+                        if duplicate:
                             continue
                         result.records.append(record)
                         if len(result.records) >= spec.max_items:

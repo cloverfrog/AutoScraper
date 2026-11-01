@@ -487,3 +487,39 @@ def test_network_waits_for_delayed_next_control(page, pagination, state, content
     assert [row['id'] for row in result.records] == list(range(1, expected+1))
     assert result.pages_visited == expected
     assert result.stop_reason == ('max_items' if expected == 2 else 'no_next')
+
+
+# 重叠响应中的重复项也参与原始筛选计数；合法的全筛除结果不能被误报为空提取。
+@pytest.mark.parametrize('mode,out_count,unknown_count', [
+    ('reject', 3, 0), ('unknown', 0, 3), ('mixed', 2, 1), ('pass', 0, 0),
+])
+def test_overlapping_responses_keep_filter_accounting(page, mode, out_count, unknown_count):
+    from autoscraper.workflow.validation import validate_preview_data
+
+    setup(page)
+    def api(route):
+        number = int(route.request.url.rsplit('=', 1)[1])
+        ids = [1] if number == 1 else [1, 2]
+        rows = [dict(id=item_id, title='Book', price=0, active=False,
+                     stock='unknown' if mode == 'unknown' or mode == 'mixed' and item_id == 2 else item_id)
+                for item_id in ids]
+        route.fulfill(content_type='application/json', body=json.dumps(dict(data=dict(items=rows))))
+    page.route('**/api/items*', api)
+    spec = rule(filters=[dict(field='stock', operator='gt', value=0 if mode == 'pass' else 10)])
+    result = ScraperExecutor().run_page(spec, page)
+    assert result.items_extracted == 3 and result.duplicates == 1
+    assert result.filtered_out == out_count and result.filter_unknown == unknown_count
+    assert sum(result.filter_unknown_reasons.values()) == unknown_count
+    assert result.pages_visited == 2 and result.stop_reason == 'no_next'
+    assert [row['id'] for row in result.records] == ([1, 2] if mode == 'pass' else [])
+    issues, complete = validate_preview_data(result, TaskRequirements(fields=['id', 'stock']),
+                                             spec, spec, execute=True)
+    assert not issues and complete
+
+
+# 筛选计数的修正不能把只有重复响应的批次当作有效分页推进。
+def test_filtered_duplicate_response_is_not_progress(page):
+    setup(page, mode='repeat')
+    spec = rule(filters=[dict(field='stock', operator='lt', value=0)])
+    with pytest.raises(NetworkProgressError):
+        ScraperExecutor().run_page(spec, page)
