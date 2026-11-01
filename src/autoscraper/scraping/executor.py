@@ -23,6 +23,7 @@ from .values import FieldValue, record_identity
 from .filtering import evaluate_filters
 from .progress import STATE_SCRIPT, state_options, progressed
 from .scrolling import scroll_step
+from .resources import ResourceOptions, ResourceSaver
 from autoscraper.observability.tracing import emit, operation
 
 
@@ -80,6 +81,13 @@ class ScrapeResult:
     error_details: list[ScrapeFailure] = field(default_factory=list)
     # 记录路径/选择器实际定位次数，区分显式空值与整列规则失效。
     fields_found: dict[str, int] | None = None
+    resources: list[dict] = field(default_factory=list)
+    resource_directory: str | None = None
+
+    # 资源错误独立于字段验证，不让工作流把下载失败误判为选择器失效。
+    @property
+    def resource_errors(self):
+        return sum(entry["status"] != "saved" for entry in self.resources)
 
 
 # 按主文档请求跟踪导航，排除 iframe/资源响应；SPA 恢复原 URL 时也能识别新文档。
@@ -200,6 +208,14 @@ def extract_fields(
             except ContentTimeout:
                 pass  # 单条缺失保留 null；整列是否失效在运行结束后统一检查。
         # count 的空集合是有效的零值；texts 保留 DOM 顺序及重复文本。
+        if rule.extract == "attributes":
+            values = matches.evaluate_all("(els, attr) => els.map(el => el.getAttribute(attr))", rule.attribute)
+            value = [v.strip() for v in values if v is not None]
+            if rule.transform == "absolute_url":
+                value = [http_url(base_url, v) if v else v for v in value]
+            record[name] = value
+            found.append(name)
+            continue
         if rule.extract in {"texts", "count"}:
             value = (
                 matches.count() if rule.extract == "count"
@@ -328,11 +344,13 @@ class ScraperExecutor:
     # 默认无头运行；工作流会传入与 Agent 探索相同的配置。
     # access 只在 run 自建上下文时载入/回收快照；run_page 的上下文状态由调用方管理。
     def __init__(self, *, headless: bool = True, executable_path: str | None = None,
-                 access: BrowserAccess | None = None, login: bool = False):
+                 access: BrowserAccess | None = None, login: bool = False,
+                 resources: ResourceOptions | None = None):
         self.headless = headless
         self.executable_path = executable_path
         self.access = access
         self.login = login
+        self.resources = resources
 
     # 执行规则并记录总体追踪指标；真正的浏览器创建与回收交给 _run。
     def run(self, spec: ScraperSpec) -> ScrapeResult:
@@ -388,11 +406,20 @@ class ScraperExecutor:
     # 串行处理列表、详情和分页，维护链接循环检测、记录去重及列表/详情/滚动预算。
     # 调用方拥有列表 Page，本函数只负责关闭自己创建的详情 Page。
     def run_page(self, spec: ScraperSpec, page: Page) -> ScrapeResult:
-        if spec.network is not None:
-            from .network_executor import run_network
-            result = run_network(spec, page)
-        else:
-            result = self._run_dom_page(spec, page)
+        initial_fields = spec.all_fields if spec.network is not None else spec.fields
+        result = ScrapeResult(fields_found={name: 0 for name in initial_fields})
+        saver = ResourceSaver(page.context, self.resources, spec.resources, result) if (
+            self.resources is not None and spec.resources
+        ) else None
+        try:
+            if spec.network is not None:
+                from .network_executor import run_network
+                result = run_network(spec, page, result=result, resources=saver)
+            else:
+                result = self._run_dom_page(spec, page, result=result, resources=saver)
+        finally:
+            if saver:
+                saver.close()
         # required 保留为整列定位证据要求，不再禁止真实空值或个别记录缺失。
         usable_records = bool(result.records or result.filtered_out or result.filter_unknown)
         for name, rule in spec.all_fields.items():
@@ -414,8 +441,8 @@ class ScraperExecutor:
         return result
 
     # DOM 主循环与网络执行保持独立，共用最终的整列定位检查。
-    def _run_dom_page(self, spec: ScraperSpec, page: Page) -> ScrapeResult:
-        result = ScrapeResult(fields_found={name: 0 for name in spec.fields})
+    def _run_dom_page(self, spec: ScraperSpec, page: Page, *, result=None, resources=None) -> ScrapeResult:
+        result = result if result is not None else ScrapeResult(fields_found={name: 0 for name in spec.fields})
         seen_records: set[tuple] = set()
         seen_pages: set[str] = set()
         page.set_default_timeout(spec.timeout_ms)
@@ -526,6 +553,9 @@ class ScraperExecutor:
                         result.duplicates += 1
                         continue
                     seen_records.add(identity_record)
+                    if resources:
+                        resources.save_record(record, len(result.records) + 1, page, detail_page,
+                                              spec.detail.fields if spec.detail else ())
                     result.records.append(record)
                     if len(result.records) >= spec.max_items:
                         result.stop_reason = "max_items"

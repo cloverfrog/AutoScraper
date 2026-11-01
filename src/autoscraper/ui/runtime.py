@@ -8,6 +8,7 @@ import logging
 import os
 from pathlib import Path
 import re
+import shutil
 import threading
 import time
 import uuid
@@ -17,6 +18,7 @@ from autoscraper.observability.tracing import FileSink, Sanitizer, Trace
 from autoscraper.scraping.executor import ScraperExecutor
 from autoscraper.scraping.export import export_records
 from autoscraper.scraping.spec import ScraperSpec
+from autoscraper.scraping.resources import ResourceOptions
 
 
 # UI 参数只保存非敏感配置；密钥沿用 CLI 环境变量，不经过网页。
@@ -28,6 +30,7 @@ class RunConfig:
     spec_json: str = ""
     initial_spec_json: str = ""
     execute: bool = False
+    download_resources: bool = False
     headed: bool = False
     login: bool = False
     auth_profile: str = ""
@@ -247,19 +250,24 @@ class JobManager:
                 headless=not config.headed,
                 executable_path=config.browser_path or os.getenv("AUTOSCRAPER_BROWSER_PATH"),
                 access=access, login=config.login,
+                resources=ResourceOptions(output) if config.download_resources else None,
             ).run(spec)
             network_truncated = spec.network is not None and data.stop_reason in {"scroll_limit", "max_pages"}
             job.summary = {
-                "status": "partial" if data.errors or data.stop_reason == "detail_limit" or network_truncated else "success",
+                "status": "partial" if data.errors or data.resource_errors or data.stop_reason == "detail_limit" or network_truncated else "success",
                 "items": len(data.records), "pages": data.pages_visited,
                 "detail_pages": data.detail_pages_visited, "duplicates": data.duplicates,
                 "errors": data.errors, "stop_reason": data.stop_reason,
+                "resource_errors": data.resource_errors,
                 "error_details": [vars(error) for error in data.error_details],
             }
             path = output / "rule.json"
             path.write_text(spec.model_dump_json(indent=2) + "\n", encoding="utf-8")
             job.files.append(str(path))
         if data is not None:
+            if data.resource_directory:
+                archive = shutil.make_archive(str(output / "resources"), "zip", data.resource_directory)
+                job.files.append(archive)
             job.preview = data.records[:100]
             for suffix in ("json", "csv"):
                 path = output / f"data.{suffix}"

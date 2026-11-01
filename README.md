@@ -2,6 +2,10 @@
 
 输入网站 URL 和自然语言需求，由 browser-use Agent 探索网页并生成抓取规则，再交给 Playwright Executor 导出数据。
 
+图片与普通附件可通过协议的 `resources` 声明资源字段及请求/响应模式。Agent 仅验证轻量证据；
+独立执行已有规则时，用 `--download-resources output/assets` 或 UI 的“保存协议声明的资源文件”开关启用保存。
+默认只导出数据与 URL，Agent 工作流始终不下载资源文件。详见 [资源抓取](docs/resources.md)。
+
 ## 运行 Agent
 
 以下命令以 Linux Bash 为例，需要 Python 3.12 和 uv。PowerShell 中相同的 `uv` 命令可直接使用。

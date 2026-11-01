@@ -92,6 +92,10 @@ def build_preview_spec(spec: ScraperSpec, policy: ValidationSettings) -> Scraper
 # 执行前比较候选规则与独立需求：必需字段、可复用数量上限和 Agent 允许的执行预算。
 def validate_spec(spec: ScraperSpec, requirements: TaskRequirements) -> list[Feedback]:
     issues = []
+    missing_resources = set(requirements.resource_fields) - {r.field for r in spec.resources}
+    if missing_resources:
+        issues.append(Feedback(code="invalid_spec", fields=sorted(missing_resources), message=
+            "Preserve requested file-saving fields in resources; URL extraction alone is insufficient."))
     missing = [
         name
         for name in requirements.fields

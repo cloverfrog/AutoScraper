@@ -78,6 +78,23 @@ def test_app_start_defaults_and_zero_wait_budget(tmp_path, monkeypatch, optional
     assert configs[0].validation_options["max_repairs"] == 0
 
 
+# 即使浏览器保留了勾选值，Agent 页也不能启用资源下载。
+@pytest.mark.parametrize('mode,enabled', [('agent', False), ('spec', True)])
+def test_resource_switch_only_applies_to_standalone_executor(tmp_path, monkeypatch, mode, enabled):
+    manager = JobManager(tmp_path)
+    configs = []
+    monkeypatch.setattr(manager, 'start', lambda config: configs.append(config) or 'job')
+    app = build_app(manager)
+    function = next(fn for fn in app.fns.values()
+                    if getattr(fn.fn, '__name__', None) == 'start_' + mode)
+    values = [component.value for component in function.inputs]
+    index = next(i for i, component in enumerate(function.inputs)
+                 if component.label.startswith('保存协议声明的资源文件'))
+    values[index] = True
+    function.fn(*values)
+    assert configs[0].download_resources is enabled
+
+
 # 实际 HTTP 文件路由仅开放产物，认证和 Trace 即使知道路径也不能下载。
 def test_file_routes_block_credentials(tmp_path):
     import httpx

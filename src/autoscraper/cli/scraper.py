@@ -13,6 +13,7 @@ from pydantic import ValidationError
 from autoscraper.scraping.errors import ContentTimeout, NavigationError, ScrapeError
 from autoscraper.scraping.executor import ScraperExecutor
 from autoscraper.scraping.export import export_records
+from autoscraper.scraping.resources import ResourceOptions
 from autoscraper.scraping.network import NetworkError
 from autoscraper.scraping.spec import ScraperSpec
 from autoscraper.browser.access import BrowserAccess, HandoffRequired
@@ -24,6 +25,12 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Execute a declarative ScraperSpec")
     parser.add_argument("spec", type=Path)
     parser.add_argument("--output", type=Path, action="append", required=True)
+    parser.add_argument("--download-resources", type=Path, metavar="DIRECTORY",
+                        help="Save declared resources in a new run directory (default: URLs only)")
+    parser.add_argument("--resource-max-files", type=int, default=200)
+    parser.add_argument("--resource-max-file-bytes", type=int, default=10 * 1024 * 1024)
+    parser.add_argument("--resource-max-total-bytes", type=int, default=100 * 1024 * 1024)
+    parser.add_argument("--resource-timeout-ms", type=int, default=5000)
     parser.add_argument("--content-timeout-ms", type=int)
     parser.add_argument("--navigation-timeout-ms", type=int)
     parser.add_argument("--headed", action="store_true", help="Show the scraping browser")
@@ -62,6 +69,11 @@ def main() -> int:
         result = ScraperExecutor(
             headless=not args.headed, executable_path=args.executable_path,
             access=access, login=args.login,
+            resources=ResourceOptions(
+                directory=args.download_resources, max_files=args.resource_max_files,
+                max_file_bytes=args.resource_max_file_bytes,
+                max_total_bytes=args.resource_max_total_bytes, timeout_ms=args.resource_timeout_ms,
+            ) if args.download_resources is not None else None,
         ).run(spec)
         if args.auth_state is not None:
             access.save(args.auth_state)
@@ -79,6 +91,8 @@ def main() -> int:
                     "filter_unknown": result.filter_unknown,
                     "filter_unknown_reasons": result.filter_unknown_reasons,
                     "errors": result.errors,
+                    "resource_directory": result.resource_directory,
+                    "resource_errors": result.resource_errors,
                     "error_details": [vars(error) for error in result.error_details],
                     "stop_reason": result.stop_reason,
                 },
@@ -86,7 +100,7 @@ def main() -> int:
             )
         )
         network_truncated = spec.network is not None and result.stop_reason in {"scroll_limit", "max_pages"}
-        return 2 if result.errors or result.stop_reason == "detail_limit" or network_truncated else 0
+        return 2 if result.errors or result.resource_errors or result.stop_reason == "detail_limit" or network_truncated else 0
     except HandoffRequired as exc:
         print(json.dumps({"status": "cancelled" if exc.cancelled else "needs_user",
                           "pending_handoff": exc.request.model_dump()}, ensure_ascii=False))

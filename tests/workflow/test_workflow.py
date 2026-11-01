@@ -115,6 +115,37 @@ def install_candidates(monkeypatch, workflow, values):
     return received
 
 
+# 资源规则可以进入 Agent 工作流，但试抓取、独立验证、修复和完整执行始终不下载。
+@pytest.mark.parametrize('repair', [False, True])
+def test_agent_workflow_resource_rules_remain_url_only(monkeypatch, workflow, candidate, settings, executor_page, repair):
+    from autoscraper.scraping.resources import ResourceSaver
+    candidate = ScraperSpec.model_validate({**candidate.model_dump(),
+        'resources': [dict(field='title', mode='request')]})
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError('Agent workflow must never initialize resource saving')
+
+    monkeypatch.setattr(ResourceSaver, '__init__', forbidden)
+    candidates = [candidate]
+    if repair:
+        bad = candidate.model_dump()
+        bad['fields']['price']['selector'] = '.missing-price'
+        candidates.insert(0, ScraperSpec.model_validate(bad))
+    received = install_candidates(monkeypatch, workflow, candidates)
+    outcome = run_task(URL, TASK, settings, fields=['title', 'price'], count=2, execute=True)
+    assert outcome.status == 'success'
+    assert len(received) == len(candidates)
+    assert outcome.data.records and outcome.data.resources == []
+
+
+def test_file_saving_requirement_cannot_be_replaced_with_url_only(candidate):
+    requirements = TaskRequirements(fields=['title', 'price'], resource_fields=['title'])
+    assert any(issue.code == 'invalid_spec' for issue in validate_spec(candidate, requirements))
+    candidate = ScraperSpec.model_validate({**candidate.model_dump(),
+        'resources': [dict(field='title', mode='response')]})
+    assert validate_spec(candidate, requirements) == []
+
+
 # 明确字段名与数量必须完整保留，显式参数优先于需求文本。
 def test_explicit_fields_and_count_cannot_be_dropped():
     fields, count = explicit_requirements(

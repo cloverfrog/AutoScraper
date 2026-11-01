@@ -55,8 +55,8 @@ SELECTOR_SCRIPT = """(itemSelector, fieldSelector, attribute, extract = attribut
             : matches.length === 1 ? 'single_match' : 'multiple_matches';
         // 多元素值按 DOM 顺序保留；计数不依赖文本是否为空。
         if (extract === 'count') return {status, matches: matches.length, values: [matches.length]};
-        if (extract === 'texts') return {status, matches: matches.length, values: matches.map(el =>
-            (el.innerText || '').replace(/\\s+/g, ' ').trim().slice(0, 300))};
+        if (extract === 'texts' || extract === 'attributes') return {status, matches: matches.length, values: matches.map(el =>
+            (extract === 'attributes' ? el.getAttribute(attribute) || '' : el.innerText || '').replace(/\\s+/g, ' ').trim().slice(0, 300))};
         return {status, matches: matches.length, values: matches.slice(0, 2).map(el =>
             attribute ? el.getAttribute(attribute)?.slice(0, 300) ?? null
                       : (el.innerText || '').trim().slice(0, 300))};
@@ -64,13 +64,13 @@ SELECTOR_SCRIPT = """(itemSelector, fieldSelector, attribute, extract = attribut
     // 定位计数检查全部记录，值仍只返回五条样本；稀疏字段不能被前五条缺失误判。
     result.resolved_count = items.filter(item => {
         const matches = fieldSelector && fieldSelector !== ':scope' ? [...item.querySelectorAll(fieldSelector)] : [item];
-        return extract === 'texts' || extract === 'count' || matches.length === 1 &&
+        return extract === 'texts' || extract === 'attributes' || extract === 'count' || matches.length === 1 &&
             (!attribute || matches[0].hasAttribute(attribute));
     }).length;
     result.tested_count = result.samples.length;
     result.all_items_tested = result.tested_count === result.count;
     result.status = !items.length ? 'no_items'
-        : result.samples.every(sample => extract === 'count' || extract === 'texts' || sample.matches <= 1) && result.resolved_count > 0
+        : result.samples.every(sample => extract === 'count' || extract === 'texts' || extract === 'attributes' || sample.matches <= 1) && result.resolved_count > 0
             ? 'sample_passed' : 'sample_failed';
     return result;
 }"""
@@ -82,5 +82,5 @@ BATCH_SELECTOR_SCRIPT = """(itemSelector, fields) => {
     const test = """ + SELECTOR_SCRIPT + """;
     return {url: location.href, item_selector: itemSelector,
         results: Object.fromEntries(Object.entries(fields).map(([name, rule]) =>
-            [name, test(itemSelector, rule.selector, rule.extract === 'attribute' ? rule.attribute : '', rule.extract || 'text')]))};
+            [name, test(itemSelector, rule.selector, ['attribute','attributes'].includes(rule.extract) ? rule.attribute : '', rule.extract || 'text')]))};
 }"""

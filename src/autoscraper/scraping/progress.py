@@ -17,6 +17,7 @@ STATE_SCRIPT = """(o) => {
         if (f.extract === 'count') return matches.length;
         if (f.extract === 'texts') return matches.map(el =>
             (el.innerText ?? el.textContent).replace(/\\s+/g, ' ').trim());
+        if (f.extract === 'attributes') return matches.map(el => el.getAttribute(f.attribute));
         const el = matches[0];
         const value = el ? (f.extract === 'attribute' ? el.getAttribute(f.attribute) : (el.innerText ?? el.textContent)) : null;
         return value === null ? null : value.replace(/\\s+/g, ' ').trim();

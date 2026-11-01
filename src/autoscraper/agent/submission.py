@@ -3,6 +3,7 @@
 """Small per-exploration evidence store and deterministic submission checks."""
 
 from urllib.parse import urldefrag, urljoin
+import json
 
 from autoscraper.scraping.spec import ScraperSpec
 from autoscraper.scraping.values import has_field_value
@@ -13,6 +14,17 @@ from autoscraper.workflow.validation import Feedback, validate_spec
 # URL 保留查询参数，只忽略 fragment；导航重定向通过本轮别名显式关联。
 def page_key(url):
     return urldefrag(str(url)).url
+
+
+# 资源证据绑定精确定位方式和获取模式，不能被不同字段或数据源复用。
+def resource_key(spec, rule):
+    detail = bool(spec.detail and rule.field in spec.detail.fields)
+    return json.dumps(dict(
+        rule=rule.model_dump(), field=spec.all_fields[rule.field].model_dump(),
+        root="html" if detail else spec.item_selector,
+        start_url=str(spec.start_url), detail_link=spec.detail.url_selector if detail else None,
+        source=(spec.network.model_dump() if spec.network else None),
+    ), sort_keys=True)
 
 
 # 字段测试按提取方式隔离；计数不依赖字段参数，替换模式仍比较同一规则的值。
@@ -30,6 +42,7 @@ class SubmissionChecks:
         self.last_issues = []
         self.last_candidate = None
         self.network_summary = None
+        self.resource_evidence = set()
 
     # 动作前固定字段和数量快照；后续工具结果不能覆盖用于比较的基线。
     def begin_action(self, kind, url):
@@ -99,7 +112,7 @@ class SubmissionChecks:
             return all(sample.get("values") == [sample.get("matches")]
                        and type(sample.get("matches")) is int and sample["matches"] >= 0
                        for sample in result["samples"])
-        if mode == "texts":
+        if mode in {"texts", "attributes"}:
             return all(isinstance(sample.get("values"), list)
                        and all(isinstance(value, str) for value in sample["values"])
                        for sample in result["samples"])
@@ -216,6 +229,11 @@ class SubmissionChecks:
     # 生成可直接回给 Agent 的修复指令；用户字段名以合并后的列表/详情字段为准。
     def check(self, spec: ScraperSpec):
         issues = validate_spec(spec, self.requirements) if self.requirements else []
+        for rule in spec.resources:
+            if resource_key(spec, rule) not in self.resource_evidence:
+                issues.append(Feedback(code="invalid_spec", fields=[rule.field], message=
+                    "Use test_resources with this exact resource field and mode; "
+                    "resource evidence does not require downloading files."))
         url = self.actual_url(spec.start_url)
         if spec.network is not None:
             pagination = spec.network.pagination

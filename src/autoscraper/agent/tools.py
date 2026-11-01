@@ -273,6 +273,9 @@ def build_tools(
     if network_capture is not None:
         from .network import register_network_tools
         register_network_tools(tools, network_capture, content_timeout_ms)
+        if getattr(network_capture, "resources", None) is not None:
+            from .resources import register_resource_tools
+            register_resource_tools(tools, network_capture)
 
     if access is not None:
         # 工具只登记接管请求并终止本批动作，真正等待用户发生在 Agent.run 返回之后。
