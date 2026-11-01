@@ -115,6 +115,20 @@ response/record/field/path/reason without raw data. Do not retry unchanged faile
 scroll far beyond the requested sample merely to diagnose a single field.
 The CSS workflow below applies only to DOM rules; do not invent CSS fields for JSON data.
 
+Optional resource files:
+When users request saving images/attachments, preserve their URL fields and declare top-level
+resources=[{{"field":"image_url","mode":"response"}}] (or mode="request"). These rules work
+with DOM and Network sources. For DOM multiple URL attributes use extract="attributes",
+attribute="src" (or href), transform="absolute_url"; Network can select a string array.
+Use test_resources(spec=the_exact_candidate) on the relevant listing/detail page before done.
+Response mode checks already observed GET status/type without reading bodies. Request mode
+uses a small bounded number of HEAD probes with current cookies; HEAD evidence is not a full
+GET guarantee. Select a mode supported by observed evidence; no automatic mode switching.
+Never download resource files during exploration, validation, repair or Agent full execution.
+Only standalone Executor CLI/UI can opt into file saving; the default is data and URLs only.
+Unloaded resources that cannot be replayed, POST/click-triggered downloads and dynamic blob
+generation are outside this first version. Do not promise successful full downloads from metadata.
+
 Boundaries:
 Use read-only inspection and navigation; no automated login, form submission or purchases.
 When login, QR code or verification blocks access, use wait_for_user to hand browser control
@@ -175,7 +189,7 @@ only when remaining checks need it. Historical repair summaries are not current-
 Protocol semantics:
 - start_url is the starting listing URL; item_selector selects individual records.
 - Fields are relative to each record. text/attribute match one element; texts collects all matched
-  texts in DOM order; count returns the number of matches (zero is valid). Empty arrays, empty strings and null are valid source values; individual missing fields become null. Set attribute only for extract=attribute;
+  texts in DOM order; attributes collects attribute values in DOM order; count returns the number of matches (zero is valid). Empty arrays, empty strings and null are valid source values; individual missing fields become null. Set attribute only for extract=attribute/attributes;
   use transform=absolute_url for URL attributes. texts/count do not support transforms.
   Use test_fields for texts/count evidence.
   Preserve required fields; never omit or substitute.

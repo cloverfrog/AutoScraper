@@ -24,16 +24,16 @@ class ProtocolModel(BaseModel):
 class FieldSpec(ProtocolModel):
     # 列表字段相对当前记录匹配；详情字段相对整个详情文档匹配。
     selector: NonEmpty
-    extract: Literal["text", "attribute", "texts", "count"] = "text"
+    extract: Literal["text", "attribute", "attributes", "texts", "count"] = "text"
     attribute: NonEmpty | None = None
     transform: Literal["none", "absolute_url"] = "none"
     required: bool = Field(default=True, description="Require at least one resolved field in the run; empty values are valid")
 
-    # 约束属性名只在 extract='attribute' 时出现，避免规则含义不明确。
+    # 单值/多值属性提取必须声明属性名，其他方式不允许携带该参数。
     @model_validator(mode="after")
     def check_attribute(self):
-        if (self.extract == "attribute") != (self.attribute is not None):
-            raise ValueError("attribute must be set exactly when extract='attribute'")
+        if (self.extract in {"attribute", "attributes"}) != (self.attribute is not None):
+            raise ValueError("attribute must be set exactly for attribute/attributes extraction")
         if self.extract in {"texts", "count"} and self.transform != "none":
             raise ValueError("absolute_url requires text or attribute extraction")
         return self
@@ -212,6 +212,12 @@ class NetworkSource(ProtocolModel):
         return fields
 
 
+# 资源只声明字段关联与获取方式；是否保存由独立执行器的运行参数决定。
+class ResourceSpec(ProtocolModel):
+    field: NonEmpty
+    mode: Literal["request", "response"]
+
+
 # 一份可序列化的完整规则：v1/v2 提取 DOM 列表/详情，v3 独立提取网络 JSON。
 class ScraperSpec(ProtocolModel):
     version: Literal["1", "2", "3"] = "1"
@@ -219,6 +225,7 @@ class ScraperSpec(ProtocolModel):
     item_selector: NonEmpty | None = None
     fields: dict[NonEmpty, FieldSpec] = Field(default_factory=dict)
     network: NetworkSource | None = None
+    resources: list[ResourceSpec] = Field(default_factory=list, max_length=20)
     detail: DetailSpec | None = None
     filters: list[FilterSpec] = Field(default_factory=list)
     pagination: PaginationSpec | None = None
@@ -252,6 +259,11 @@ class ScraperSpec(ProtocolModel):
     # 统一检查版本、字段重名和去重键；去重键只能引用已声明字段，空标识在执行时回退。
     @model_validator(mode="after")
     def check_dedupe(self):
+        resource_fields = [resource.field for resource in self.resources]
+        if len(set(resource_fields)) != len(resource_fields):
+            raise ValueError("resource fields must be unique")
+        if set(resource_fields) - self.all_fields.keys():
+            raise ValueError("resources must reference declared fields")
         if self.network is not None:
             if self.version != "3":
                 raise ValueError("network requires protocol version '3'")

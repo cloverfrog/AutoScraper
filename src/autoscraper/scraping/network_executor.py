@@ -32,11 +32,11 @@ def next_control(page, pagination):
 
 
 # 每个批次的输入窗口以请求开始序号划分；完成读取不等于字段提取或数据新增。
-def run_network(spec, page):
+def run_network(spec, page, *, result=None, resources=None):
     from .executor import ScrapeFailure, ScrapeResult, css, http_url, navigate
 
     source = spec.network
-    result = ScrapeResult(fields_found={name: 0 for name in spec.all_fields})
+    result = result if result is not None else ScrapeResult(fields_found={name: 0 for name in spec.all_fields})
     seen = set()
     visited = set()
     page.set_default_timeout(spec.timeout_ms)
@@ -145,6 +145,8 @@ def run_network(spec, page):
                             continue
                         if duplicate:
                             continue
+                        if resources:
+                            resources.save_record(record, len(result.records) + 1, page)
                         result.records.append(record)
                         if len(result.records) >= spec.max_items:
                             result.stop_reason = "max_items"

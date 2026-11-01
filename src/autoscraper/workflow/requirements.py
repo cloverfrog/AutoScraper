@@ -17,6 +17,7 @@ class TaskRequirements(ProtocolModel):
     count: int | None = Field(default=None, ge=1, le=1_000_000,
         description="Reusable upper limit on matching unique records, not a minimum")
     filters: list[FilterCondition] = Field(default_factory=list)
+    resource_fields: list[NonEmpty] = Field(default_factory=list, max_length=20)
     unsupported_capabilities: list[Literal["captcha_bypass", "virtual_list"]] = (
         Field(default_factory=list)
     )
@@ -81,6 +82,10 @@ async def extract_requirements(task: str, llm, fields=None, count=None) -> TaskR
                 "requested output fields/count with filters. Filters use AND. A filter field need "
                 "not be a requested output field; use consistent names when one is. "
                 "No filters means an empty list."
+                " If the user requests saving images or attachments as files, include their URL "
+                "field names in both fields and resource_fields. Merely asking for image URLs "
+                "does not request files. Resource saving is supported for HTTP(S) GET resources; "
+                "the Agent only verifies bounded evidence, never downloads files."
             ),
             UserMessage(content=json.dumps(
                 {"task": task, "fields": fields, "count": count}, ensure_ascii=False
@@ -117,8 +122,8 @@ async def revise_requirements(
                 "fields or filters. Count is a reusable upper limit, not a minimum. "
                 "Accepting the currently available records does not change that reusable limit; "
                 "change count only if the user explicitly changes the upper limit itself. "
-                "Preserve every other constraint exactly. Permission to change "
-                "a source alone does not change count, fields or filters. Never lower the count "
+                "Preserve every other constraint exactly, including resource_fields (requested file saving). "
+                "Permission to change a source alone does not change count, fields or filters. Never lower the count "
                 "merely because the Agent reports fewer available rows. Do not infer requirements "
                 "from generated rules or results. Return the complete updated requirements; "
                 "return them unchanged if the answer does not authorize a constraint change."
@@ -147,5 +152,6 @@ async def apply_clarification(requirements: TaskRequirements, clarification: dic
         requirements.fields = updated.fields
         requirements.count = updated.count
         requirements.filters = updated.filters
+        requirements.resource_fields = updated.resource_fields
         requirements.unsupported_capabilities = updated.unsupported_capabilities
         details["after"] = requirements.model_dump()

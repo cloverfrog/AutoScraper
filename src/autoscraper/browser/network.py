@@ -159,6 +159,7 @@ class AgentResponseCapture:
         self.context = None
         self.evidence = set()
         self.actions = []
+        self.resources = None
 
     # browser.start 只创建空白浏览器；接入上下文监听后才允许 Agent 执行首次导航。
     async def start(self, browser):
@@ -170,6 +171,8 @@ class AgentResponseCapture:
         if not attached.contexts:
             raise RuntimeError("Network capture requires an existing browser context")
         self.context = attached.contexts[0]
+        from .resources import ResourceEvidence
+        self.resources = ResourceEvidence(self.context)
         self.context.on("request", self.requested)
         self.context.on("response", self.responded)
         self.context.on("requestfinished", self.finished)
@@ -224,6 +227,8 @@ class AgentResponseCapture:
             await asyncio.sleep(min(0.02, max(0, deadline - monotonic())))
 
     async def close(self):
+        if self.resources:
+            self.resources.close()
         if self.context:
             for event, callback in {"request": self.requested, "response": self.responded,
                                     "requestfinished": self.finished,

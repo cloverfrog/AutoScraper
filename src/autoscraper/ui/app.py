@@ -53,6 +53,7 @@ def build_app(manager):
             initial_spec_json=data["initial_spec_json"] or "",
             execute=data["execute"], headed=data["headed"],
             login=data["login"] if mode == "spec" else False,
+            download_resources=data["download_resources"] if mode == "spec" else False,
             auth_profile=(data["auth_profile"] or "").strip(),
             browser_path=(data["browser_path"] or "").strip(),
             fields=data["fields"] or "", count=data["count"], agent_options=agent_options,
@@ -160,6 +161,9 @@ def build_app(manager):
                     label="规则 JSON（可直接粘贴或编辑）", value="", lines=10,
                 )
                 controls["login"] = gr.Checkbox(label="抓取前人工登录（需启用可见浏览器）")
+                controls["download_resources"] = gr.Checkbox(
+                    label="保存协议声明的资源文件（默认仅导出 URL）", value=False,
+                )
                 spec_start = gr.Button("执行规则", variant="primary")
         with gr.Row():
             controls["headed"] = gr.Checkbox(label="显示浏览器，允许人工接管", value=False)
@@ -225,7 +229,7 @@ def build_app(manager):
                 cancel = gr.Button("结束等待 / 取消接管")
         summary = gr.JSON(label="执行摘要与验证反馈")
         preview = gr.JSON(label="数据预览（最多 100 条）")
-        files = gr.File(label="下载规则和 JSON / CSV", file_count="multiple", interactive=False)
+        files = gr.File(label="下载规则、JSON / CSV 和资源包", file_count="multiple", interactive=False)
         logs = gr.Textbox(label="实时运行日志", lines=18, max_lines=30, interactive=False)
         timer = gr.Timer(1)
         # 客户端事件保存实际表单值，预设填充和手动编辑都能记住，轮询不参与。
