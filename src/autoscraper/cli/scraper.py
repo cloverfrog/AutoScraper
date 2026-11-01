@@ -13,6 +13,7 @@ from pydantic import ValidationError
 from autoscraper.scraping.errors import ContentTimeout, NavigationError, ScrapeError
 from autoscraper.scraping.executor import ScraperExecutor
 from autoscraper.scraping.export import export_records
+from autoscraper.scraping.network import NetworkError
 from autoscraper.scraping.spec import ScraperSpec
 from autoscraper.browser.access import BrowserAccess, HandoffRequired
 from autoscraper.cli.interaction import wait_for_user
@@ -92,7 +93,7 @@ def main() -> int:
     except (OSError, ValueError, ValidationError, ScrapeError, PlaywrightError) as exc:
         code = (
             exc.code
-            if isinstance(exc, (NavigationError, ContentTimeout))
+            if isinstance(exc, (NavigationError, ContentTimeout, NetworkError))
             else "selector_failure"
             if isinstance(exc, ScrapeError)
             else "execution_failure"

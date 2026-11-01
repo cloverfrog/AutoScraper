@@ -3,6 +3,7 @@
 import asyncio
 import json
 from pathlib import Path
+from unittest.mock import AsyncMock
 from types import SimpleNamespace
 
 import pytest
@@ -298,6 +299,7 @@ def test_explorer_unsupported_tool_is_a_failure_terminal(settings, monkeypatch):
             )
 
     monkeypatch.setattr(bu, "BrowserSession", Browser)
+    monkeypatch.setattr("autoscraper.agent.explorer.AgentResponseCapture.start", AsyncMock())
     monkeypatch.setattr(bu, "Agent", Agent)
     with pytest.raises(UnsupportedTaskError, match="login"):
         asyncio.run(
@@ -1284,7 +1286,7 @@ def test_cli_initial_spec_rejects_other_writers(candidate, monkeypatch, tmp_path
 # 工作流必填检查支持合法列表及零计数，仍拒绝空列表、空文本和无效类型。
 @pytest.mark.parametrize("value,valid", [
     (0, True), (2, True), (["A", "B"], True), ([], False), ([" "], False),
-    (["A", ""], False), (None, False), (False, False), (" ", False),
+    (["A", ""], False), (None, False), (False, True), (-1.25, True), (float("inf"), False), (" ", False),
 ])
 def test_validate_multi_element_values(value, valid):
     result = ScrapeResult(records=[{"value": value}], stop_reason="no_pagination")

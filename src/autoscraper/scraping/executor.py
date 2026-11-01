@@ -40,7 +40,7 @@ def wait_for_content(locator: Locator, url: str, timeout_ms: int | None):
 class ScrapeFailure:
     """Typed diagnostic accompanying a legacy string in ScrapeResult.errors."""
 
-    code: Literal["navigation_failure", "navigation_timeout", "content_timeout", "selector_failure"]
+    code: Literal["navigation_failure", "navigation_timeout", "content_timeout", "selector_failure", "json_path_failure"]
     message: str
     url: str
 
@@ -375,6 +375,9 @@ class ScraperExecutor:
     # 调用方拥有列表 Page，本函数只负责关闭自己创建的详情 Page。
     def run_page(self, spec: ScraperSpec, page: Page) -> ScrapeResult:
         """Accept a caller-owned page; detail rules need an explicit BrowserContext."""
+        if spec.network is not None:
+            from .network_executor import run_network
+            return run_network(spec, page)
         result = ScrapeResult()
         seen_records: set[tuple] = set()
         seen_pages: set[str] = set()

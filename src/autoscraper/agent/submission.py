@@ -127,9 +127,15 @@ class SubmissionChecks:
                 )
             }
         role = "listing" if is_listing else "detail" if page in detail_urls else "other"
+        if spec is not None and spec.network is not None:
+            return {
+                "url": page, "role": role, "candidate_pending": None,
+                "guidance": "This DOM summary does not report network evidence. Use test_network "
+                "with the exact source and dedupe_by; verify the initial page and pagination.",
+            }
         field_tests = sum(1 for test_url, _, field, _, _ in self.tests if test_url == page and field)
         pending = []
-        if spec is not None and role in {"listing", "detail"}:
+        if spec is not None and spec.network is None and role in {"listing", "detail"}:
             fields = spec.fields if is_listing else spec.detail.fields
             root = spec.item_selector if is_listing else "html"
             pending.extend(
@@ -205,6 +211,16 @@ class SubmissionChecks:
     def check(self, spec: ScraperSpec):
         issues = validate_spec(spec, self.requirements) if self.requirements else []
         url = self.actual_url(spec.start_url)
+        if spec.network is not None:
+            pagination = spec.network.pagination
+            if pagination is not None:
+                attribute = "href" if pagination.type == "link" else ""
+                control = self.result(url, pagination.next_selector, "", attribute)
+                if not self.passed(control, pagination.type == "link") or control.get("count") != 1:
+                    issues.append(Feedback(code="selector_failure", message=
+                        "Test the exact network pagination CSS control on the initial page "
+                        "using test_selector (href for link pagination)."))
+            return issues
 
         def require(test_url, item, selector, attribute="", required=True, extract=None):
             result = self.result(test_url, item, selector, attribute, extract)

@@ -280,3 +280,80 @@ Python 3.12.10；依赖版本记录于 `uv.lock`。全套测试（包含线上�
 1 项通过。真实 Books to Scrape 返回 25 条唯一记录，访问 2 个列表页、25 个详情页，
 标题、价格、description 均非空，零抓取错误。此验证使用手写 v2 示例，不调用真实 LLM；
 Agent 的详情探索提示、结构化解析及修复链路通过确定性测试验证。
+
+## 浏览器网络 JSON（v3）
+
+v3 使用独立的 `network` 数据源，不能同时声明 DOM `item_selector`、`fields`、
+`detail` 或顶层 `pagination`。旧 v1/v2 规则仍要求原有 CSS 字段；默认版本仍是 v1。
+完整示例见 `examples/books.network.json`，本地页面由 `examples/network_demo.py` 提供。
+
+```json
+{
+  "version": "3",
+  "start_url": "http://127.0.0.1:8765/",
+  "network": {
+    "url_pattern": "http://127.0.0.1:8765/api/items",
+    "method": "GET",
+    "records_path": ["data", "items"],
+    "fields": {
+      "id": {"path": ["id"]},
+      "stock": {"path": ["stock"], "required": true},
+      "active": {"path": ["active"]}
+    },
+    "pagination": {"type": "click", "next_selector": "#next"}
+  },
+  "dedupe_by": ["id"],
+  "max_items": 100,
+  "max_pages": 5,
+  "on_item_error": "fail"
+}
+```
+
+- `url_pattern` 为大小写敏感的 HTTP(S) URL 模式（`*` 通配，方括号按字面匹配），
+  只匹配去掉查询串和 fragment 的地址；
+  `method` 精确匹配 GET/POST/PUT/PATCH/DELETE。页码与轮换 Token 不固化到规则中。
+  首版不按请求体匹配，不能区分同一 URL、同一方法下不同 GraphQL 操作。
+- 仅采集 Fetch/XHR；匹配响应须为 2xx，类型须为 `application/json` 或 `+json`。
+  非 JSON、HTTP 错误、正文不可读/过大均显式失败，不作为空数据处理。
+- `records_path` 必须指向数组。路径是最多 32 个键或非负整数下标组成的数组，
+  空路径表示根值；键可包含点号。不支持 JSONPath 表达式、递归、通配或用户代码。
+- 字段路径相对每条记录，`required` 默认 true。可输出字符串、有限整数/小数、布尔值、
+  文本列表或可选 null；`0`、负数和 `false` 均是有效必填值。对象及复杂数组拒绝提取。
+  `filters` 沿用现有比较规则，布尔字段可导出，但首版筛选条件不增加布尔比较语法。
+- 沿用顶层 `max_items`、`max_pages`、`timeout_ms`、`content_timeout_ms`、`filters`、
+  `dedupe_by` 和 `on_item_error`。`max_items` 限制筛选后的结果，`max_pages` 限制初始加载
+  加分页动作的批次数。去重保留类型，`false` 与数字 `0` 不会因 Python 相等语义被合并。
+
+网络分页放在 `network.pagination`：
+
+- `{"type":"link","next_selector":"CSS"}`：读取唯一 Next 控件的 href 后正常导航。
+- `{"type":"click","next_selector":"CSS","end_selector":"可选 CSS"}`：点击页面按钮，
+  可选结束标志按可见性检查。不使用 DOM append/replace 进度，不支持滚动。
+
+每次导航/点击前均已监听，请求开始序号划分批次，点击前尚未完成的请求不能冒充点击后的响应。
+统计分为 `responses`（收到响应头）、`extracted`（字段提取成功）、`added`（按去重键实际新增）。
+三者分别写入 `network.batch`，不会因收到重复响应就判定成功。
+被筛选排除但原始身份全新的记录仍证明数据推进，不计入最终 `max_items`。
+同一批内多个已观察到的匹配响应合并处理；有新增且已观察到的请求全部完成后，
+保留 100ms 静默窗口再结束本批，仍受内容超时约束。首版面向导航/按钮触发的有限请求批次；
+不能保证纳入任意延迟发起的后台轮询或流式批次，请勿用它抓取这类持续更新接口。
+
+响应缺失或正文未完成返回 `response_timeout`，不因按钮消失或禁用而改报正常结束。
+字段/数组路径错误为 `json_path_failure`，收到响应且提取成功但无新增为
+`network_progress_failure`，其余读取错误为 `response_failure`。
+空数组只有未配置分页、Next 控件消失/禁用或结束标志可见时才可自然结束；
+全重复批次即使按钮随后禁用也报告无推进。达到批次上限仍是 `max_pages`，不能宣称完整完成。
+路径和推进错误可反馈修复；响应超时及读取错误不自动消耗修复模型预算。
+
+Agent 使用同一浏览器上下文旁路观察，监听早于首次导航。发现/样本/测试工具都不发起 API。
+提交需要当前会话的首次列表页提取证据；有分页时还需初始页的精确控件测试、真实浏览器动作
+以及动作后新增记录的证据。提交时重新测试最终网络规则和去重键；独立 Executor 仍会重跑验证。
+人工接管后清除网络证据及缓存，避免把接管前账户数据作为新证据。
+
+缓存最多保留 40 个候选响应、单响应正文 1MB、正文累计 4MB；并发读取最多 40 个。
+探索缓存满后淘汰旧候选并报告 dropped；执行批次超出响应数量上限则失败，不静默丢数据。
+已知 Content-Length 过大时不读取，其他响应读取完成后检查实际解码字节数；
+因此这是保留/解析上限，并非浏览器或协议传输层的严格内存上限。
+只采集所需元数据和 JSON，不保存请求头、Cookie、请求正文或 HAR；返回的 URL 不含查询值。
+查看样本最多四层、每层十二个键、数组两个元素、字符串一百字符、总输出 8000 字符，
+并遮盖已知凭据字段；这不是任意敏感业务数据识别器。Trace 工具摘要不保留网络 JSON 样本。

@@ -488,3 +488,33 @@ uv run autoscraper-ui --host 100.x.y.z --reload
 - `.agent-runtime/ui/traces/`：原有 Trace 记录，禁止网页下载。
 
 安装 UI 不影响 `autoscraper` 和 `autoscraper-agent` 的使用；CLI 的路径和交互行为保持不变。
+
+## 浏览器网络 JSON 数据源
+
+当字段只存在于 Fetch/XHR 的 JSON 响应中时，Agent 可以生成 v3 网络规则。
+采集在首次导航前安装，`list_network_responses` 列出候选元数据，
+`inspect_network_response` 查看有界样本，`test_network` 测试原样规则及去重键。
+旧 v1/v2 DOM 规则继续使用原执行路径，CLI/UI 的操作方式不变。
+
+可先启动不依赖外网的示例页面：
+
+```bash
+uv run python examples/network_demo.py
+```
+
+在另一个终端执行已有网络规则（不调用模型）：
+
+```bash
+uv run autoscraper examples/books.network.json --output output/network-books.json --output output/network-books.csv
+```
+
+也可以让 Agent 从页面发现这些字段并生成规则：
+
+```bash
+uv run --extra agent autoscraper-agent "http://127.0.0.1:8765/" "抓取前10本书，字段为id、title、stock、price、active，包括页面未展示的库存、价格和启用状态，点击Next抓取后续数据" --fields id title stock price active --count 10 --spec-output output/network-rule.json --output output/network-data.json
+```
+
+页面只显示书名，接口额外包含库存、小数价格及布尔值；示例共两条，按钮禁用后正常结束。
+规则通过浏览器导航和点击触发请求，不拼装或重放 API，不下载资源文件。
+首版支持初始加载、Next 链接及点击分页，不支持滚动、DOM/网络字段混合或网络详情关联。
+网络协议、缓存限制和分页完成语义见 [协议参考](docs/reference.md#浏览器网络-json-v3)。

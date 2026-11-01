@@ -24,6 +24,10 @@ class Feedback(ProtocolModel):
         "count_mismatch",
         "invalid_spec",
         "selector_failure",
+        "json_path_failure",
+        "response_failure",
+        "response_timeout",
+        "network_progress_failure",
         "navigation_failure",
         "navigation_timeout",
         "content_timeout",
@@ -98,9 +102,11 @@ def validate_spec(spec: ScraperSpec, requirements: TaskRequirements) -> list[Fee
             Feedback(
                 code="missing_required_field",
                 fields=missing,
-                message="Preserve every requested field name and mark it required in fields or detail.fields. "
+                message=("Preserve every requested field name and mark it required in network.fields."
+                         if spec.network else
+                         "Preserve every requested field name and mark it required in fields or detail.fields. "
                         "For detailed description use detail.fields.description; do not rename it "
-                        "to detail_description or substitute a short listing description",
+                        "to detail_description or substitute a short listing description"),
             )
         )
     if requirements.count is not None and spec.max_items != requirements.count:
@@ -188,7 +194,7 @@ def validate_data(result: ScrapeResult, requirements: TaskRequirements) -> list[
             Feedback(
                 code=error.code,
                 message=error.message,
-                recoverable=error.code == "selector_failure",
+                recoverable=error.code in {"selector_failure", "json_path_failure"},
             )
         )
     # 兼容只返回 errors 文本的旧调用方；已有结构化描述的同一错误不重复转换。

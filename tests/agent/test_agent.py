@@ -5,6 +5,7 @@ import json
 import os
 from importlib import import_module
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -363,6 +364,7 @@ def test_exploration_prompt_preserves_task_context(monkeypatch, rule, context):
         content_timeout_ms=4000,
     )
     monkeypatch.setattr(bu, "BrowserSession", Browser)
+    monkeypatch.setattr("autoscraper.agent.explorer.AgentResponseCapture.start", AsyncMock())
     monkeypatch.setattr(bu, "Agent", Agent)
     asyncio.run(
         generate_spec(
@@ -470,6 +472,7 @@ def test_runner_limits_validation_cleanup(monkeypatch, rule, outcome):
             )
 
     monkeypatch.setattr(bu, "BrowserSession", Browser)
+    monkeypatch.setattr("autoscraper.agent.explorer.AgentResponseCapture.start", AsyncMock())
     monkeypatch.setattr(bu, "Agent", Agent)
     monkeypatch.setattr(helpers, "make_llm", lambda settings: SimpleNamespace(budget_blocked=False))
     settings = AgentSettings(

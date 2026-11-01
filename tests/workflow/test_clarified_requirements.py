@@ -4,6 +4,7 @@ import asyncio
 import json
 from importlib import import_module
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -136,6 +137,7 @@ def execute_scenario(monkeypatch, *, answer=REQUEST.options[0], count=21, failur
 
     monkeypatch.setattr(bu, "Agent", Agent)
     monkeypatch.setattr(bu, "BrowserSession", Browser)
+    monkeypatch.setattr("autoscraper.agent.explorer.AgentResponseCapture.start", AsyncMock())
     monkeypatch.setattr(models, "make_llm", lambda settings: model)
     monkeypatch.setattr(models, "make_wait_llm", lambda settings: SimpleNamespace(calls=0, max_calls=0))
 

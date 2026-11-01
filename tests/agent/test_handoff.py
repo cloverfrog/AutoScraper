@@ -184,6 +184,7 @@ def test_same_agent_resumes_and_clears_old_selector_evidence(monkeypatch, answer
             )
 
     monkeypatch.setattr(bu, "BrowserSession", Browser)
+    monkeypatch.setattr("autoscraper.agent.explorer.AgentResponseCapture.start", AsyncMock())
     monkeypatch.setattr(bu, "Agent", Agent)
     settings = AgentSettings(
         api_key="fake", model="test", base_url="https://llm.test", timeout_seconds=1

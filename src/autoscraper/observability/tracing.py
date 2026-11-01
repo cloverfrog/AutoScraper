@@ -79,6 +79,8 @@ def summarize_tool_output(content):
     if not isinstance(data, dict):
         return data
     data = dict(data)
+    if data.get("network"):
+        return {key: value for key, value in data.items() if key != "sample"}
     if isinstance(data.get("nodes"), list):
         nodes = [node for node in data["nodes"] if isinstance(node, dict)]
         controls = [

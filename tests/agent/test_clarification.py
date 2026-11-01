@@ -170,6 +170,7 @@ def test_generation_resumes_same_agent_or_returns_pending(monkeypatch, answer):
 
     monkeypatch.setattr(bu, "Agent", Agent)
     monkeypatch.setattr(bu, "BrowserSession", Browser)
+    monkeypatch.setattr("autoscraper.agent.explorer.AgentResponseCapture.start", AsyncMock())
     settings = AgentSettings(api_key="fake", model="test", base_url="https://llm.test", max_steps=4)
     from autoscraper.agent.explorer import UnsupportedTaskError
 
@@ -245,6 +246,7 @@ def test_human_wait_excluded_from_timeout(monkeypatch):
 
     monkeypatch.setattr(bu, "Agent", Agent)
     monkeypatch.setattr(bu, "BrowserSession", Browser)
+    monkeypatch.setattr("autoscraper.agent.explorer.AgentResponseCapture.start", AsyncMock())
     settings = AgentSettings(
         api_key="fake",
         model="test",

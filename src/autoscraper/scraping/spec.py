@@ -4,6 +4,7 @@
 """Versioned, JSON-serializable protocol. No browser or agent dependencies."""
 
 import re
+from urllib.parse import urlsplit
 from typing import Annotated, Literal
 
 from pydantic import (
@@ -167,12 +168,57 @@ class DetailSpec(ProtocolModel):
         return fields
 
 
-# 一份可序列化、可重复执行的完整规则；v1 处理列表，v2 可额外声明一层详情。
+# JSON 路径只遍历显式键和数组下标，不提供通配、递归或表达式执行。
+JsonPath = Annotated[list[StrictStr | Annotated[StrictInt, Field(ge=0)]], Field(max_length=32)]
+
+
+class JsonFieldSpec(ProtocolModel):
+    path: JsonPath
+    required: bool = True
+
+
+# 网络分页只声明浏览器动作；每个响应独立提供一批记录，不借用 DOM 的 append/replace。
+class NetworkClickPagination(ProtocolModel):
+    type: Literal["click"]
+    next_selector: NonEmpty
+    end_selector: NonEmpty | None = None
+
+
+class NetworkSource(ProtocolModel):
+    # 匹配不带查询串的 HTTP(S) URL，避免将轮换 Token 或页码固化进规则。
+    url_pattern: Annotated[str, Field(min_length=1, max_length=2048)]
+    method: Literal["GET", "POST", "PUT", "PATCH", "DELETE"] = "GET"
+    records_path: JsonPath
+    fields: dict[NonEmpty, JsonFieldSpec] = Field(min_length=1, max_length=50)
+    pagination: Annotated[
+        LinkPagination | NetworkClickPagination, Field(discriminator="type")
+    ] | None = None
+
+    @field_validator("url_pattern")
+    @classmethod
+    def check_pattern(cls, value):
+        if not value.startswith(("https://", "http://")) or "?" in value or "#" in value:
+            raise ValueError("url_pattern requires an HTTP(S) URL glob without query or fragment")
+        parts = urlsplit(value)
+        if not parts.hostname or parts.username is not None or parts.password is not None:
+            raise ValueError("url_pattern requires a host and must not contain credentials")
+        return value
+
+    @field_validator("fields")
+    @classmethod
+    def check_names(cls, fields):
+        if any(not name.strip() for name in fields):
+            raise ValueError("field names must not be whitespace")
+        return fields
+
+
+# 一份可序列化的完整规则：v1/v2 提取 DOM 列表/详情，v3 独立提取网络 JSON。
 class ScraperSpec(ProtocolModel):
-    version: Literal["1", "2"] = "1"
+    version: Literal["1", "2", "3"] = "1"
     start_url: HttpUrl
-    item_selector: NonEmpty
-    fields: dict[NonEmpty, FieldSpec] = Field(min_length=1)
+    item_selector: NonEmpty | None = None
+    fields: dict[NonEmpty, FieldSpec] = Field(default_factory=dict)
+    network: NetworkSource | None = None
     detail: DetailSpec | None = None
     filters: list[FilterSpec] = Field(default_factory=list)
     pagination: PaginationSpec | None = None
@@ -198,18 +244,28 @@ class ScraperSpec(ProtocolModel):
 
     # 按列表在前、详情在后的顺序合并字段，供去重、验证和导出共同使用。
     @property
-    def all_fields(self) -> dict[str, FieldSpec]:
+    def all_fields(self) -> dict[str, FieldSpec | JsonFieldSpec]:
+        if self.network is not None:
+            return self.network.fields
         return {**self.fields, **(self.detail.fields if self.detail else {})}
 
     # 统一检查版本、字段重名和去重键；去重键只能引用已声明且必填的字段。
     @model_validator(mode="after")
     def check_dedupe(self):
+        if self.network is not None:
+            if self.version != "3":
+                raise ValueError("network requires protocol version '3'")
+            if self.item_selector is not None or self.fields or self.detail or self.pagination:
+                raise ValueError("network cannot be mixed with DOM fields, detail or pagination")
+        elif self.version == "3" or self.item_selector is None or not self.fields:
+            raise ValueError("DOM rules require version 1/2, item_selector and nonempty fields")
         if self.detail is not None:
             if self.version != "2":
                 raise ValueError("detail requires protocol version '2'")
             if self.fields.keys() & self.detail.fields.keys():
                 raise ValueError("Listing and detail field names must not overlap")
-        if any(condition.field not in self.fields for condition in self.filters):
+        if any(condition.field not in (self.network.fields if self.network else self.fields)
+               for condition in self.filters):
             raise ValueError("filters must reference listing fields")
         if set(self.dedupe_by) - self.all_fields.keys():
             raise ValueError("dedupe_by must reference declared fields")

@@ -51,9 +51,33 @@ class TracedTools(Tools):
         if not params:
             return await super().act(action, **kwargs)
         name, inputs = next(iter(params.items()))
+        capture = getattr(self, "network_capture", None)
+        if capture and name in {"navigate", "click"}:
+            capture.actions.append((name, capture.buffer.sequence))
+            capture.actions = capture.actions[-40:]
         if checks and name == "done" and inputs.get("success") is not False and inputs.get("data"):
             candidate = ScraperSpec.model_validate(inputs["data"])
             checks.last_candidate = candidate
+            if candidate.network is not None:
+                from .network import rule_key
+                if capture:
+                    await self.registry.registry.actions["test_network"].function(
+                        source=candidate.network, dedupe_by=candidate.dedupe_by,
+                    )
+                await self._refresh_control(candidate, kwargs.get("browser_session"))
+                issues = checks.check(candidate)
+                if not capture or rule_key(candidate.network, candidate.dedupe_by) not in capture.evidence:
+                    from autoscraper.workflow.validation import Feedback
+                    issues.append(Feedback(code="json_path_failure", message=
+                        "Use test_network with the exact final network rule; verify initial-page "
+                        "fields and genuinely new records after the pagination action."))
+                checks.last_issues = issues
+                if issues:
+                    return ActionResult(extracted_content=json.dumps({
+                        "status": "candidate_rejected", "candidate": candidate.model_dump(mode="json"),
+                        "feedback": [issue.model_dump() for issue in issues],
+                    }))
+                return await super().act(action, **kwargs)
             listing = await self._refresh_listing(candidate, kwargs.get("browser_session"))
             control = await self._refresh_control(candidate, kwargs.get("browser_session"))
             refreshed = await self._refresh_progress(candidate, kwargs.get("browser_session"))
@@ -168,7 +192,7 @@ class TracedTools(Tools):
     # 分页控件只需精确 CSS 计数，提交时自动完成这类确定性检查，节省模型调用。
     # 只在当前列表页取证；无匹配或多匹配仍拒绝，不替模型寻找或修正选择器。
     async def _refresh_control(self, candidate, browser_session):
-        pagination = candidate.pagination
+        pagination = candidate.network.pagination if candidate.network else candidate.pagination
         if not browser_session or not pagination or pagination.type not in {"click", "link"}:
             return None
         url = self.submission.actual_url(candidate.start_url)
@@ -229,8 +253,10 @@ def build_tools(
     requirements=None,
     listing_url: str | None = None,
     reference_spec: ScraperSpec | None = None,
+    network_capture=None,
 ) -> Tools:
     tools = TracedTools()
+    tools.network_capture = network_capture
     tools.submission = SubmissionChecks(
         requirements, listing_url=listing_url, reference_spec=reference_spec,
     ) if check_submission else None
@@ -238,6 +264,10 @@ def build_tools(
     for name in list(tools.registry.registry.actions):
         if name not in {"navigate", "done", "click", "scroll"}:
             tools.registry.exclude_action(name)
+
+    if network_capture is not None:
+        from .network import register_network_tools
+        register_network_tools(tools, network_capture, content_timeout_ms)
 
     if access is not None:
         # 工具只登记接管请求并终止本批动作，真正等待用户发生在 Agent.run 返回之后。
