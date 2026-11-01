@@ -22,7 +22,6 @@ class Feedback(ProtocolModel):
     code: Literal[
         "missing_required_field",
         "count_mismatch",
-        "filter_mismatch",
         "invalid_spec",
         "selector_failure",
         "navigation_failure",
@@ -112,20 +111,8 @@ def validate_spec(spec: ScraperSpec, requirements: TaskRequirements) -> list[Fee
                 message=f"max_items must equal requested count {requirements.count}",
             )
         )
-    # URL 条件只声明覆盖关系，具体可用性由 Agent 在正常探索中判断；本地条件核对同一基准。
-    # 这里不比较页面相关的临时转换，但禁止条件遗漏、变更和擅自增加限制。
-    declared = [condition.model_dump(include={"field", "operator", "value"})
-                for condition in [*spec.filters, *spec.url_filters]]
-    expected = [condition.model_dump() for condition in requirements.filters]
-    if any(condition not in declared for condition in expected) or any(
-        condition not in expected for condition in declared
-    ):
-        issues.append(Feedback(
-            code="filter_mismatch",
-            message="Preserve exactly the authoritative filtering conditions in filters or "
-                    "url_filters. Keep field names, operators and comparison values unchanged; "
-                    "use temporary transforms only to interpret the extracted representation.",
-        ))
+    # 筛选要求保留在 Agent 上下文；这里不以声明逐项匹配推断 URL 的实际筛选语义。
+    # 本地 filters 的字段引用、操作符和转换参数由协议模型校验，实际判断由执行器完成。
     if spec.max_pages > 100 or spec.timeout_ms > 30000:
         issues.append(
             Feedback(code="invalid_spec", message="Use max_pages <= 100 and timeout_ms <= 30000")

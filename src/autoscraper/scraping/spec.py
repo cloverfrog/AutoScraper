@@ -5,7 +5,6 @@
 
 import re
 from typing import Annotated, Literal
-from urllib.parse import urlsplit
 
 from pydantic import (
     BaseModel, ConfigDict, Field, HttpUrl, StrictFloat, StrictInt, StrictStr,
@@ -43,7 +42,7 @@ class FieldSpec(ProtocolModel):
 FilterValue = StrictStr | StrictInt | Annotated[StrictFloat, Field(allow_inf_nan=False)]
 
 
-# 与页面表示无关的用户条件，也用于声明 URL 已承担的筛选要求。
+# 与页面表示无关的用户条件，供需求上下文与本地筛选协议共用。
 class FilterCondition(ProtocolModel):
     field: NonEmpty
     operator: Literal["eq", "ne", "contains", "lt", "lte", "gt", "gte"]
@@ -176,8 +175,6 @@ class ScraperSpec(ProtocolModel):
     fields: dict[NonEmpty, FieldSpec] = Field(min_length=1)
     detail: DetailSpec | None = None
     filters: list[FilterSpec] = Field(default_factory=list)
-    # URL 条件由 Agent 在正常探索中确认；仅用于需求核对，不在执行器重复筛选。
-    url_filters: list[FilterCondition] = Field(default_factory=list)
     pagination: PaginationSpec | None = None
     # max_pages 统计已处理列表批次；滚动重试另受 max_scrolls 约束。
     max_items: int = Field(default=100, ge=1, le=1_000_000)
@@ -213,8 +210,6 @@ class ScraperSpec(ProtocolModel):
                 raise ValueError("Listing and detail field names must not overlap")
         if any(condition.field not in self.fields for condition in self.filters):
             raise ValueError("filters must reference listing fields")
-        if self.url_filters and not urlsplit(str(self.start_url)).query:
-            raise ValueError("url_filters require URL query parameters")
         if set(self.dedupe_by) - self.all_fields.keys():
             raise ValueError("dedupe_by must reference declared fields")
         if any(not self.all_fields[name].required for name in self.dedupe_by):

@@ -92,6 +92,6 @@ class TaskOutcome:
             "clarifications": self.clarifications,
             "pending_clarification": self.pending_clarification,
             "pending_handoff": self.pending_handoff,
-            "validation_scope": "protocol, required fields, count, filter declarations and extraction; "
+            "validation_scope": "protocol, required fields, count and extraction; "
             "source equivalence and semantic constraints are not independently verified",
         }

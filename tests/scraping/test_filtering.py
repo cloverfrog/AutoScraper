@@ -81,17 +81,14 @@ def test_invalid_filters(update):
         FilterSpec.model_validate({"field": "price", "operator": "lt", "value": 30, **update})
 
 
-# 本地筛选只能引用列表字段；URL 覆盖声明不要求额外提取字段，但必须带查询参数。
+# 本地筛选只能引用列表字段，不能引用未声明字段或详情字段。
 def test_filter_protocol_boundaries():
     data = dict(start_url="https://fixture.test/", item_selector="article", fields={"title": {"selector": "h2"}})
     with pytest.raises(ValidationError, match="listing fields"):
         ScraperSpec(**data, filters=[condition()])
     with pytest.raises(ValidationError, match="listing fields"):
         ScraperSpec(**data, version="2", detail={"url_selector": "a", "fields": {"price": {"selector": "p"}}}, filters=[condition()])
-    with pytest.raises(ValidationError, match="query parameters"):
-        ScraperSpec(**data, url_filters=[condition()])
-    spec = ScraperSpec(**{**data, "start_url": "https://fixture.test/?price=30"}, url_filters=[condition().model_dump(exclude={"transforms"})])
-    assert not spec.filters
+
 
 
 # 离线浏览器使用显式 Context，以允许列表与独立详情页共用本地路由。

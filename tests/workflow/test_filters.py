@@ -1,4 +1,4 @@
-# 筛选需求与工作流回归：独立保留条件，允许 URL 覆盖，并区分无匹配与提取失败。
+# 筛选需求与工作流回归：独立保留条件，允许 URL 直接筛选，并区分无匹配与提取失败。
 import asyncio
 from types import SimpleNamespace
 
@@ -37,26 +37,22 @@ def test_explicit_fields_count_do_not_bypass_filter_extraction():
     assert result.filters[0].model_dump() == PRICE
 
 
-# 条件遗漏、修改或额外缩小范围都被拒绝，转换参数不参与与用户条件的直接比较。
-@pytest.mark.parametrize("filters,valid", [
-    ([], False), ([PRICE], True), ([{**PRICE, "transforms": TRANSFORMS}], True),
-    ([{**PRICE, "value": 3}], False), ([{**PRICE, "operator": "lte"}], False),
-    ([{**PRICE, "field": "title"}], False),
-    ([PRICE, {"field": "title", "operator": "eq", "value": "A"}], False),
-])
-def test_authoritative_filter_validation(candidate, filters, valid):
-    spec = ScraperSpec.model_validate({**candidate.model_dump(), "filters": filters})
-    requirements = TaskRequirements(fields=["title", "price"], count=2, filters=[PRICE])
-    assert (not validate_spec(spec, requirements)) is valid
-
-
-# URL 条件只声明覆盖即可沿用原始字段提取；不强制再添加同一份本地筛选。
-def test_url_filter_coverage(candidate):
+# URL 可直接实现筛选，需求中的逻辑字段名无需对应 URL 参数名或输出字段。
+def test_url_filter_without_coverage_declaration(candidate):
     spec = ScraperSpec.model_validate({**candidate.model_dump(),
-        "start_url": "https://fixture.test/?max_price=2", "url_filters": [PRICE]})
-    requirements = TaskRequirements(fields=["title", "price"], count=2, filters=[PRICE])
+        "start_url": "https://fixture.test/?q=Boston+Bruins"})
+    requirements = TaskRequirements(fields=["title", "price"], count=2,
+        filters=[{"field": "team", "operator": "eq", "value": "Boston Bruins"}])
     assert validate_spec(spec, requirements) == [] and not spec.filters
-    assert validate_spec(spec, requirements.model_copy(update={"filters": []}))[0].code == "filter_mismatch"
+
+
+# 本地筛选可以使用真实提取字段名，不因需求解析选用了不同命名而被误拒绝。
+def test_local_filter_uses_listing_field_names(candidate):
+    spec = ScraperSpec.model_validate({**candidate.model_dump(), "filters": [
+        {"field": "title", "operator": "eq", "value": "A"}]})
+    requirements = TaskRequirements(fields=["title", "price"], count=2,
+        filters=[{"field": "name", "operator": "eq", "value": "A"}])
+    assert validate_spec(spec, requirements) == []
 
 
 # 全部筛除自然结束是正常空结果；有目标数量时只报告不可修复的数量不足。
@@ -90,19 +86,22 @@ def test_empty_preview_continues_full_execution(candidate):
     assert preview.filters == spec.filters
 
 
-# 真实离线提取与有限修复：第一轮遗漏条件，第二轮保留临时转换且只保存匹配记录。
-def test_workflow_repairs_omitted_filter(candidate, settings, workflow, monkeypatch, executor_page):
+# URL 筛选候选无需冗余声明即可通过完整工作流，独立需求仍传给 Agent。
+def test_workflow_accepts_url_filter_without_declaration(
+    candidate, settings, workflow, monkeypatch, executor_page,
+):
     module, _ = workflow
-    requirements = TaskRequirements(fields=["title", "price"], count=1, filters=[PRICE])
+    requirement = {"field": "name", "operator": "eq", "value": "A"}
+    requirements = TaskRequirements(fields=["title", "price"], count=1, filters=[requirement])
     async def parse(*args):
         return requirements
     monkeypatch.setattr(module, "extract_requirements", parse)
-    plain = candidate.model_copy(update={"max_items": 1})
-    filtered = ScraperSpec.model_validate({**plain.model_dump(), "filters": [{**PRICE, "transforms": TRANSFORMS}]})
-    received = test_workflow.install_candidates(monkeypatch, workflow, [plain, filtered])
-    result = run_task(test_workflow.URL, "价格低于2元，前1条", settings, execute=True)
-    assert result.status == "success" and result.attempts == 2
-    assert received[1]["feedback"][0].code == "filter_mismatch"
+    spec = ScraperSpec.model_validate({**candidate.model_dump(), "max_items": 1,
+        "start_url": "https://fixture.test/?q=A"})
+    received = test_workflow.install_candidates(monkeypatch, workflow, [spec])
+    result = run_task(test_workflow.URL, "名称为A的前1条", settings, execute=True)
+    assert result.status == "success" and result.attempts == 1
+    assert received[0]["requirements"].filters[0].model_dump() == requirement
     assert result.data.records == [{"title": "A", "price": "£1"}]
 
 
@@ -127,11 +126,11 @@ def test_workflow_executes_after_filtered_preview(candidate, settings, workflow,
     assert runs[0].filters == runs[1].filters
 
 
-# URL 与本地可以各覆盖一部分条件；不要求 URL 覆盖的字段出现在输出中。
-def test_mixed_url_and_local_filter_coverage(candidate):
+# URL 与本地可以各实现一部分筛选，URL 筛选不要求额外提取字段。
+def test_mixed_url_and_local_filtering(candidate):
     city = {"field": "city", "operator": "eq", "value": "北京"}
     spec = ScraperSpec.model_validate({**candidate.model_dump(),
-        "start_url": "https://fixture.test/?city=beijing", "url_filters": [city],
+        "start_url": "https://fixture.test/?city=beijing",
         "filters": [{**PRICE, "transforms": TRANSFORMS}]})
     assert validate_spec(spec, TaskRequirements(fields=["title", "price"], count=2, filters=[city, PRICE])) == []
     assert "city" not in spec.fields
