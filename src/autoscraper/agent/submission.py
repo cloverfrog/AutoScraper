@@ -213,7 +213,7 @@ class SubmissionChecks:
         url = self.actual_url(spec.start_url)
         if spec.network is not None:
             pagination = spec.network.pagination
-            if pagination is not None:
+            if pagination is not None and pagination.type != "scroll":
                 attribute = "href" if pagination.type == "link" else ""
                 control = self.result(url, pagination.next_selector, "", attribute)
                 if not self.passed(control, pagination.type == "link") or control.get("count") != 1:

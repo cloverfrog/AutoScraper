@@ -92,12 +92,18 @@ pagination}}, omit DOM item_selector/fields/detail/pagination. Each network fiel
 url_pattern is an HTTP(S) glob WITHOUT query or fragment, method is exact. Values may be text,
 finite numbers, booleans or text lists; objects/complex arrays are unsupported. Preserve 0/false.
 Network pagination supports network.pagination={{"type":"click","next_selector":"CSS",
-"end_selector":"optional CSS"}} or {{"type":"link","next_selector":"CSS"}} only.
-No scroll, mixed DOM/network fields, direct API calls or resource downloads. Reuse top-level
+"end_selector":"optional CSS"}}, {{"type":"link","next_selector":"CSS"}}, or
+{{"type":"scroll","container_selector":"optional CSS","loading_selector":"optional CSS",
+"end_selector":"optional CSS","max_scrolls":100,"no_change_limit":3}}.
+No mixed DOM/network fields, direct API calls or resource downloads. Reuse top-level
 filters, dedupe_by, max_items, max_pages and timeouts. For pagination, test the initial batch,
 perform the observed normal browser action, then test the exact final network rule again.
 Pass the final dedupe_by to test_network. Test the exact pagination CSS control on the initial
-page with test_selector (attribute="href" for link pagination).
+page with test_selector (attribute="href" for link pagination). For network scroll use
+explore_scroll(network=the_final_network_source, dedupe_by=the_final_keys); no DOM item selector
+is needed. Its bounded wait/retries use captured JSON records, loading/end signals and geometry.
+Built-in scroll also records action baselines for a subsequent test_network. Scroll budget
+exhaustion is truncation; no_more_content is only a bottom/no-loading/no-pending heuristic.
 New responses, extracted records and unique new records are different; repeated/empty batches
 are not progress, missing responses are timeouts. Submission requires test_network evidence.
 The CSS workflow below applies only to DOM rules; do not invent CSS fields for JSON data.

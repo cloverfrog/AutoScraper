@@ -21,6 +21,27 @@ load();
 </script>'''
 
 
+# 滚动示例保留同一个 main，仅更新文本；API 的新增记录不依赖 DOM 节点数量。
+SCROLL_HTML = '''<!doctype html><meta charset="utf-8"><title>Network scroll books</title>
+<style>body {min-height:1500px} #loading,#end {position:fixed;top:0}</style>
+<main></main><i id="loading" hidden>Loading</i><i id="end" hidden>End</i><script>
+let page=0, busy=false, more=true;
+async function load() {
+  busy=true; document.querySelector('#loading').hidden=false;
+  await new Promise(resolve => setTimeout(resolve, 100));
+  const data=await (await fetch('/api/items?page='+(++page))).json();
+  document.querySelector('main').textContent=data.data.items.map(x => x.title).join(', ');
+  more=data.has_more; document.querySelector('#end').hidden=more;
+  document.querySelector('#loading').hidden=true; busy=false;
+}
+window.addEventListener('scroll', () => {
+  const root=document.scrollingElement;
+  if(!busy && more && root.scrollTop+root.clientHeight >= root.scrollHeight-2) load();
+});
+load();
+</script>'''
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *args):
         pass
@@ -35,7 +56,8 @@ class Handler(BaseHTTPRequestHandler):
             ]}, "has_more": number < 2}).encode()
             content_type = "application/json"
         else:
-            body, content_type = HTML.encode(), "text/html; charset=utf-8"
+            body = (SCROLL_HTML if parts.path == "/scroll" else HTML).encode()
+            content_type = "text/html; charset=utf-8"
         self.send_response(200)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))

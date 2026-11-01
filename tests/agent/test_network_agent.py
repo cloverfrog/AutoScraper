@@ -34,7 +34,8 @@ def local_site():
         thread.join(timeout=5)
 
 
-def test_agent_tools_generate_validated_reusable_network_rule(monkeypatch, local_site, explicit_unfiltered_requirements, tmp_path):
+@pytest.mark.parametrize("pagination", ["click", "scroll"])
+def test_agent_tools_generate_validated_reusable_network_rule(monkeypatch, local_site, explicit_unfiltered_requirements, tmp_path, pagination):
     bu = pytest.importorskip("browser_use")
     from browser_use import ActionResult
     import autoscraper.agent.llm as models
@@ -44,7 +45,11 @@ def test_agent_tools_generate_validated_reusable_network_rule(monkeypatch, local
     monkeypatch.setattr(models, "make_llm", lambda settings: model)
     monkeypatch.setattr(models, "make_wait_llm", lambda settings: SimpleNamespace(calls=0, max_calls=0))
     spec_data = json.loads(Path("examples/books.network.json").read_text())
-    spec_data.update(start_url=local_site, max_items=10)
+    start_url = local_site + "scroll" if pagination == "scroll" else local_site
+    spec_data.update(start_url=start_url, max_items=10)
+    if pagination == "scroll":
+        spec_data["network"]["pagination"] = dict(type="scroll", loading_selector="#loading",
+            end_selector="#end", max_scrolls=10, no_change_limit=2)
     spec_data["network"]["url_pattern"] = local_site + "api/items"
     observations = {}
 
@@ -63,7 +68,7 @@ def test_agent_tools_generate_validated_reusable_network_rule(monkeypatch, local
             page = capture.context.pages[0]
 
             async def navigate(**kwargs):
-                await page.goto(local_site)
+                await page.goto(start_url)
                 return ActionResult(extracted_content="navigated")
 
             async def click(**kwargs):
@@ -78,7 +83,7 @@ def test_agent_tools_generate_validated_reusable_network_rule(monkeypatch, local
                 return await self.tools.act(actions.model_validate(data), browser_session=self.browser,
                                             file_system=SimpleNamespace())
 
-            await act({"navigate": {"url": local_site}})
+            await act({"navigate": {"url": start_url}})
             await page.wait_for_function("document.querySelector('main').textContent === 'Book 1'")
             # 首次加载已经被保留，第一次检查工具不负责启动监听。
             listed = json.loads((await act({"list_network_responses": {}})).extracted_content)
@@ -95,7 +100,17 @@ def test_agent_tools_generate_validated_reusable_network_rule(monkeypatch, local
             # 没有推进证据不能提交，即使初次响应字段都可以提取。
             rejected = await act({"done": {"data": spec_data}})
             assert not rejected.is_done and 'candidate_rejected' in rejected.extracted_content
-            await act({"click": {"index": 1}})
+            if pagination == "scroll":
+                explored = await act({"explore_scroll": {
+                    "network": spec_data["network"], "dedupe_by": ["id"],
+                    "max_scrolls": 6, "wait_ms": 700,
+                }})
+                assert not explored.error, explored.error
+                feedback = json.loads(explored.extracted_content)
+                assert feedback["count"] == 2 and feedback["added"] == 1, feedback
+                assert feedback["stop_reason"] == "end_marker", feedback
+            else:
+                await act({"click": {"index": 1}})
             await page.wait_for_function("document.querySelector('main').textContent === 'Book 2'")
             tested = json.loads((await act({"test_network": params})).extracted_content)
             assert tested["status"] == "passed" and tested["responses"] == 2, (tested, [(e.id, e.page_url) for e in capture.buffer.entries.values()], capture.actions)
@@ -105,7 +120,7 @@ def test_agent_tools_generate_validated_reusable_network_rule(monkeypatch, local
 
     monkeypatch.setattr(bu, "Agent", Agent)
     settings = AgentSettings(api_key="fake", model="test", base_url="https://llm.test", content_timeout_ms=1000)
-    outcome = run_task(local_site, "抓取标题和 DOM 不可见的库存、价格及启用状态", settings,
+    outcome = run_task(start_url, "抓取标题和 DOM 不可见的库存、价格及启用状态", settings,
                        fields=["id", "title", "stock", "price", "active"], count=10, execute=True,
                        validation=ValidationSettings(max_repairs=0))
     assert outcome.status == "success", outcome.model_dump()
@@ -134,16 +149,17 @@ def test_bounded_redacted_samples_and_trace():
 
 
 # 重复响应与新响应分开计量；去重键必须和最终规则一致，改路径后旧证据失效。
-def test_network_evidence_uses_exact_paths_and_dedupe_keys():
+@pytest.mark.parametrize("kind", ["click", "scroll"])
+def test_network_evidence_uses_exact_paths_and_dedupe_keys(kind):
     from autoscraper.agent.tools import build_tools
     capture = AgentResponseCapture()
     fields = {"id": {"path": ["id"]}, "stock": {"path": ["stock"]}}
     source = dict(url_pattern="https://fixture.test/api", records_path=[], fields=fields,
-                  pagination=dict(type="click", next_selector="button"))
+                  pagination=dict(type="click", next_selector="button") if kind == "click" else dict(type="scroll"))
     for number in (1, 2):
         capture.buffer.entries[number] = CapturedResponse(number, "https://fixture.test/api", "GET",
             page_url="https://fixture.test/", body=[dict(id=1, stock=number)], complete=True, status=200)
-    capture.actions = [("click", 1)]
+    capture.actions = [(kind, 1)]
     tools = build_tools(network_capture=capture, check_submission=True, listing_url="https://fixture.test/")
     action = tools.registry.registry.actions["test_network"].function
     async def run():
@@ -156,3 +172,45 @@ def test_network_evidence_uses_exact_paths_and_dedupe_keys():
         invalid = json.loads((await action(source=source)).extracted_content)
         assert invalid["status"] == "failed"
     asyncio.run(run())
+
+
+# 探索器也要区分到底、加载和在途正文；不能把尚未完成的响应算作滚动证据。
+@pytest.mark.parametrize('mode,reason', [('pending', 'response_timeout'), ('loading', 'content_timeout'),
+                                       ('quiet', 'no_more_content'), ('budget', 'scroll_limit')])
+def test_network_explore_scroll_wait_and_budget_boundaries(mode, reason):
+    from autoscraper.agent.tools import build_tools
+    capture = AgentResponseCapture()
+    capture.buffer.sequence = 1
+    capture.buffer.entries[1] = CapturedResponse(1, 'https://fixture.test/api', 'GET',
+        page_url='https://fixture.test/', body=[dict(id=1)], complete=True, status=200)
+    source = dict(url_pattern='https://fixture.test/api', records_path=[],
+                  fields=dict(id=dict(path=['id'])), pagination=dict(type='scroll',
+                  max_scrolls=4, no_change_limit=2, container_selector='#scroller'))
+
+    class Page:
+        scrolled = False
+
+        async def evaluate(self, script, options):
+            from autoscraper.scraping.progress import SCROLL_SCRIPT
+            if script == SCROLL_SCRIPT:
+                self.scrolled = True
+                if mode == 'pending':
+                    capture.buffer.sequence = 2
+                    capture.buffer.entries[2] = CapturedResponse(2, 'https://fixture.test/api', 'GET', status=200)
+                return ''
+            return json.dumps(dict(bottom=True, loading=self.scrolled and mode == 'loading', end=False))
+
+    page = Page()
+    async def current_page():
+        return page
+
+    tools = build_tools(network_capture=capture, check_submission=True,
+                        listing_url='https://fixture.test/', content_timeout_ms=500)
+    action = tools.registry.registry.actions['explore_scroll'].function
+    result = asyncio.run(action(browser_session=SimpleNamespace(must_get_current_page=current_page),
+        network=source, dedupe_by=['id'], max_scrolls=1 if mode == 'budget' else 4, wait_ms=30))
+    assert not result.error
+    data = json.loads(result.extracted_content)
+    assert data['stop_reason'] == reason, data
+    assert data.get('count', 1) == 1
+    assert not capture.evidence

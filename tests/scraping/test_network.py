@@ -267,3 +267,180 @@ def test_delayed_response_body_is_awaited(page):
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)
+
+
+# 同一个 article 原地替换标题，网络记录分批返回；支持页面与唯一容器两种滚动根。
+def setup_scroll(page, *, container=False, delay=0, repeated=False, end=True,
+                 loading_forever=False, tall=False, end_without_request=False):
+    root = '<section id="scroller"><div id="height"><article>Book</article></div></section>'
+    style = '#scroller {height:180px;overflow:auto} #height {height:500px}' if container else '#height {height:1300px}'
+    html = f'''<style>{style} #loading,#end {{position:fixed;top:0}}</style>
+    {root}<i id="loading" hidden>Loading</i><i id="end" hidden>End</i><script>
+    let n=0, busy=false;
+    const scrolling = CONTAINER ? document.querySelector('#scroller') : document.scrollingElement;
+    async function load() {{
+      busy=true; document.querySelector('#loading').hidden=false;
+      if(n && FOREVER) return;
+      await new Promise(resolve => setTimeout(resolve, DELAY));
+      const data=await (await fetch('/api/items?page='+(++n))).json();
+      document.querySelector('article').textContent = data.data.items[0].title;
+      if(n===2 && END) document.querySelector('#end').hidden=false;
+      if(TALL) document.querySelector('#height').style.height='100000px';
+      document.querySelector('#loading').hidden=true; busy=false;
+    }}
+    (CONTAINER ? scrolling : window).addEventListener('scroll', () => {{
+      if(!busy && scrolling.scrollTop + scrolling.clientHeight >= scrolling.scrollHeight-2) {{
+        if(NO_REQUEST) document.querySelector('#end').hidden=false; else load();
+      }}
+    }});
+    load();</script>'''
+    for key, value in dict(CONTAINER=container, FOREVER=loading_forever, END=end, TALL=tall, NO_REQUEST=end_without_request).items():
+        html = html.replace(key, 'true' if value else 'false')
+    html = html.replace('DELAY', str(delay))
+    requests = []
+    def route(r):
+        if '/api/items?' in r.request.url:
+            number = int(r.request.url.rsplit('=', 1)[1])
+            requests.append(number)
+            r.fulfill(content_type='application/json', body=json.dumps(dict(data=dict(items=[
+                dict(id=1 if repeated else number, title=f'Book {number}', stock=40+number,
+                     price=0, active=False),
+            ]))))
+        else:
+            r.fulfill(content_type='text/html', body=html)
+    page.route('**/*', route)
+    return requests
+
+
+def scroll_rule(*, container=False, **updates):
+    data = rule(content_timeout_ms=700, **updates).model_dump()
+    data['network']['pagination'] = dict(type='scroll', max_scrolls=12, no_change_limit=2,
+                                        loading_selector='#loading', end_selector='#end')
+    if container:
+        data['network']['pagination']['container_selector'] = '#scroller'
+    return data
+
+
+@pytest.mark.parametrize('container', [False, True])
+def test_network_scroll_reads_new_json_with_fixed_dom_count(page, container):
+    setup_scroll(page, container=container, delay=180)
+    result = ScraperExecutor().run_page(ScraperSpec.model_validate(scroll_rule(container=container)), page)
+    assert [row['stock'] for row in result.records] == [41, 42]
+    assert result.pages_visited == 2 and result.stop_reason == 'end_marker'
+    assert page.locator('article').count() == 1
+
+
+@pytest.mark.parametrize('repeated', [False, True])
+def test_network_scroll_quiet_bottom_is_only_heuristic(page, repeated):
+    setup_scroll(page, end=False, repeated=repeated)
+    result = ScraperExecutor().run_page(ScraperSpec.model_validate(scroll_rule()), page)
+    assert result.stop_reason == 'no_more_content'
+    assert len(result.records) == (1 if repeated else 2)
+    assert result.pages_visited == (1 if repeated else 2)
+    assert result.duplicates == (1 if repeated else 0)
+
+
+@pytest.mark.parametrize('budget', ['scroll', 'pages'])
+def test_network_scroll_budgets_do_not_claim_completion(page, budget):
+    requests = setup_scroll(page, end=False, tall=True)
+    data = scroll_rule(max_pages=1 if budget == 'pages' else 100)
+    data['network']['pagination']['max_scrolls'] = 1
+    result = ScraperExecutor().run_page(ScraperSpec.model_validate(data), page)
+    assert result.stop_reason == ('max_pages' if budget == 'pages' else 'scroll_limit')
+    assert requests == [1]
+
+
+def test_network_scroll_loading_timeout_is_not_quiet_exhaustion(page):
+    setup_scroll(page, container=True, loading_forever=True, end=False)
+    data = scroll_rule(container=True)
+    data['content_timeout_ms'] = 180
+    with pytest.raises(ResponseTimeout):
+        ScraperExecutor().run_page(ScraperSpec.model_validate(data), page)
+
+
+def test_network_scroll_missing_response_with_end_marker_is_explicit(page):
+    requests = setup_scroll(page, container=True, end=False, end_without_request=True)
+    # 仍须先捕获初始批次；滚动时的明确结束不要求站点额外发出空请求。
+    result = ScraperExecutor().run_page(ScraperSpec.model_validate(scroll_rule(container=True)), page)
+    assert result.stop_reason == 'end_marker' and requests == [1]
+
+
+@pytest.mark.parametrize('timeout_ms', [100, 800])
+def test_network_scroll_inflight_body_cannot_be_heuristic_end(page, timeout_ms):
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from threading import Thread
+    from urllib.parse import parse_qs, urlsplit
+    import time
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+        def do_GET(self):
+            parts = urlsplit(self.path)
+            number = int(parse_qs(parts.query).get('page', ['0'])[0])
+            if number:
+                body = json.dumps(dict(data=dict(items=[dict(id=number, title='Book', stock=number,
+                                                           price=0, active=False)]))).encode()
+            else:
+                body = b'''<style>body{height:1500px}</style><main></main><i id="end" hidden>End</i>
+                <script>let n=0,busy=false; async function load() {busy=true;
+                const data=await (await fetch('/api/items?page='+(++n))).json();
+                document.querySelector('main').textContent='Book'; busy=false;
+                if(n===2) document.querySelector('#end').hidden=false;}
+                window.addEventListener('scroll',()=>{const r=document.scrollingElement;
+                if(!busy && r.scrollTop+r.clientHeight>=r.scrollHeight-2) load();});load();</script>'''
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json' if number else 'text/html')
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            try:
+                if number == 2:
+                    self.wfile.write(body[:1])
+                    self.wfile.flush()
+                    time.sleep(0.4)
+                    body = body[1:]
+                self.wfile.write(body)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+
+    server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        base = f'http://127.0.0.1:{server.server_port}/'
+        data = scroll_rule(start_url=base)
+        data['content_timeout_ms'] = timeout_ms
+        data['network']['url_pattern'] = base+'api/items'
+        data['network']['pagination'].pop('loading_selector')
+        spec = ScraperSpec.model_validate(data)
+        if timeout_ms == 100:
+            with pytest.raises(ResponseTimeout):
+                ScraperExecutor().run_page(spec, page)
+        else:
+            result = ScraperExecutor().run_page(spec, page)
+            assert result.stop_reason == 'end_marker' and len(result.records) == 2
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+# 网络预算截断仍导出已有数据，但入口必须标为部分结果；旧 DOM 返回码保持不变。
+@pytest.mark.parametrize("network", [True, False])
+@pytest.mark.parametrize("stop_reason", ["scroll_limit", "max_pages", "no_more_content"])
+def test_network_budget_cli_returns_partial(tmp_path, monkeypatch, network, stop_reason):
+    import sys
+    from autoscraper.cli.scraper import main
+    from autoscraper.scraping.executor import ScrapeResult
+
+    data = scroll_rule() if network else dict(start_url=URL, item_selector="article",
+                                             fields=dict(title=dict(selector="h1")))
+    path = tmp_path / "rule.json"
+    path.write_text(ScraperSpec.model_validate(data).model_dump_json())
+    output = tmp_path / "data.json"
+    monkeypatch.setattr(sys, "argv", ["autoscraper", str(path), "--output", str(output)])
+    monkeypatch.setattr(ScraperExecutor, "run", lambda self, spec: ScrapeResult(
+        records=[dict(title="Book")], stop_reason=stop_reason))
+    assert main() == (2 if network and stop_reason != "no_more_content" else 0)
+    assert json.loads(output.read_text()) == [dict(title="Book")]

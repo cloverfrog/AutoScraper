@@ -191,7 +191,7 @@ class NetworkSource(ProtocolModel):
     records_path: JsonPath
     fields: dict[NonEmpty, JsonFieldSpec] = Field(min_length=1, max_length=50)
     pagination: Annotated[
-        LinkPagination | NetworkClickPagination, Field(discriminator="type")
+        LinkPagination | NetworkClickPagination | ScrollPagination, Field(discriminator="type")
     ] | None = None
 
     @field_validator("url_pattern")

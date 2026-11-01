@@ -15,7 +15,7 @@ from .clarification import ClarificationRequest, ClarificationSession
 from autoscraper.browser.access import BrowserAccess, HandoffRequest
 from .dom import INSPECT_SCRIPT, SELECTOR_SCRIPT, BATCH_SELECTOR_SCRIPT
 from .submission import SubmissionChecks, page_key
-from autoscraper.scraping.spec import FieldSpec, ScraperSpec
+from autoscraper.scraping.spec import FieldSpec, ScraperSpec, NetworkSource
 from .waiting import ContentWaiter
 from autoscraper.observability.tracing import current_trace, operation, summarize_tool_output, emit
 
@@ -52,7 +52,7 @@ class TracedTools(Tools):
             return await super().act(action, **kwargs)
         name, inputs = next(iter(params.items()))
         capture = getattr(self, "network_capture", None)
-        if capture and name in {"navigate", "click"}:
+        if capture and name in {"navigate", "click", "scroll"}:
             capture.actions.append((name, capture.buffer.sequence))
             capture.actions = capture.actions[-40:]
         if checks and name == "done" and inputs.get("success") is not False and inputs.get("data"):
@@ -128,7 +128,7 @@ class TracedTools(Tools):
                         )
                 elif name == "wait_for_selector":
                     checks.remember_wait(data)
-                elif name == "explore_scroll" and data.get("count", 0) > data.get(
+                elif name == "explore_scroll" and not data.get("network") and data.get("count", 0) > data.get(
                     "initial_count", 0
                 ):
                     checks.advances.add(
@@ -291,23 +291,50 @@ def build_tools(
         description="Explore infinite scroll with bounded scroll/wait/record-count checks. "
         "Use built-in scroll for plain scrolling; this tool checks loading/end CSS and "
         "record growth over multiple rounds in one step. Supports a CSS scroll container. "
+        "For network JSON pass the final NetworkSource in network and dedupe_by, omit item_selector; "
+        "this reuses scroll actions but counts new JSON records instead of DOM nodes. "
         "Returns counts, scrolls and stop_reason. Does not extract the final dataset."
     )
     async def explore_scroll(
         browser_session: BrowserSession,
-        item_selector: str,
+        item_selector: str = "",
         container_selector: str = "",
         loading_selector: str = "",
         end_selector: str = "",
         max_scrolls: int = 10,
         no_change_limit: int = 3,
         wait_ms: int = 1000,
+        network: NetworkSource | None = None,
+        dedupe_by: list[str] | None = None,
     ) -> ActionResult:
         from browser_use.tools.views import ScrollAction
 
         if not (1 <= max_scrolls <= 30 and 2 <= no_change_limit <= 10
                 and 1 <= wait_ms <= content_timeout_ms):
             return ActionResult(error="Invalid bounded scroll parameters")
+        if network is not None:
+            from .network import explore_network_scroll
+            network = NetworkSource.model_validate(network)
+            if network_capture is None or not network.pagination or network.pagination.type != "scroll":
+                return ActionResult(error="Network exploration requires an active capture and scroll rule")
+            page = await browser_session.must_get_current_page()
+
+            async def perform_scroll():
+                if network.pagination.container_selector:
+                    await page.evaluate(SCROLL_SCRIPT, network.pagination.container_selector)
+                    return None
+                return await builtin_scroll(
+                    params=ScrollAction(down=True, pages=1), browser_session=browser_session,
+                )
+
+            try:
+                data = await explore_network_scroll(
+                    tools, network_capture, page, network, dedupe_by or [], perform_scroll,
+                    max_scrolls, wait_ms, content_timeout_ms,
+                )
+                return ActionResult(extracted_content=json.dumps(data))
+            except Exception:
+                return ActionResult(error="Network scroll exploration failed")
         if not item_selector.strip() or any(">>" in value for value in (
             item_selector, container_selector, loading_selector, end_selector
         )):

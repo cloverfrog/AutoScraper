@@ -322,13 +322,15 @@ v3 使用独立的 `network` 数据源，不能同时声明 DOM `item_selector`�
   `filters` 沿用现有比较规则，布尔字段可导出，但首版筛选条件不增加布尔比较语法。
 - 沿用顶层 `max_items`、`max_pages`、`timeout_ms`、`content_timeout_ms`、`filters`、
   `dedupe_by` 和 `on_item_error`。`max_items` 限制筛选后的结果，`max_pages` 限制初始加载
-  加分页动作的批次数。去重保留类型，`false` 与数字 `0` 不会因 Python 相等语义被合并。
+  加点击/链接分页批次数；滚动仅将有新增记录的批次计入，空滚动另受 `max_scrolls` 约束。去重保留类型，`false` 与数字 `0` 不会因 Python 相等语义被合并。
 
 网络分页放在 `network.pagination`：
 
 - `{"type":"link","next_selector":"CSS"}`：读取唯一 Next 控件的 href 后正常导航。
 - `{"type":"click","next_selector":"CSS","end_selector":"可选 CSS"}`：点击页面按钮，
-  可选结束标志按可见性检查。不使用 DOM append/replace 进度，不支持滚动。
+  可选结束标志按可见性检查。不使用 DOM append/replace 进度。
+- `{"type":"scroll","max_scrolls":100,"no_change_limit":3}`：复用 DOM 滚动协议的
+  `container_selector`、`loading_selector`、`end_selector` 和预算约束；默认滚动整个页面。
 
 每次导航/点击前均已监听，请求开始序号划分批次，点击前尚未完成的请求不能冒充点击后的响应。
 统计分为 `responses`（收到响应头）、`extracted`（字段提取成功）、`added`（按去重键实际新增）。
@@ -342,12 +344,25 @@ v3 使用独立的 `network` 数据源，不能同时声明 DOM `item_selector`�
 字段/数组路径错误为 `json_path_failure`，收到响应且提取成功但无新增为
 `network_progress_failure`，其余读取错误为 `response_failure`。
 空数组只有未配置分页、Next 控件消失/禁用或结束标志可见时才可自然结束；
-全重复批次即使按钮随后禁用也报告无推进。达到批次上限仍是 `max_pages`，不能宣称完整完成。
+点击/链接分页的全重复批次即使按钮随后禁用也报告无推进。
+滚动允许空批次/重复响应后有界重试；明确结束且无加载/在途请求时返回 `end_marker`。
+否则，仅在到底、无加载/在途响应并经过安静观察后累计无新增次数，达到
+`no_change_limit` 才返回启发式 `no_more_content`。安静观察窗口最多 250ms（受内容时限约束），
+不保证覆盖任意延迟发起且未显示加载状态的后台请求。已观察到加载或在途正文的等待超时
+为 `response_timeout`，不累计为自然结束；空滚动不消耗数据批次预算。
+达到批次上限仍是 `max_pages`；达到动作上限为 `scroll_limit`，不能宣称完整完成。
+明确结束优先于动作预算，动作预算优先于无新增启发式。
+独立 CLI 对网络 `scroll_limit`/`max_pages` 返回退出码 2，并继续导出已有数据；
+UI 的已有规则模式显示 `partial`，Agent 工作流仍按验证预算截断处理。旧 v1/v2 入口语义不变。
 路径和推进错误可反馈修复；响应超时及读取错误不自动消耗修复模型预算。
 
 Agent 使用同一浏览器上下文旁路观察，监听早于首次导航。发现/样本/测试工具都不发起 API。
 提交需要当前会话的首次列表页提取证据；有分页时还需初始页的精确控件测试、真实浏览器动作
-以及动作后新增记录的证据。提交时重新测试最终网络规则和去重键；独立 Executor 仍会重跑验证。
+以及动作后新增记录的证据；滚动不要求 Next 控件证据。
+现有 `explore_scroll` 增加可选 `network` 与 `dedupe_by` 参数，复用原内置滚动/容器动作，
+按实际 JSON 响应提供 `responses`/`extracted`/`added` 和滚动停止原因。
+内置 `scroll` 也会记录动作前请求基线供 `test_network` 检查，不把 DOM 增长写入网络证据。
+提交时重新测试最终网络规则和去重键；独立 Executor 仍会重跑验证。
 人工接管后清除网络证据及缓存，避免把接管前账户数据作为新证据。
 
 缓存最多保留 40 个候选响应、单响应正文 1MB、正文累计 4MB；并发读取最多 40 个。

@@ -8,7 +8,7 @@
 STATE_SCRIPT = """(o) => {
     const visible = selector => selector && [...document.querySelectorAll(selector)]
         .some(e => e.getClientRects().length && getComputedStyle(e).visibility !== 'hidden');
-    const items = [...document.querySelectorAll(o.item_selector)];
+    const items = o.item_selector ? [...document.querySelectorAll(o.item_selector)] : [];
     const root = o.container_selector ? document.querySelector(o.container_selector)
         : document.scrollingElement;
     if (!root) throw new Error('Scroll container not found');
@@ -72,3 +72,14 @@ def progressed(before, after, mode):
         if mode == "append"
         else after["count"] > 0 and after["ready"] and after["snapshot"] != before["snapshot"]
     )
+
+
+# 网络滚动只读取同一份几何/加载/结束状态，不查询或比较 DOM 记录。
+def network_scroll_options(pagination):
+    options = {"item_selector": "", "fields": None}
+    for key in ("container_selector", "loading_selector", "end_selector"):
+        value = getattr(pagination, key, None)
+        if value and ">>" in value:
+            raise ValueError("Use CSS selectors without selector chains")
+        options[key] = value
+    return options

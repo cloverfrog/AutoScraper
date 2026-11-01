@@ -9,12 +9,14 @@ from playwright.sync_api import Error as PlaywrightError
 
 from autoscraper.browser.network import SyncResponseCapture
 from autoscraper.observability.tracing import emit
-from .errors import ItemError, PaginationActionError
+from .errors import ItemError, PaginationActionError, ScrapeError
 from .filtering import evaluate_filters
 from .network import (
     JsonPathError, NetworkError, NetworkProgressError, extract_json_record, record_items,
 )
 from .values import record_identity
+from .progress import STATE_SCRIPT, network_scroll_options
+from .scrolling import scroll_step
 
 
 class ResponseTimeout(NetworkError):
@@ -29,14 +31,34 @@ def run_network(spec, page):
     result = ScrapeResult()
     seen = set()
     visited = set()
-    capture = SyncResponseCapture(page, source).start()
     page.set_default_timeout(spec.timeout_ms)
     next_url = str(spec.start_url)
+    pagination = source.pagination
+    is_scroll = pagination is not None and pagination.type == "scroll"
+    try:
+        options = network_scroll_options(pagination) if is_scroll else None
+    except ValueError as exc:
+        raise ScrapeError(str(exc)) from None
+    capture = SyncResponseCapture(page, source).start()
+    scrolls = unchanged = 0
+    processed = set()
     try:
         while result.pages_visited < spec.max_pages:
-            capture.buffer.clear()
-            baseline = capture.buffer.sequence
-            if next_url is not None:
+            # 滚动间保留已观察但尚未提取的响应，先补收再发起新动作，避免丢掉在途数据。
+            for key in processed:
+                entry = capture.buffer.entries.pop(key, None)
+                if entry is not None:
+                    capture.buffer.total_bytes -= entry.size
+            processed = set()
+            if not is_scroll:
+                capture.buffer.clear()
+            initial_batch = result.pages_visited == 0
+            reconcile = is_scroll and bool(capture.buffer.entries) and next_url is None
+            baseline = (min(capture.buffer.entries) - 1) if reconcile else capture.buffer.sequence
+            scrolled = False
+            if reconcile:
+                emit("network.reconcile", responses=len(capture.buffer.entries))
+            elif next_url is not None:
                 identity = urldefrag(next_url).url
                 if identity in visited:
                     result.stop_reason = "pagination_cycle"
@@ -47,13 +69,22 @@ def run_network(spec, page):
                     result.stop_reason = "pagination_cycle"
                     return result
                 visited.update((identity, final))
+            elif is_scroll:
+                if scrolls >= pagination.max_scrolls:
+                    result.stop_reason = "scroll_limit"
+                    return result
+                try:
+                    scroll_step(page, pagination.container_selector)
+                    scrolls += 1
+                    scrolled = True
+                except PlaywrightError:
+                    raise PaginationActionError("Network pagination scroll failed") from None
             else:
                 try:
                     css(page, source.pagination.next_selector).click(timeout=spec.timeout_ms)
                 except PlaywrightError:
                     raise PaginationActionError("Network pagination click failed") from None
             result.pages_visited += 1
-            processed = set()
             received = extracted = added = 0
             started = monotonic()
             deadline = started + (spec.content_timeout_ms or spec.timeout_ms) / 1000
@@ -108,17 +139,53 @@ def run_network(spec, page):
                             return result
                 # 收完已观察到的请求后保留短暂静默窗口，合并同一动作的多个响应。
                 # 重复/空批次继续等满本批时限，不能仅凭新响应或按钮动画宣称推进。
+                state = page.evaluate(STATE_SCRIPT, options) if is_scroll else None
+                # 状态读取也会分发浏览器事件；结束前必须处理这期间新完成的响应。
+                entries = [entry for entry in capture.buffer.entries.values() if entry.id > baseline]
+                if any(entry.complete and entry.id not in processed for entry in entries):
+                    continue
                 now = monotonic()
-                all_complete = bool(entries) and all(entry.complete for entry in entries)
-                if added and all_complete and now - last_completion >= 0.1:
+                pending = any(not entry.complete for entry in entries)
+                all_complete = bool(entries) and not pending
+                busy = state is not None and state["loading"]
+                if added and all_complete and not busy and now - last_completion >= 0.1:
                     break
+                # 无请求或全重复的滚动只记为一次安静观察，允许继续滚动/重试。
+                # 已观察到加载或在途请求时必须等到完成，不能将超时累计为启发式无新增。
+                if is_scroll and (scrolls or reconcile) and not added and not busy and not pending:
+                    if now - started >= 0.25:
+                        break
                 if now >= deadline:
-                    if not processed or not all_complete:
+                    if busy or pending or (not processed and not (is_scroll and scrolls)):
                         raise ResponseTimeout("No complete matching response before the batch deadline")
                     break
                 page.wait_for_timeout(min(25, max(1, (deadline - now) * 1000)))
             emit("network.batch", responses=received, extracted=extracted, added=added)
-            pagination = source.pagination
+            if is_scroll:
+                # max_pages 统计数据批次；空滚动/重复响应只消耗独立的 max_scrolls。
+                if not initial_batch and not added:
+                    result.pages_visited -= 1
+                if state["end"] and not state["loading"]:
+                    result.stop_reason = "end_marker"
+                    return result
+                if result.pages_visited >= spec.max_pages:
+                    result.stop_reason = "max_pages"
+                    return result
+                if added or not state["bottom"]:
+                    unchanged = 0
+                elif scrolled:
+                    unchanged += 1
+                # 明确结束优先；动作预算耗尽不能降格为启发式自然结束。
+                if scrolls >= pagination.max_scrolls:
+                    result.stop_reason = "scroll_limit"
+                    return result
+                if unchanged >= pagination.no_change_limit:
+                    result.stop_reason = "no_more_content"
+                    return result
+                next_url = None
+                emit("network.scroll", scrolls=scrolls, added=added, bottom=state["bottom"],
+                     unchanged=unchanged, loading=state["loading"])
+                continue
             terminal = None
             if pagination is None:
                 terminal = "no_pagination"

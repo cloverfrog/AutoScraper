@@ -516,5 +516,20 @@ uv run --extra agent autoscraper-agent "http://127.0.0.1:8765/" "抓取前10本�
 
 页面只显示书名，接口额外包含库存、小数价格及布尔值；示例共两条，按钮禁用后正常结束。
 规则通过浏览器导航和点击触发请求，不拼装或重放 API，不下载资源文件。
-首版支持初始加载、Next 链接及点击分页，不支持滚动、DOM/网络字段混合或网络详情关联。
+支持初始加载、Next 链接、点击和无限滚动分页；不支持 DOM/网络字段混合或网络详情关联。
 网络协议、缓存限制和分页完成语义见 [协议参考](docs/reference.md#浏览器网络-json-v3)。
+
+
+同一个示例服务还提供 `http://127.0.0.1:8765/scroll`。将示例规则的 `start_url` 改为此地址，
+并将 `network.pagination` 改为以下配置，即可验证 DOM 节点数不变的网络滚动加载：
+
+```json
+{"type":"scroll","loading_selector":"#loading","end_selector":"#end","max_scrolls":20,"no_change_limit":3}
+```
+
+Agent 使用原有 `explore_scroll(network=最终网络规则, dedupe_by=最终去重键)`，不需要 DOM
+记录选择器。页面和容器滚动复用现有动作；`container_selector` 指定唯一容器。
+网络滚动只有成功提取并去重后的新增记录才算推进。`max_pages` 统计初始批次与新增数据批次，
+空滚动/重复批次只消耗 `max_scrolls`。`end_marker` 表示明确结束；没有结束标志时，
+到底、无加载且无在途响应后连续多轮无新增，才返回启发式的 `no_more_content`。
+已观察到的加载或响应等待超时会失败，`scroll_limit`/`max_pages` 是预算截断。

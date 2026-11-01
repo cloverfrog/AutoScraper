@@ -248,8 +248,9 @@ class JobManager:
                 executable_path=config.browser_path or os.getenv("AUTOSCRAPER_BROWSER_PATH"),
                 access=access, login=config.login,
             ).run(spec)
+            network_truncated = spec.network is not None and data.stop_reason in {"scroll_limit", "max_pages"}
             job.summary = {
-                "status": "partial" if data.errors or data.stop_reason == "detail_limit" else "success",
+                "status": "partial" if data.errors or data.stop_reason == "detail_limit" or network_truncated else "success",
                 "items": len(data.records), "pages": data.pages_visited,
                 "detail_pages": data.detail_pages_visited, "duplicates": data.duplicates,
                 "errors": data.errors, "stop_reason": data.stop_reason,

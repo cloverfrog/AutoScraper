@@ -2,6 +2,8 @@
 """Network discovery, bounded samples and exact-rule evidence."""
 
 import json
+import asyncio
+from time import monotonic
 from itertools import islice
 from urllib.parse import urldefrag
 
@@ -112,7 +114,7 @@ def register_network_tools(tools, capture, timeout_ms):
         initial_url = tools.submission.actual_url(tools.submission.listing_url) if tools.submission else ""
         initial = any(batch["page"] == initial_url and batch["added"] for batch in batches)
         progress = source.pagination is None or any(
-            kind == ("navigate" if source.pagination.type == "link" else "click")
+            kind == ("navigate" if source.pagination.type == "link" else source.pagination.type)
             and any(batch["id"] <= baseline and batch["added"] for batch in batches)
             and any(batch["id"] > baseline and batch["added"] for batch in batches)
             for kind, baseline in capture.actions
@@ -124,3 +126,96 @@ def register_network_tools(tools, capture, timeout_ms):
                            extracted=extracted, added=added,
                            initial_page_verified=initial, pagination_verified=progress,
                            errors=errors[:5]))
+
+
+# 现有 explore_scroll 的网络分支：动作由调用方复用，状态不读取 DOM 记录数。
+# 每轮在动作前固定请求序号；提取/判重沿用 test_network 的最终路径和去重键。
+async def explore_network_scroll(tools, capture, page, source, dedupe_by, perform_scroll,
+                                 max_scrolls, wait_ms, timeout_ms):
+    from autoscraper.scraping.progress import STATE_SCRIPT, network_scroll_options
+
+    options = network_scroll_options(source.pagination)
+    test = tools.registry.registry.actions["test_network"].function
+
+    deadline = monotonic() + timeout_ms / 1000
+
+    async def tested():
+        # 测试与响应读取共用本工具剩余时间，不能逐次重置独立等待预算。
+        remaining = max(0, deadline - monotonic())
+        try:
+            result = await asyncio.wait_for(test(source=source, dedupe_by=dedupe_by), remaining)
+            return json.loads(result.extracted_content)
+        except TimeoutError:
+            return {"errors": ["response_timeout"]}
+
+    initial = await tested()
+    if initial.get("errors"):
+        return {"network": True, "stop_reason": "response_timeout" if "response_timeout" in initial["errors"]
+                else "network_test_failure", "test": initial}
+    initial_count = initial["added"]
+    current = initial
+    dropped = capture.buffer.dropped
+    used = unchanged = 0
+    reason = "scroll_limit"
+    while used < min(max_scrolls, source.pagination.max_scrolls):
+        # 动作前先收完已观察到的正文，再固定基线；旧在途请求不能冒充本轮推进。
+        current = await tested()
+        if current.get("errors"):
+            return {"network": True, "stop_reason": "response_timeout" if "response_timeout" in current["errors"]
+                    else "network_test_failure", "test": current}
+        state = json.loads(await page.evaluate(STATE_SCRIPT, options))
+        pending_before = any(not entry.complete for entry in capture.buffer.entries.values()
+                             if matches(source, entry.url, entry.method))
+        if pending_before:
+            continue
+        if state["end"] and not state["loading"]:
+            reason = "end_marker"
+            break
+        if monotonic() >= deadline:
+            reason = "content_timeout"
+            break
+        baseline = capture.buffer.sequence
+        before = current["added"]
+        capture.actions.append(("scroll", baseline))
+        capture.actions = capture.actions[-40:]
+        action = await perform_scroll()
+        if action is not None and action.error:
+            return {"network": True, "stop_reason": "pagination_action_failure"}
+        used += 1
+        started = monotonic()
+        round_deadline = min(deadline, started + wait_ms / 1000)
+        while True:
+            state = json.loads(await page.evaluate(STATE_SCRIPT, options))
+            pending = any(not entry.complete for entry in capture.buffer.entries.values()
+                          if matches(source, entry.url, entry.method))
+            if capture.buffer.dropped != dropped:
+                return {"network": True, "stop_reason": "response_limit", "scrolls": used}
+            # 在等待循环内只测试已收完的正文，避免 test_network 的独立等待延长本轮预算。
+            if not pending:
+                current = await tested()
+                if current.get("errors"):
+                    return {"network": True, "stop_reason": "network_test_failure", "test": current}
+                if not state["loading"] and (current["added"] > before or state["end"]):
+                    break
+                if not state["loading"] and monotonic() - started >= min(0.25, wait_ms / 1000):
+                    break
+            if monotonic() >= round_deadline:
+                reason = "response_timeout" if pending else "content_timeout"
+                return {"network": True, "stop_reason": reason, "scrolls": used,
+                        "initial_count": initial_count, "count": current["added"]}
+            await asyncio.sleep(min(0.025, max(0, round_deadline - monotonic())))
+        added = current["added"] - before
+        unchanged = unchanged + 1 if not added and state["bottom"] else 0
+        if state["end"] and not state["loading"]:
+            reason = "end_marker"
+            break
+        if used >= min(max_scrolls, source.pagination.max_scrolls):
+            reason = "scroll_limit"
+            break
+        if unchanged >= source.pagination.no_change_limit:
+            reason = "no_more_content"
+            break
+    return {"network": True, "scrolls": used, "initial_count": initial_count,
+            "count": current["added"], "responses": current["responses"],
+            "extracted": current["extracted"], "added": current["added"] - initial_count,
+            "stop_reason": reason}
