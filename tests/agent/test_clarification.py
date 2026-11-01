@@ -173,13 +173,17 @@ def test_generation_resumes_same_agent_or_returns_pending(monkeypatch, answer):
     settings = AgentSettings(api_key="fake", model="test", base_url="https://llm.test", max_steps=4)
     from autoscraper.agent.explorer import UnsupportedTaskError
 
+    # 澄清后的独立解析仍使用同一个模型；本用例的回答只涉及入口，不修改数量。
+    model = SimpleNamespace(ainvoke=AsyncMock(return_value=SimpleNamespace(
+        completion=TaskRequirements(fields=["quote"], count=1))))
+
     async def run():
         return await generate_spec(
             URL,
             "前1条语录，字段名为quote",
             settings,
             requirements=TaskRequirements(fields=["quote"], count=1),
-            llm=object(),
+            llm=model,
             wait_llm=SimpleNamespace(max_calls=0, calls=0),
             clarification=session,
         )
@@ -195,6 +199,7 @@ def test_generation_resumes_same_agent_or_returns_pending(monkeypatch, answer):
     else:
         assert str(asyncio.run(run()).start_url) == RULE["start_url"]
         assert captured["runs"] == 2
+    assert model.ainvoke.await_count == (0 if answer is None else 1)
     assert captured["instances"] == 1
     assert captured["killed"]
 

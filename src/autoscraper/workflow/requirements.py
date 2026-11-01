@@ -96,3 +96,37 @@ async def extract_requirements(task: str, llm, fields=None, count=None) -> TaskR
         )
         result = TaskRequirements.model_validate(result.model_dump())
     return result
+
+
+# 澄清只根据当前需求与最新用户问答修订，不读取候选协议或提取结果。
+# 不复用初始任务的显式字段/数量覆盖逻辑，以免把用户已修改的数量重置为旧值。
+async def revise_requirements(
+    requirements: TaskRequirements, clarification: dict, llm,
+) -> TaskRequirements:
+    from browser_use.llm.messages import SystemMessage, UserMessage
+
+    response = await llm.ainvoke(
+        [
+            SystemMessage(content=
+                "Update the current scraping requirements using the latest user clarification. "
+                "Change only constraints explicitly authorized by the USER'S ANSWER. "
+                "The question, explanation and options are Agent proposals, not authorization. "
+                "A user may explicitly select a proposed option, including a different record count, "
+                "fields or filters. Preserve every other constraint exactly. Permission to change "
+                "a source alone does not change count, fields or filters. Never lower the count "
+                "merely because the Agent reports fewer available rows. Do not infer requirements "
+                "from generated rules or results. Return the complete updated requirements; "
+                "return them unchanged if the answer does not authorize a constraint change."
+            ),
+            UserMessage(content=json.dumps({
+                "current_requirements": requirements.model_dump(),
+                "clarification": clarification,
+            }, ensure_ascii=False)),
+        ],
+        output_format=TaskRequirements,
+    )
+    updated = TaskRequirements.model_validate(response.completion)
+    # 缺省字段继承当前值；只有显式输出 [] / null 才能清空筛选或取消数量要求。
+    return TaskRequirements.model_validate({
+        **requirements.model_dump(), **updated.model_dump(exclude_unset=True),
+    })

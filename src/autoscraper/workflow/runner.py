@@ -108,6 +108,8 @@ def run_task(
                 Feedback(code="invalid_requirements", message=str(exc)[:2000], recoverable=False)
             ]
             return outcome
+        outcome.original_requirements = outcome.requirements.model_copy(deep=True)
+        # Explorer 在用户明确澄清后原地更新该对象，所有验证与修复共用当前基准。
         requirements = outcome.requirements
         if requirements.unsupported_capabilities:
             outcome.status = "unsupported"

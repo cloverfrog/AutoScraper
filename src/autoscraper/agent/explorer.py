@@ -18,7 +18,7 @@ from .clarification import ClarificationSession
 from autoscraper.browser.access import BrowserAccess
 from autoscraper.scraping.spec import ScraperSpec
 from autoscraper.workflow.validation import Feedback, UnsupportedResult
-from autoscraper.workflow.requirements import TaskRequirements
+from autoscraper.workflow.requirements import TaskRequirements, revise_requirements
 
 
 # Agent 运行配置：模型连接、探索上限、内容等待和浏览器选项。
@@ -186,6 +186,7 @@ failure; never submit a partial rule as success."""
 # 运行一轮探索/修复，返回尚待独立验证的候选规则。
 # llm、wait_llm 和 clarification 可由工作流复用，以共享预算及澄清历史。
 # 待澄清时暂停 Agent 动作，回答后在同一浏览器和历史上继续；退出时始终回收浏览器。
+# 传入的 requirements 在用户明确澄清后原地同步，让提交门槛与工作流共享当前基准。
 async def generate_spec(
     url: str,
     task: str,
@@ -202,7 +203,7 @@ async def generate_spec(
     access: BrowserAccess | None = None,
 ) -> ScraperSpec:
     """Generate a candidate. The workflow separately validates it before publication."""
-    from autoscraper.observability.tracing import StepObserver, current_trace
+    from autoscraper.observability.tracing import StepObserver, current_trace, labels, operation
 
     observer = StepObserver() if current_trace() is not None else None
     prompt = build_task(url, task)
@@ -320,13 +321,16 @@ async def generate_spec(
         started = time.monotonic()
         initial_waiting = clarification.waiting_seconds
         initial_handoff_waiting = access.waiting_seconds
-        while True:
-            # 会话可能继承上轮等待记录；只扣除本轮新增的人工等待时间。
+        # 人工等待不占任务时间；澄清后的模型解析仍计入同一剩余时限。
+        def remaining_seconds():
             active_seconds = (
                 time.monotonic() - started - clarification.waiting_seconds + initial_waiting
                 - access.waiting_seconds + initial_handoff_waiting
             )
-            async with asyncio.timeout(max(0, settings.timeout_seconds - active_seconds)):
+            return max(0, settings.timeout_seconds - active_seconds)
+
+        while True:
+            async with asyncio.timeout(remaining_seconds()):
                 try:
                     history = await agent.run(
                         max_steps=settings.max_steps,
@@ -355,9 +359,39 @@ async def generate_spec(
             if clarification.pending is not None:
                 # ask_user 已终止动作批次；先在超时块外获取回答，再继续原 Agent。
                 clarification.answer_pending()
+                requirements_prompt = ""
+                if requirements is not None:
+                    try:
+                        with labels(source="requirements"), operation("requirements_update") as details:
+                            details["before"] = requirements.model_dump()
+                            async with asyncio.timeout(remaining_seconds()):
+                                updated = await revise_requirements(
+                                    requirements, clarification.history[-1], agent_llm,
+                                )
+                            # 同步共享对象，提交门槛、后续修复和工作流验证立即使用同一基准。
+                            requirements.fields = updated.fields
+                            requirements.count = updated.count
+                            requirements.filters = updated.filters
+                            requirements.unsupported_capabilities = updated.unsupported_capabilities
+                            details["after"] = requirements.model_dump()
+                    except (LLMBudgetExceeded, TimeoutError):
+                        raise
+                    except Exception as exc:
+                        raise AgentError("Could not update requirements after user clarification") from exc
+                    if requirements.unsupported_capabilities:
+                        raise UnsupportedTaskError(
+                            "Current ScraperSpec cannot represent: "
+                            + ", ".join(requirements.unsupported_capabilities), []
+                        )
+                    requirements_prompt = (
+                        "\nCurrent authoritative requirements after the user's answer "
+                        "(supersede earlier constraints and re-evaluate prior feedback):\n"
+                        + requirements.model_dump_json()
+                    )
                 agent.add_new_task(
-                    "Continue the original scraping task with this clarification."
+                    "Continue the scraping task with this clarification."
                     + clarification.prompt()
+                    + requirements_prompt
                 )
                 continue
             final = history.final_result()

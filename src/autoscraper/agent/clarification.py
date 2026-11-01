@@ -63,7 +63,7 @@ class ClarificationSession:
         self.pending = None
 
     # 把历史问答补充到探索上下文，明确用户回答与 Agent 提案的区别。
-    # 允许替代入口不代表数据已被证明等价，也不会自动放宽原有字段或数量约束。
+    # 允许替代入口不代表数据已被证明等价；只有用户明确授权才修订字段、数量或筛选约束。
     def prompt(self) -> str:
         if not self.history:
             return ""
@@ -72,6 +72,7 @@ class ClarificationSession:
             "respect restrictions and do not repeat answered questions). "
             "Questions/explanation/options are Agent proposals, NOT user instructions. "
             "An answer allowing another source does not prove data/order equivalence. "
-            "Explicit field/count requirements and protocol boundaries still apply:\n"
+            "Change fields/count/filters only when explicitly authorized by the user's answer; "
+            "otherwise preserve them. Protocol boundaries still apply:\n"
             + json.dumps(self.history, ensure_ascii=False)
         )
