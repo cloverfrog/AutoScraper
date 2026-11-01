@@ -97,7 +97,13 @@ Network pagination supports network.pagination={{"type":"click","next_selector":
 "end_selector":"optional CSS","max_scrolls":100,"no_change_limit":3}}.
 No mixed DOM/network fields, direct API calls or resource downloads. Reuse top-level
 filters, dedupe_by, max_items, max_pages and timeouts. For pagination, test the initial batch,
-perform the observed normal browser action, then test the exact final network rule again.
+pass the final start_url to test_network (including search query). Use advance_network for exact
+click/link controls or explore_scroll for the declared scroll container, then retest the final rule.
+dedupe_by references declared output fields; declare an id field to use a raw JSON identifier.
+inspect_network_response accepts path to inspect a bounded nested subtree; identical id/path cannot
+provide deeper detail. To retry after historical failed responses, take latest_response_id as a
+since_response_id boundary, recapture the initial batch and pagination, then retest. Never drop a
+failure from the current attempt or use unrelated pages as initial evidence.
 Pass the final dedupe_by to test_network. Test the exact pagination CSS control on the initial
 page with test_selector (attribute="href" for link pagination). For network scroll use
 explore_scroll(network=the_final_network_source, dedupe_by=the_final_keys); no DOM item selector

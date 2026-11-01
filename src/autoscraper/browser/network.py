@@ -158,6 +158,9 @@ class AgentResponseCapture:
         self.playwright = None
         self.context = None
         self.evidence = set()
+        self.test_windows = {}
+        self.last_test_signature = None
+        self.json_documents = []
         self.actions = []
         self.resources = None
 
@@ -186,6 +189,15 @@ class AgentResponseCapture:
             self.pending[request] = entry
 
     def responded(self, response):
+        request = response.request
+        # 顶层 JSON 仅记录能力边界的元数据，不读取正文，也不进入可提取响应缓存。
+        if request.resource_type == "document" and request.frame.parent_frame is None:
+            content_type = response.headers.get("content-type", "").split(";", 1)[0].lower()
+            if content_type == "application/json" or content_type.endswith("+json"):
+                self.json_documents.append(CapturedResponse(0, request.url, request.method,
+                    status=response.status, content_type=content_type, resource_type="document"))
+                self.json_documents = self.json_documents[-8:]
+            return
         entry = self.pending.get(response.request)
         if entry:
             self.buffer.headers(entry, response)
@@ -243,3 +255,7 @@ class AgentResponseCapture:
             await self.playwright.stop()
         self.pending.clear()
         self.buffer.clear()
+        self.evidence.clear()
+        self.test_windows.clear()
+        self.json_documents.clear()
+        self.last_test_signature = None

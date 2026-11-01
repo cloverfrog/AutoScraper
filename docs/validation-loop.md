@@ -125,3 +125,32 @@ Agent 澄清有有效回答时，先用共享模型独立修订当前需求，�
 CLI 新增 `detail_pages` 计数，CSV 和 JSON 都导出合并字段。
 
 上面的 2026-10-21/22 历史验证中的 description=unsupported 是 v1 行为；v2 可表达该请求。
+
+
+## v3 网络探索证据与失败反馈
+
+`test_network` 的 `start_url` 应与最终候选规则一致，包括搜索查询参数。用户入口、实际
+搜索页、重定向别名分别处理；查询值只参与内存中的精确匹配，页面诊断只给端点和有界
+查询键。`done` 会按候选起始页、最终字段路径和去重键重新测试，历史成功不能覆盖本次失败。
+
+网络分页使用 `advance_network(source)` 操作唯一的最终 click/link 控件；滚动使用
+`explore_scroll(network=source, dedupe_by=...)`，按声明的容器取证。仅存在 Next 选择器，
+或任意点击、导航后出现新记录，都不足以证明最终分页动作有效。动作窗口以请求开始序号
+划定，动作前已在途的请求不能冒充动作后的新批次。
+
+同一尝试中保留 HTTP 等响应错误。如果需要重新导航或重做搜索，可记录当前
+`latest_response_id`，重新捕获初始页及分页响应，再将该序号作为 `since_response_id`
+传给 `test_network`（边界本身不包含在新窗口）。窗口只能向前移动；后续 `done` 自动复用
+该最终规则的窗口，并继续检查窗口内后来出现的新失败。旧响应仍可检查，但不能替新尝试
+提供初始页或分页证据。缓存淘汰造成窗口不完整时返回 `response_limit`，需重新取证。
+
+失败结果区分 `no_matching_responses`、`http_status`、`initial_page_mismatch` /
+`initial_page_unverified`、字段/记录路径错误和 `pagination_evidence_missing`；`done` 保留
+对应错误类别，不再全部归为 `json_path_failure`。顶层 JSON 文档只保留有界响应元数据以
+提示 `top_level_json_not_captured`，不会读取正文或成为抓取数据源。重复测试会返回
+`unchanged_evidence`，并明确说明相同规则与证据不能修复确定性失败。
+
+`inspect_network_response(response_id, path=["results", 0, "taxon"])` 可按键/数组下标查看
+局部有界摘要，继续执行深度、数量、总长度和凭据脱敏限制；相同 id/path 不会返回更深结构。
+`dedupe_by` 必须引用已声明的输出字段；如需按原始 `objectID` 去重，应先声明映射该 JSON
+路径的输出字段，再使用该输出字段名。

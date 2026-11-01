@@ -11,7 +11,7 @@ from types import SimpleNamespace
 import pytest
 
 from autoscraper.agent.explorer import AgentSettings
-from autoscraper.agent.network import sample_output
+from autoscraper.agent.network import sample_output, pagination_action
 from autoscraper.browser.network import AgentResponseCapture, CapturedResponse
 from autoscraper.scraping.executor import ScraperExecutor
 from autoscraper.scraping.spec import ScraperSpec
@@ -34,7 +34,7 @@ def local_site():
         thread.join(timeout=5)
 
 
-@pytest.mark.parametrize("pagination", ["click", "scroll"])
+@pytest.mark.parametrize("pagination", ["click", "scroll", "search"])
 def test_agent_tools_generate_validated_reusable_network_rule(monkeypatch, local_site, explicit_unfiltered_requirements, tmp_path, pagination):
     bu = pytest.importorskip("browser_use")
     from browser_use import ActionResult
@@ -46,6 +46,8 @@ def test_agent_tools_generate_validated_reusable_network_rule(monkeypatch, local
     monkeypatch.setattr(models, "make_wait_llm", lambda settings: SimpleNamespace(calls=0, max_calls=0))
     spec_data = json.loads(Path("examples/books.network.json").read_text())
     start_url = local_site + "scroll" if pagination == "scroll" else local_site
+    if pagination == "search":
+        start_url += "?q=Python"
     spec_data.update(start_url=start_url, max_items=10)
     if pagination == "scroll":
         spec_data["network"]["pagination"] = dict(type="scroll", loading_selector="#loading",
@@ -71,12 +73,7 @@ def test_agent_tools_generate_validated_reusable_network_rule(monkeypatch, local
                 await page.goto(start_url)
                 return ActionResult(extracted_content="navigated")
 
-            async def click(**kwargs):
-                await page.locator("#next").click()
-                return ActionResult(extracted_content="clicked")
-
             self.tools.registry.registry.actions["navigate"].function = navigate
-            self.tools.registry.registry.actions["click"].function = click
             actions = self.tools.registry.create_action_model()
 
             async def act(data):
@@ -93,7 +90,7 @@ def test_agent_tools_generate_validated_reusable_network_rule(monkeypatch, local
             assert inspected["complete"] and "sample" in inspected
             assert inspected["sample"]["data"]["items"]["items"][0]["stock"] == 41
             observations["initial"] = inspected
-            params = {"source": spec_data["network"], "dedupe_by": ["id"]}
+            params = {"source": spec_data["network"], "dedupe_by": ["id"], "start_url": start_url}
             initial_test = json.loads((await act({"test_network": params})).extracted_content)
             assert initial_test["extracted"] == initial_test["added"] == 1
             assert not initial_test["pagination_verified"]
@@ -110,7 +107,8 @@ def test_agent_tools_generate_validated_reusable_network_rule(monkeypatch, local
                 assert feedback["count"] == 2 and feedback["added"] == 1, feedback
                 assert feedback["stop_reason"] == "end_marker", feedback
             else:
-                await act({"click": {"index": 1}})
+                advanced = await act({"advance_network": {"source": spec_data["network"]}})
+                assert json.loads(advanced.extracted_content)["status"] == "observed", advanced
             await page.wait_for_function("document.querySelector('main').textContent === 'Book 2'")
             tested = json.loads((await act({"test_network": params})).extracted_content)
             assert tested["status"] == "passed" and tested["responses"] == 2, (tested, [(e.id, e.page_url) for e in capture.buffer.entries.values()], capture.actions)
@@ -120,7 +118,8 @@ def test_agent_tools_generate_validated_reusable_network_rule(monkeypatch, local
 
     monkeypatch.setattr(bu, "Agent", Agent)
     settings = AgentSettings(api_key="fake", model="test", base_url="https://llm.test", content_timeout_ms=1000)
-    outcome = run_task(start_url, "抓取标题和 DOM 不可见的库存、价格及启用状态", settings,
+    outcome = run_task(local_site if pagination == "search" else start_url,
+                       "抓取标题和 DOM 不可见的库存、价格及启用状态", settings,
                        fields=["id", "title", "stock", "price", "active"], count=10, execute=True,
                        validation=ValidationSettings(max_repairs=0))
     assert outcome.status == "success", outcome.model_dump()
@@ -159,7 +158,10 @@ def test_network_evidence_uses_exact_paths_and_dedupe_keys(kind):
     for number in (1, 2):
         capture.buffer.entries[number] = CapturedResponse(number, "https://fixture.test/api", "GET",
             page_url="https://fixture.test/", body=[dict(id=1, stock=number)], complete=True, status=200)
-    capture.actions = [(kind, 1)]
+    from autoscraper.scraping.spec import NetworkSource
+    observed = pagination_action(NetworkSource.model_validate(source), "https://fixture.test/", 1)
+    observed["end"] = 2
+    capture.actions = [observed]
     tools = build_tools(network_capture=capture, check_submission=True, listing_url="https://fixture.test/")
     action = tools.registry.registry.actions["test_network"].function
     async def run():
@@ -196,7 +198,8 @@ def test_network_explore_scroll_wait_and_budget_boundaries(mode, reason):
                 self.scrolled = True
                 if mode == 'pending':
                     capture.buffer.sequence = 2
-                    capture.buffer.entries[2] = CapturedResponse(2, 'https://fixture.test/api', 'GET', status=200)
+                    capture.buffer.entries[2] = CapturedResponse(2, 'https://fixture.test/api', 'GET',
+                        page_url='https://fixture.test/', status=200)
                 return ''
             return json.dumps(dict(bottom=True, loading=self.scrolled and mode == 'loading', end=False))
 
@@ -207,7 +210,11 @@ def test_network_explore_scroll_wait_and_budget_boundaries(mode, reason):
     tools = build_tools(network_capture=capture, check_submission=True,
                         listing_url='https://fixture.test/', content_timeout_ms=500)
     action = tools.registry.registry.actions['explore_scroll'].function
-    result = asyncio.run(action(browser_session=SimpleNamespace(must_get_current_page=current_page),
+    async def current_url():
+        return 'https://fixture.test/'
+
+    result = asyncio.run(action(browser_session=SimpleNamespace(must_get_current_page=current_page,
+                                                               get_current_page_url=current_url),
         network=source, dedupe_by=['id'], max_scrolls=1 if mode == 'budget' else 4, wait_ms=30))
     assert not result.error
     data = json.loads(result.extracted_content)
