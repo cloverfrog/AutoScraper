@@ -1668,6 +1668,23 @@
       "cause": "unknown",
       "local_evidence": "output/pagination-probe/headed-manual-20261102/",
       "note": "仅记录有头人工验证受阻；没有探测滚动或点击分页。旧现场 blocked=false 暴露检测遗漏，现已补充中文及标题检测。"
+    },
+    "user_observation": {
+      "date": "2026-11-02",
+      "source": "用户在本聊天中补充的现场观察，非自动探针复现",
+      "observation": "滚动是普通滚动，滚到底才显示页码和 Next，整个滚动都在同一页",
+      "scroll_loads_next_batch": false,
+      "recommended_existing_protocol": {
+        "type": "click",
+        "mode": "replace"
+      },
+      "remaining_validation": [
+        "唯一 Next 的 DOM 定位",
+        "相邻页顺序推进",
+        "稳定身份去重",
+        "自然结束"
+      ],
+      "scope": "当前目标场景；不外推其他视图或历史行为"
     }
   }
 }
