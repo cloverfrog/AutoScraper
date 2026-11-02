@@ -1,0 +1,1656 @@
+{
+  "description": "Issue #40 真实网站探针的精简实测记录；省略重复的动作前快照、按钮 HTML 和空属性。身份变化列表改存数量，完整当前身份保留在各步 state.ids；执行器身份集合保存 SHA256，并与连续探针集合比较。完整原始证据见 source_report。",
+  "started_at": "2026-11-02T03:46:00.351804+00:00",
+  "browser_version": "156.0.8078.4",
+  "command": ".venv/bin/python scripts/probe/probe_pagination.py --verify-executor --output output/pagination-probe/verified-20261102",
+  "source_report": "output/pagination-probe/verified-20261102/report.json",
+  "settings": {
+    "site": "all",
+    "output": "output/pagination-probe/verified-20261102",
+    "browser_path": null,
+    "headed": false,
+    "wait_ms": 4000,
+    "hn_steps": 8,
+    "inat_scrolls": 8,
+    "inat_next_selector": null,
+    "verify_executor": true
+  },
+  "hn": {
+    "status": "observed",
+    "sequential_unique_records": 270,
+    "events": [
+      {
+        "step": 0,
+        "action": "initial",
+        "state": {
+          "url": "https://hn.algolia.com/?q=Python",
+          "title": "All | Search powered by Algolia",
+          "record_nodes": 30,
+          "ids": [
+            "https://news.ycombinator.com/item?id=45751400",
+            "https://news.ycombinator.com/item?id=20915746",
+            "https://news.ycombinator.com/item?id=13319904",
+            "https://news.ycombinator.com/item?id=27593772",
+            "https://news.ycombinator.com/item?id=38923741",
+            "https://news.ycombinator.com/item?id=43820228",
+            "https://news.ycombinator.com/item?id=28300951",
+            "https://news.ycombinator.com/item?id=15787023",
+            "https://news.ycombinator.com/item?id=48100433",
+            "https://news.ycombinator.com/item?id=43918484",
+            "https://news.ycombinator.com/item?id=20672051",
+            "https://news.ycombinator.com/item?id=41104305",
+            "https://news.ycombinator.com/item?id=29104047",
+            "https://news.ycombinator.com/item?id=37222191",
+            "https://news.ycombinator.com/item?id=28880782",
+            "https://news.ycombinator.com/item?id=21252784",
+            "https://news.ycombinator.com/item?id=13629344",
+            "https://news.ycombinator.com/item?id=13668916",
+            "https://news.ycombinator.com/item?id=20192645",
+            "https://news.ycombinator.com/item?id=36785005",
+            "https://news.ycombinator.com/item?id=25888249",
+            "https://news.ycombinator.com/item?id=38586767",
+            "https://news.ycombinator.com/item?id=44892209",
+            "https://news.ycombinator.com/item?id=44357411",
+            "https://news.ycombinator.com/item?id=45524702",
+            "https://news.ycombinator.com/item?id=8001337",
+            "https://news.ycombinator.com/item?id=29582437",
+            "https://news.ycombinator.com/item?id=22266173",
+            "https://news.ycombinator.com/item?id=13433927",
+            "https://news.ycombinator.com/item?id=37939269"
+          ],
+          "controls": [
+            {
+              "group": 0,
+              "visible": true,
+              "active": [
+                "1"
+              ],
+              "controls": [
+                {
+                  "text": "1",
+                  "class": "Pagination_item Pagination_item-current",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "2",
+                  "class": "Pagination_item",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "3",
+                  "class": "Pagination_item",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "4",
+                  "class": "Pagination_item",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "5",
+                  "class": "Pagination_item",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "6",
+                  "class": "Pagination_item",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "",
+                  "class": "Pagination_item Pagination_next",
+                  "visible": true,
+                  "disabled": false
+                }
+              ]
+            }
+          ],
+          "active": [
+            "1"
+          ],
+          "scroll_top": 0,
+          "scroll_height": 1734,
+          "client_height": 720,
+          "bottom": false,
+          "blocked": false,
+          "loading": [],
+          "body_excerpt": null
+        },
+        "http_status": 200
+      },
+      {
+        "step": 1,
+        "action": "next_numeric",
+        "state": {
+          "url": "https://hn.algolia.com/?dateRange=all&page=1&prefix=false&query=Python&sort=byPopularity&type=story",
+          "title": "All | Search powered by Algolia",
+          "record_nodes": 30,
+          "ids": [
+            "https://news.ycombinator.com/item?id=32002057",
+            "https://news.ycombinator.com/item?id=46369923",
+            "https://news.ycombinator.com/item?id=34754276",
+            "https://news.ycombinator.com/item?id=13732288",
+            "https://news.ycombinator.com/item?id=27490291",
+            "https://news.ycombinator.com/item?id=49812769",
+            "https://news.ycombinator.com/item?id=38457247",
+            "https://news.ycombinator.com/item?id=16808683",
+            "https://news.ycombinator.com/item?id=30115214",
+            "https://news.ycombinator.com/item?id=43508418",
+            "https://news.ycombinator.com/item?id=32210256",
+            "https://news.ycombinator.com/item?id=16978932",
+            "https://news.ycombinator.com/item?id=15707956",
+            "https://news.ycombinator.com/item?id=26080760",
+            "https://news.ycombinator.com/item?id=37737519",
+            "https://news.ycombinator.com/item?id=39387641",
+            "https://news.ycombinator.com/item?id=33327896",
+            "https://news.ycombinator.com/item?id=40211655",
+            "https://news.ycombinator.com/item?id=17048446",
+            "https://news.ycombinator.com/item?id=20463170",
+            "https://news.ycombinator.com/item?id=39293050",
+            "https://news.ycombinator.com/item?id=14909786",
+            "https://news.ycombinator.com/item?id=21701488",
+            "https://news.ycombinator.com/item?id=43748512",
+            "https://news.ycombinator.com/item?id=35122689",
+            "https://news.ycombinator.com/item?id=19320217",
+            "https://news.ycombinator.com/item?id=9100107",
+            "https://news.ycombinator.com/item?id=43317592",
+            "https://news.ycombinator.com/item?id=39125477",
+            "https://news.ycombinator.com/item?id=15927132"
+          ],
+          "controls": [
+            {
+              "group": 0,
+              "visible": true,
+              "active": [
+                "2"
+              ],
+              "controls": [
+                {
+                  "text": "",
+                  "class": "Pagination_item Pagination_previous",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "1",
+                  "class": "Pagination_item",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "2",
+                  "class": "Pagination_item Pagination_item-current",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "3",
+                  "class": "Pagination_item",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "4",
+                  "class": "Pagination_item",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "5",
+                  "class": "Pagination_item",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "6",
+                  "class": "Pagination_item",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "7",
+                  "class": "Pagination_item",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "",
+                  "class": "Pagination_item Pagination_next",
+                  "visible": true,
+                  "disabled": false
+                }
+              ]
+            }
+          ],
+          "active": [
+            "2"
+          ],
+          "scroll_top": 0,
+          "scroll_height": 1596,
+          "client_height": 720,
+          "bottom": false,
+          "blocked": false,
+          "loading": [],
+          "body_excerpt": null
+        },
+        "selector": ".Pagination_item-current + .Pagination_item:not(.Pagination_next) button",
+        "matches": 1,
+        "delta": {
+          "overlap_previous": 0,
+          "ids_changed": true,
+          "adjacent_page": true,
+          "new_ids_count": 30,
+          "removed_ids_count": 30
+        },
+        "elapsed_ms": 4065
+      },
+      {
+        "step": 2,
+        "action": "next_numeric",
+        "state": {
+          "url": "https://hn.algolia.com/?dateRange=all&page=2&prefix=false&query=Python&sort=byPopularity&type=story",
+          "title": "All | Search powered by Algolia",
+          "record_nodes": 30,
+          "ids": [
+            "https://news.ycombinator.com/item?id=10782969",
+            "https://news.ycombinator.com/item?id=19916089",
+            "https://news.ycombinator.com/item?id=50257419",
+            "https://news.ycombinator.com/item?id=37308747",
+            "https://news.ycombinator.com/item?id=6439431",
+            "https://news.ycombinator.com/item?id=35198998",
+            "https://news.ycombinator.com/item?id=6985207",
+            "https://news.ycombinator.com/item?id=13977982",
+            "https://news.ycombinator.com/item?id=39392881",
+            "https://news.ycombinator.com/item?id=19948642",
+            "https://news.ycombinator.com/item?id=15521743",
+            "https://news.ycombinator.com/item?id=36515531",
+            "https://news.ycombinator.com/item?id=35136827",
+            "https://news.ycombinator.com/item?id=17669377",
+            "https://news.ycombinator.com/item?id=24691565",
+            "https://news.ycombinator.com/item?id=5221093",
+            "https://news.ycombinator.com/item?id=28819030",
+            "https://news.ycombinator.com/item?id=15584124",
+            "https://news.ycombinator.com/item?id=17826373",
+            "https://news.ycombinator.com/item?id=36018621",
+            "https://news.ycombinator.com/item?id=3609263",
+            "https://news.ycombinator.com/item?id=36339777",
+            "https://news.ycombinator.com/item?id=16439270",
+            "https://news.ycombinator.com/item?id=44110584",
+            "https://news.ycombinator.com/item?id=40911637",
+            "https://news.ycombinator.com/item?id=14639295",
+            "https://news.ycombinator.com/item?id=12279494",
+            "https://news.ycombinator.com/item?id=21696779",
+            "https://news.ycombinator.com/item?id=40171125",
+            "https://news.ycombinator.com/item?id=37383913"
+          ],
+          "controls": [
+            {
+              "group": 0,
+              "visible": true,
+              "active": [
+                "3"
+              ],
+              "controls": [
+                {
+                  "text": "",
+                  "class": "Pagination_item Pagination_previous",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "1",
+                  "class": "Pagination_item",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "2",
+                  "class": "Pagination_item",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "3",
+                  "class": "Pagination_item Pagination_item-current",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "4",
+                  "class": "Pagination_item",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "5",
+                  "class": "Pagination_item",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "6",
+                  "class": "Pagination_item",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "7",
+                  "class": "Pagination_item",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "8",
+                  "class": "Pagination_item",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "",
+                  "class": "Pagination_item Pagination_next",
+                  "visible": true,
+                  "disabled": false
+                }
+              ]
+            }
+          ],
+          "active": [
+            "3"
+          ],
+          "scroll_top": 0,
+          "scroll_height": 2132,
+          "client_height": 720,
+          "bottom": false,
+          "blocked": false,
+          "loading": [],
+          "body_excerpt": null
+        },
+        "selector": ".Pagination_item-current + .Pagination_item:not(.Pagination_next) button",
+        "matches": 1,
+        "delta": {
+          "overlap_previous": 0,
+          "ids_changed": true,
+          "adjacent_page": true,
+          "new_ids_count": 30,
+          "removed_ids_count": 30
+        },
+        "elapsed_ms": 4038
+      },
+      {
+        "step": 3,
+        "action": "next_numeric",
+        "state": {
+          "url": "https://hn.algolia.com/?dateRange=all&page=3&prefix=false&query=Python&sort=byPopularity&type=story",
+          "title": "All | Search powered by Algolia",
+          "record_nodes": 30,
+          "ids": [
+            "https://news.ycombinator.com/item?id=3765717",
+            "https://news.ycombinator.com/item?id=18067684",
+            "https://news.ycombinator.com/item?id=26459184",
+            "https://news.ycombinator.com/item?id=26188765",
+            "https://news.ycombinator.com/item?id=27537819",
+            "https://news.ycombinator.com/item?id=23386537",
+            "https://news.ycombinator.com/item?id=18199708",
+            "https://news.ycombinator.com/item?id=30130315",
+            "https://news.ycombinator.com/item?id=3286399",
+            "https://news.ycombinator.com/item?id=27941208",
+            "https://news.ycombinator.com/item?id=31102089",
+            "https://news.ycombinator.com/item?id=10211565",
+            "https://news.ycombinator.com/item?id=40680737",
+            "https://news.ycombinator.com/item?id=43501989",
+            "https://news.ycombinator.com/item?id=26631467",
+            "https://news.ycombinator.com/item?id=47416486",
+            "https://news.ycombinator.com/item?id=42479233",
+            "https://news.ycombinator.com/item?id=43731165",
+            "https://news.ycombinator.com/item?id=17819138",
+            "https://news.ycombinator.com/item?id=4772261",
+            "https://news.ycombinator.com/item?id=36612835",
+            "https://news.ycombinator.com/item?id=13011932",
+            "https://news.ycombinator.com/item?id=38196412",
+            "https://news.ycombinator.com/item?id=32793061",
+            "https://news.ycombinator.com/item?id=12179339",
+            "https://news.ycombinator.com/item?id=23496994",
+            "https://news.ycombinator.com/item?id=34227760",
+            "https://news.ycombinator.com/item?id=12703008",
+            "https://news.ycombinator.com/item?id=21158487",
+            "https://news.ycombinator.com/item?id=44579717"
+          ],
+          "controls": [
+            {
+              "group": 0,
+              "visible": true,
+              "active": [
+                "4"
+              ],
+              "controls": [
+                {
+                  "text": "",
+                  "class": "Pagination_item Pagination_previous",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "1",
+                  "class": "Pagination_item",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "2",
+                  "class": "Pagination_item",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "3",
+                  "class": "Pagination_item",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "4",
+                  "class": "Pagination_item Pagination_item-current",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "5",
+                  "class": "Pagination_item",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "6",
+                  "class": "Pagination_item",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "7",
+                  "class": "Pagination_item",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "8",
+                  "class": "Pagination_item",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "9",
+                  "class": "Pagination_item",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "",
+                  "class": "Pagination_item Pagination_next",
+                  "visible": true,
+                  "disabled": false
+                }
+              ]
+            }
+          ],
+          "active": [
+            "4"
+          ],
+          "scroll_top": 0,
+          "scroll_height": 1510,
+          "client_height": 720,
+          "bottom": false,
+          "blocked": false,
+          "loading": [],
+          "body_excerpt": null
+        },
+        "selector": ".Pagination_item-current + .Pagination_item:not(.Pagination_next) button",
+        "matches": 1,
+        "delta": {
+          "overlap_previous": 0,
+          "ids_changed": true,
+          "adjacent_page": true,
+          "new_ids_count": 30,
+          "removed_ids_count": 30
+        },
+        "elapsed_ms": 4045
+      },
+      {
+        "step": 4,
+        "action": "next_numeric",
+        "state": {
+          "url": "https://hn.algolia.com/?dateRange=all&page=4&prefix=false&query=Python&sort=byPopularity&type=story",
+          "title": "All | Search powered by Algolia",
+          "record_nodes": 30,
+          "ids": [
+            "https://news.ycombinator.com/item?id=17169331",
+            "https://news.ycombinator.com/item?id=7840566",
+            "https://news.ycombinator.com/item?id=16473482",
+            "https://news.ycombinator.com/item?id=22000507",
+            "https://news.ycombinator.com/item?id=9496672",
+            "https://news.ycombinator.com/item?id=43581584",
+            "https://news.ycombinator.com/item?id=31566031",
+            "https://news.ycombinator.com/item?id=42076884",
+            "https://news.ycombinator.com/item?id=11625585",
+            "https://news.ycombinator.com/item?id=13854087",
+            "https://news.ycombinator.com/item?id=15127672",
+            "https://news.ycombinator.com/item?id=13539767",
+            "https://news.ycombinator.com/item?id=14022110",
+            "https://news.ycombinator.com/item?id=26859907",
+            "https://news.ycombinator.com/item?id=43090214",
+            "https://news.ycombinator.com/item?id=41617431",
+            "https://news.ycombinator.com/item?id=38971966",
+            "https://news.ycombinator.com/item?id=17151813",
+            "https://news.ycombinator.com/item?id=13428098",
+            "https://news.ycombinator.com/item?id=36643999",
+            "https://news.ycombinator.com/item?id=7015132",
+            "https://news.ycombinator.com/item?id=9609955",
+            "https://news.ycombinator.com/item?id=26463967",
+            "https://news.ycombinator.com/item?id=19787645",
+            "https://news.ycombinator.com/item?id=23391380",
+            "https://news.ycombinator.com/item?id=32767338",
+            "https://news.ycombinator.com/item?id=20109469",
+            "https://news.ycombinator.com/item?id=10888061",
+            "https://news.ycombinator.com/item?id=48220696",
+            "https://news.ycombinator.com/item?id=24997496"
+          ],
+          "controls": [
+            {
+              "group": 0,
+              "visible": true,
+              "active": [
+                "5"
+              ],
+              "controls": [
+                {
+                  "text": "",
+                  "class": "Pagination_item Pagination_previous",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "1",
+                  "class": "Pagination_item",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "2",
+                  "class": "Pagination_item",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "3",
+                  "class": "Pagination_item",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "4",
+                  "class": "Pagination_item",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "5",
+                  "class": "Pagination_item Pagination_item-current",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "6",
+                  "class": "Pagination_item",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "7",
+                  "class": "Pagination_item",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "8",
+                  "class": "Pagination_item",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "9",
+                  "class": "Pagination_item",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "10",
+                  "class": "Pagination_item",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "",
+                  "class": "Pagination_item Pagination_next",
+                  "visible": true,
+                  "disabled": false
+                }
+              ]
+            }
+          ],
+          "active": [
+            "5"
+          ],
+          "scroll_top": 0,
+          "scroll_height": 2242,
+          "client_height": 720,
+          "bottom": false,
+          "blocked": false,
+          "loading": [],
+          "body_excerpt": null
+        },
+        "selector": ".Pagination_item-current + .Pagination_item:not(.Pagination_next) button",
+        "matches": 1,
+        "delta": {
+          "overlap_previous": 0,
+          "ids_changed": true,
+          "adjacent_page": true,
+          "new_ids_count": 30,
+          "removed_ids_count": 30
+        },
+        "elapsed_ms": 4048
+      },
+      {
+        "step": 5,
+        "action": "next_numeric",
+        "state": {
+          "url": "https://hn.algolia.com/?dateRange=all&page=5&prefix=false&query=Python&sort=byPopularity&type=story",
+          "title": "All | Search powered by Algolia",
+          "record_nodes": 30,
+          "ids": [
+            "https://news.ycombinator.com/item?id=19064069",
+            "https://news.ycombinator.com/item?id=46454470",
+            "https://news.ycombinator.com/item?id=29768376",
+            "https://news.ycombinator.com/item?id=15982390",
+            "https://news.ycombinator.com/item?id=3419671",
+            "https://news.ycombinator.com/item?id=14101699",
+            "https://news.ycombinator.com/item?id=25058619",
+            "https://news.ycombinator.com/item?id=32258783",
+            "https://news.ycombinator.com/item?id=33996940",
+            "https://news.ycombinator.com/item?id=23255732",
+            "https://news.ycombinator.com/item?id=10752028",
+            "https://news.ycombinator.com/item?id=8665820",
+            "https://news.ycombinator.com/item?id=14145551",
+            "https://news.ycombinator.com/item?id=18714985",
+            "https://news.ycombinator.com/item?id=3049623",
+            "https://news.ycombinator.com/item?id=5977695",
+            "https://news.ycombinator.com/item?id=15945490",
+            "https://news.ycombinator.com/item?id=22036773",
+            "https://news.ycombinator.com/item?id=46601902",
+            "https://news.ycombinator.com/item?id=19827336",
+            "https://news.ycombinator.com/item?id=46431028",
+            "https://news.ycombinator.com/item?id=8167546",
+            "https://news.ycombinator.com/item?id=19939806",
+            "https://news.ycombinator.com/item?id=16868296",
+            "https://news.ycombinator.com/item?id=21196555",
+            "https://news.ycombinator.com/item?id=21927009",
+            "https://news.ycombinator.com/item?id=49433328",
+            "https://news.ycombinator.com/item?id=32314368",
+            "https://news.ycombinator.com/item?id=16240234",
+            "https://news.ycombinator.com/item?id=18706174"
+          ],
+          "controls": [
+            {
+              "group": 0,
+              "visible": true,
+              "active": [
+                "6"
+              ],
+              "controls": [
+                {
+                  "text": "",
+                  "class": "Pagination_item Pagination_previous",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "1",
+                  "class": "Pagination_item",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "2",
+                  "class": "Pagination_item",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "3",
+                  "class": "Pagination_item",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "4",
+                  "class": "Pagination_item",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "5",
+                  "class": "Pagination_item",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "6",
+                  "class": "Pagination_item Pagination_item-current",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "7",
+                  "class": "Pagination_item",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "8",
+                  "class": "Pagination_item",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "9",
+                  "class": "Pagination_item",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "10",
+                  "class": "Pagination_item",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "11",
+                  "class": "Pagination_item",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "",
+                  "class": "Pagination_item Pagination_next",
+                  "visible": true,
+                  "disabled": false
+                }
+              ]
+            }
+          ],
+          "active": [
+            "6"
+          ],
+          "scroll_top": 0,
+          "scroll_height": 1575,
+          "client_height": 720,
+          "bottom": false,
+          "blocked": false,
+          "loading": [],
+          "body_excerpt": null
+        },
+        "selector": ".Pagination_item-current + .Pagination_item:not(.Pagination_next) button",
+        "matches": 1,
+        "delta": {
+          "overlap_previous": 0,
+          "ids_changed": true,
+          "adjacent_page": true,
+          "new_ids_count": 30,
+          "removed_ids_count": 30
+        },
+        "elapsed_ms": 4044
+      },
+      {
+        "step": 6,
+        "action": "next_numeric",
+        "state": {
+          "url": "https://hn.algolia.com/?dateRange=all&page=6&prefix=false&query=Python&sort=byPopularity&type=story",
+          "title": "All | Search powered by Algolia",
+          "record_nodes": 30,
+          "ids": [
+            "https://news.ycombinator.com/item?id=50219177",
+            "https://news.ycombinator.com/item?id=7715349",
+            "https://news.ycombinator.com/item?id=7365410",
+            "https://news.ycombinator.com/item?id=23746067",
+            "https://news.ycombinator.com/item?id=22514004",
+            "https://news.ycombinator.com/item?id=36257981",
+            "https://news.ycombinator.com/item?id=34424854",
+            "https://news.ycombinator.com/item?id=41322758",
+            "https://news.ycombinator.com/item?id=19985802",
+            "https://news.ycombinator.com/item?id=5458986",
+            "https://news.ycombinator.com/item?id=36935041",
+            "https://news.ycombinator.com/item?id=46384167",
+            "https://news.ycombinator.com/item?id=34818706",
+            "https://news.ycombinator.com/item?id=45362023",
+            "https://news.ycombinator.com/item?id=41677131",
+            "https://news.ycombinator.com/item?id=3094695",
+            "https://news.ycombinator.com/item?id=26733423",
+            "https://news.ycombinator.com/item?id=21862073",
+            "https://news.ycombinator.com/item?id=19296031",
+            "https://news.ycombinator.com/item?id=5817713",
+            "https://news.ycombinator.com/item?id=44107655",
+            "https://news.ycombinator.com/item?id=21510262",
+            "https://news.ycombinator.com/item?id=43769486",
+            "https://news.ycombinator.com/item?id=41070428",
+            "https://news.ycombinator.com/item?id=26090243",
+            "https://news.ycombinator.com/item?id=3579847",
+            "https://news.ycombinator.com/item?id=19677721",
+            "https://news.ycombinator.com/item?id=3056490",
+            "https://news.ycombinator.com/item?id=39905441",
+            "https://news.ycombinator.com/item?id=29945848"
+          ],
+          "controls": [
+            {
+              "group": 0,
+              "visible": true,
+              "active": [
+                "7"
+              ],
+              "controls": [
+                {
+                  "text": "",
+                  "class": "Pagination_item Pagination_previous",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "2",
+                  "class": "Pagination_item",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "3",
+                  "class": "Pagination_item",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "4",
+                  "class": "Pagination_item",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "5",
+                  "class": "Pagination_item",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "6",
+                  "class": "Pagination_item",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "7",
+                  "class": "Pagination_item Pagination_item-current",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "8",
+                  "class": "Pagination_item",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "9",
+                  "class": "Pagination_item",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "10",
+                  "class": "Pagination_item",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "11",
+                  "class": "Pagination_item",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "12",
+                  "class": "Pagination_item",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "",
+                  "class": "Pagination_item Pagination_next",
+                  "visible": true,
+                  "disabled": false
+                }
+              ]
+            }
+          ],
+          "active": [
+            "7"
+          ],
+          "scroll_top": 0,
+          "scroll_height": 2212,
+          "client_height": 720,
+          "bottom": false,
+          "blocked": false,
+          "loading": [],
+          "body_excerpt": null
+        },
+        "selector": ".Pagination_item-current + .Pagination_item:not(.Pagination_next) button",
+        "matches": 1,
+        "delta": {
+          "overlap_previous": 0,
+          "ids_changed": true,
+          "adjacent_page": true,
+          "new_ids_count": 30,
+          "removed_ids_count": 30
+        },
+        "elapsed_ms": 4047
+      },
+      {
+        "step": 7,
+        "action": "next_numeric",
+        "state": {
+          "url": "https://hn.algolia.com/?dateRange=all&page=7&prefix=false&query=Python&sort=byPopularity&type=story",
+          "title": "All | Search powered by Algolia",
+          "record_nodes": 30,
+          "ids": [
+            "https://news.ycombinator.com/item?id=21284669",
+            "https://news.ycombinator.com/item?id=35367520",
+            "https://news.ycombinator.com/item?id=22295232",
+            "https://news.ycombinator.com/item?id=26040234",
+            "https://news.ycombinator.com/item?id=4932501",
+            "https://news.ycombinator.com/item?id=7581434",
+            "https://news.ycombinator.com/item?id=14132347",
+            "https://news.ycombinator.com/item?id=3645219",
+            "https://news.ycombinator.com/item?id=26582109",
+            "https://news.ycombinator.com/item?id=15495562",
+            "https://news.ycombinator.com/item?id=7801834",
+            "https://news.ycombinator.com/item?id=14469477",
+            "https://news.ycombinator.com/item?id=33345421",
+            "https://news.ycombinator.com/item?id=39442273",
+            "https://news.ycombinator.com/item?id=12829759",
+            "https://news.ycombinator.com/item?id=7226372",
+            "https://news.ycombinator.com/item?id=16609068",
+            "https://news.ycombinator.com/item?id=29199810",
+            "https://news.ycombinator.com/item?id=23549273",
+            "https://news.ycombinator.com/item?id=15539621",
+            "https://news.ycombinator.com/item?id=26565970",
+            "https://news.ycombinator.com/item?id=30649470",
+            "https://news.ycombinator.com/item?id=20751949",
+            "https://news.ycombinator.com/item?id=34289581",
+            "https://news.ycombinator.com/item?id=37114141",
+            "https://news.ycombinator.com/item?id=25933121",
+            "https://news.ycombinator.com/item?id=7639214",
+            "https://news.ycombinator.com/item?id=5389656",
+            "https://news.ycombinator.com/item?id=32214419",
+            "https://news.ycombinator.com/item?id=5304873"
+          ],
+          "controls": [
+            {
+              "group": 0,
+              "visible": true,
+              "active": [
+                "8"
+              ],
+              "controls": [
+                {
+                  "text": "",
+                  "class": "Pagination_item Pagination_previous",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "3",
+                  "class": "Pagination_item",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "4",
+                  "class": "Pagination_item",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "5",
+                  "class": "Pagination_item",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "6",
+                  "class": "Pagination_item",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "7",
+                  "class": "Pagination_item",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "8",
+                  "class": "Pagination_item Pagination_item-current",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "9",
+                  "class": "Pagination_item",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "10",
+                  "class": "Pagination_item",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "11",
+                  "class": "Pagination_item",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "12",
+                  "class": "Pagination_item",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "13",
+                  "class": "Pagination_item",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "",
+                  "class": "Pagination_item Pagination_next",
+                  "visible": true,
+                  "disabled": false
+                }
+              ]
+            }
+          ],
+          "active": [
+            "8"
+          ],
+          "scroll_top": 0,
+          "scroll_height": 2168,
+          "client_height": 720,
+          "bottom": false,
+          "blocked": false,
+          "loading": [],
+          "body_excerpt": null
+        },
+        "selector": ".Pagination_item-current + .Pagination_item:not(.Pagination_next) button",
+        "matches": 1,
+        "delta": {
+          "overlap_previous": 0,
+          "ids_changed": true,
+          "adjacent_page": true,
+          "new_ids_count": 30,
+          "removed_ids_count": 30
+        },
+        "elapsed_ms": 4048
+      },
+      {
+        "step": 8,
+        "action": "next_numeric",
+        "state": {
+          "url": "https://hn.algolia.com/?dateRange=all&page=8&prefix=false&query=Python&sort=byPopularity&type=story",
+          "title": "All | Search powered by Algolia",
+          "record_nodes": 30,
+          "ids": [
+            "https://news.ycombinator.com/item?id=15092521",
+            "https://news.ycombinator.com/item?id=10402307",
+            "https://news.ycombinator.com/item?id=1087068",
+            "https://news.ycombinator.com/item?id=26121937",
+            "https://news.ycombinator.com/item?id=43121059",
+            "https://news.ycombinator.com/item?id=23336050",
+            "https://news.ycombinator.com/item?id=23070821",
+            "https://news.ycombinator.com/item?id=29841560",
+            "https://news.ycombinator.com/item?id=17405722",
+            "https://news.ycombinator.com/item?id=26097732",
+            "https://news.ycombinator.com/item?id=30190717",
+            "https://news.ycombinator.com/item?id=20027281",
+            "https://news.ycombinator.com/item?id=38844943",
+            "https://news.ycombinator.com/item?id=42868576",
+            "https://news.ycombinator.com/item?id=43519669",
+            "https://news.ycombinator.com/item?id=2257347",
+            "https://news.ycombinator.com/item?id=41833200",
+            "https://news.ycombinator.com/item?id=3710107",
+            "https://news.ycombinator.com/item?id=19083479",
+            "https://news.ycombinator.com/item?id=13722852",
+            "https://news.ycombinator.com/item?id=18145622",
+            "https://news.ycombinator.com/item?id=36914401",
+            "https://news.ycombinator.com/item?id=7918037",
+            "https://news.ycombinator.com/item?id=13204786",
+            "https://news.ycombinator.com/item?id=19886754",
+            "https://news.ycombinator.com/item?id=47327703",
+            "https://news.ycombinator.com/item?id=15063469",
+            "https://news.ycombinator.com/item?id=13355034",
+            "https://news.ycombinator.com/item?id=46047580",
+            "https://news.ycombinator.com/item?id=4589465"
+          ],
+          "controls": [
+            {
+              "group": 0,
+              "visible": true,
+              "active": [
+                "9"
+              ],
+              "controls": [
+                {
+                  "text": "",
+                  "class": "Pagination_item Pagination_previous",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "4",
+                  "class": "Pagination_item",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "5",
+                  "class": "Pagination_item",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "6",
+                  "class": "Pagination_item",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "7",
+                  "class": "Pagination_item",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "8",
+                  "class": "Pagination_item",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "9",
+                  "class": "Pagination_item Pagination_item-current",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "10",
+                  "class": "Pagination_item",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "11",
+                  "class": "Pagination_item",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "12",
+                  "class": "Pagination_item",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "13",
+                  "class": "Pagination_item",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "14",
+                  "class": "Pagination_item",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "",
+                  "class": "Pagination_item Pagination_next",
+                  "visible": true,
+                  "disabled": false
+                }
+              ]
+            }
+          ],
+          "active": [
+            "9"
+          ],
+          "scroll_top": 0,
+          "scroll_height": 1544,
+          "client_height": 720,
+          "bottom": false,
+          "blocked": false,
+          "loading": [],
+          "body_excerpt": null
+        },
+        "selector": ".Pagination_item-current + .Pagination_item:not(.Pagination_next) button",
+        "matches": 1,
+        "delta": {
+          "overlap_previous": 0,
+          "ids_changed": true,
+          "adjacent_page": true,
+          "new_ids_count": 30,
+          "removed_ids_count": 30
+        },
+        "elapsed_ms": 4043
+      },
+      {
+        "step": 9,
+        "action": "initial",
+        "state": {
+          "url": "https://hn.algolia.com/?q=Python",
+          "title": "All | Search powered by Algolia",
+          "record_nodes": 30,
+          "ids": [
+            "https://news.ycombinator.com/item?id=45751400",
+            "https://news.ycombinator.com/item?id=20915746",
+            "https://news.ycombinator.com/item?id=13319904",
+            "https://news.ycombinator.com/item?id=27593772",
+            "https://news.ycombinator.com/item?id=38923741",
+            "https://news.ycombinator.com/item?id=43820228",
+            "https://news.ycombinator.com/item?id=28300951",
+            "https://news.ycombinator.com/item?id=15787023",
+            "https://news.ycombinator.com/item?id=48100433",
+            "https://news.ycombinator.com/item?id=43918484",
+            "https://news.ycombinator.com/item?id=20672051",
+            "https://news.ycombinator.com/item?id=41104305",
+            "https://news.ycombinator.com/item?id=29104047",
+            "https://news.ycombinator.com/item?id=37222191",
+            "https://news.ycombinator.com/item?id=28880782",
+            "https://news.ycombinator.com/item?id=21252784",
+            "https://news.ycombinator.com/item?id=13629344",
+            "https://news.ycombinator.com/item?id=13668916",
+            "https://news.ycombinator.com/item?id=20192645",
+            "https://news.ycombinator.com/item?id=36785005",
+            "https://news.ycombinator.com/item?id=25888249",
+            "https://news.ycombinator.com/item?id=38586767",
+            "https://news.ycombinator.com/item?id=44892209",
+            "https://news.ycombinator.com/item?id=44357411",
+            "https://news.ycombinator.com/item?id=45524702",
+            "https://news.ycombinator.com/item?id=8001337",
+            "https://news.ycombinator.com/item?id=29582437",
+            "https://news.ycombinator.com/item?id=22266173",
+            "https://news.ycombinator.com/item?id=13433927",
+            "https://news.ycombinator.com/item?id=37939269"
+          ],
+          "controls": [
+            {
+              "group": 0,
+              "visible": true,
+              "active": [
+                "1"
+              ],
+              "controls": [
+                {
+                  "text": "1",
+                  "class": "Pagination_item Pagination_item-current",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "2",
+                  "class": "Pagination_item",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "3",
+                  "class": "Pagination_item",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "4",
+                  "class": "Pagination_item",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "5",
+                  "class": "Pagination_item",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "6",
+                  "class": "Pagination_item",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "",
+                  "class": "Pagination_item Pagination_next",
+                  "visible": true,
+                  "disabled": false
+                }
+              ]
+            }
+          ],
+          "active": [
+            "1"
+          ],
+          "scroll_top": 0,
+          "scroll_height": 1734,
+          "client_height": 720,
+          "bottom": false,
+          "blocked": false,
+          "loading": [],
+          "body_excerpt": null
+        },
+        "http_status": 200
+      },
+      {
+        "step": 10,
+        "action": "double_arrow_right",
+        "state": {
+          "url": "https://hn.algolia.com/?dateRange=all&page=33&prefix=false&query=Python&sort=byPopularity&type=story",
+          "title": "All | Search powered by Algolia",
+          "record_nodes": 10,
+          "ids": [
+            "https://news.ycombinator.com/item?id=11384577",
+            "https://news.ycombinator.com/item?id=37254510",
+            "https://news.ycombinator.com/item?id=5133047",
+            "https://news.ycombinator.com/item?id=27592822",
+            "https://news.ycombinator.com/item?id=39297776",
+            "https://news.ycombinator.com/item?id=9281222",
+            "https://news.ycombinator.com/item?id=4616240",
+            "https://news.ycombinator.com/item?id=16795049",
+            "https://news.ycombinator.com/item?id=36936797",
+            "https://news.ycombinator.com/item?id=2034981"
+          ],
+          "controls": [
+            {
+              "group": 0,
+              "visible": true,
+              "active": [
+                "34"
+              ],
+              "controls": [
+                {
+                  "text": "",
+                  "class": "Pagination_item Pagination_previous",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "29",
+                  "class": "Pagination_item",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "30",
+                  "class": "Pagination_item",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "31",
+                  "class": "Pagination_item",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "32",
+                  "class": "Pagination_item",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "33",
+                  "class": "Pagination_item",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "34",
+                  "class": "Pagination_item Pagination_item-current",
+                  "visible": true,
+                  "disabled": false
+                }
+              ]
+            }
+          ],
+          "active": [
+            "34"
+          ],
+          "scroll_top": 0,
+          "scroll_height": 835,
+          "client_height": 720,
+          "bottom": false,
+          "blocked": false,
+          "loading": [],
+          "body_excerpt": null
+        },
+        "selector": ".Pagination_next button",
+        "matches": 1,
+        "delta": {
+          "overlap_previous": 0,
+          "ids_changed": true,
+          "adjacent_page": false,
+          "new_ids_count": 10,
+          "removed_ids_count": 30
+        },
+        "elapsed_ms": 4062
+      },
+      {
+        "step": 11,
+        "action": "double_arrow_left",
+        "state": {
+          "url": "https://hn.algolia.com/?dateRange=all&page=0&prefix=false&query=Python&sort=byPopularity&type=story",
+          "title": "All | Search powered by Algolia",
+          "record_nodes": 30,
+          "ids": [
+            "https://news.ycombinator.com/item?id=45751400",
+            "https://news.ycombinator.com/item?id=20915746",
+            "https://news.ycombinator.com/item?id=13319904",
+            "https://news.ycombinator.com/item?id=27593772",
+            "https://news.ycombinator.com/item?id=38923741",
+            "https://news.ycombinator.com/item?id=43820228",
+            "https://news.ycombinator.com/item?id=28300951",
+            "https://news.ycombinator.com/item?id=15787023",
+            "https://news.ycombinator.com/item?id=48100433",
+            "https://news.ycombinator.com/item?id=43918484",
+            "https://news.ycombinator.com/item?id=20672051",
+            "https://news.ycombinator.com/item?id=41104305",
+            "https://news.ycombinator.com/item?id=29104047",
+            "https://news.ycombinator.com/item?id=37222191",
+            "https://news.ycombinator.com/item?id=28880782",
+            "https://news.ycombinator.com/item?id=21252784",
+            "https://news.ycombinator.com/item?id=13629344",
+            "https://news.ycombinator.com/item?id=13668916",
+            "https://news.ycombinator.com/item?id=20192645",
+            "https://news.ycombinator.com/item?id=36785005",
+            "https://news.ycombinator.com/item?id=25888249",
+            "https://news.ycombinator.com/item?id=38586767",
+            "https://news.ycombinator.com/item?id=44892209",
+            "https://news.ycombinator.com/item?id=44357411",
+            "https://news.ycombinator.com/item?id=45524702",
+            "https://news.ycombinator.com/item?id=8001337",
+            "https://news.ycombinator.com/item?id=29582437",
+            "https://news.ycombinator.com/item?id=22266173",
+            "https://news.ycombinator.com/item?id=13433927",
+            "https://news.ycombinator.com/item?id=37939269"
+          ],
+          "controls": [
+            {
+              "group": 0,
+              "visible": true,
+              "active": [
+                "1"
+              ],
+              "controls": [
+                {
+                  "text": "1",
+                  "class": "Pagination_item Pagination_item-current",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "2",
+                  "class": "Pagination_item",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "3",
+                  "class": "Pagination_item",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "4",
+                  "class": "Pagination_item",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "5",
+                  "class": "Pagination_item",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "6",
+                  "class": "Pagination_item",
+                  "visible": true,
+                  "disabled": false
+                },
+                {
+                  "text": "",
+                  "class": "Pagination_item Pagination_next",
+                  "visible": true,
+                  "disabled": false
+                }
+              ]
+            }
+          ],
+          "active": [
+            "1"
+          ],
+          "scroll_top": 0,
+          "scroll_height": 1734,
+          "client_height": 720,
+          "bottom": false,
+          "blocked": false,
+          "loading": [],
+          "body_excerpt": null
+        },
+        "selector": ".Pagination_previous button",
+        "matches": 1,
+        "delta": {
+          "overlap_previous": 0,
+          "ids_changed": true,
+          "adjacent_page": false,
+          "new_ids_count": 0,
+          "removed_ids_count": 10
+        },
+        "elapsed_ms": 4022
+      }
+    ],
+    "executor": {
+      "spec": {
+        "version": "2",
+        "start_url": "https://hn.algolia.com/?q=Python",
+        "item_selector": "article.Story",
+        "fields": {
+          "id": {
+            "selector": ".Story_title > a:first-child",
+            "extract": "attribute",
+            "attribute": "href",
+            "transform": "none",
+            "required": true
+          },
+          "title": {
+            "selector": ".Story_title > a:first-child",
+            "extract": "text",
+            "transform": "none",
+            "required": true
+          }
+        },
+        "resources": [],
+        "filters": [],
+        "pagination": {
+          "type": "click",
+          "next_selector": ".Pagination_item-current + .Pagination_item:not(.Pagination_next) button",
+          "mode": "replace"
+        },
+        "max_items": 270,
+        "max_pages": 9,
+        "timeout_ms": 30000,
+        "content_timeout_ms": 15000,
+        "dedupe_by": [
+          "id"
+        ],
+        "on_item_error": "fail"
+      },
+      "records": 270,
+      "pages": 9,
+      "stop_reason": "max_items",
+      "duplicates": 0,
+      "errors": [],
+      "final_active": [
+        "9"
+      ],
+      "identity_set_sha256": "e9e29fb67176e5a02051037eb2f3d4635b962a5676662ba13e2c5d9a14cadcc6",
+      "identity_set_matches_sequential": true
+    },
+    "sequential_identity_set_sha256": "e9e29fb67176e5a02051037eb2f3d4635b962a5676662ba13e2c5d9a14cadcc6"
+  },
+  "inaturalist": {
+    "status": "blocked_or_no_records",
+    "limitation": "未取得列表，不能推断滚动和页码衔接机制",
+    "events": [
+      {
+        "step": 0,
+        "action": "initial",
+        "state": {
+          "url": "https://www.inaturalist.org/observations?taxon_id=47126",
+          "title": "Just a moment...",
+          "record_nodes": 0,
+          "ids": [],
+          "controls": [],
+          "active": [],
+          "scroll_top": 0,
+          "scroll_height": 720,
+          "client_height": 720,
+          "bottom": true,
+          "blocked": true,
+          "loading": [],
+          "body_excerpt": "www.inaturalist.org\nPerforming security verification\n\nThis website uses a security service to protect against malicious bots. This page is displayed while the website verifies you are not a bot.\n\nRay ID: a54027e95e78ff47\nPerformance and Security by Cloudflare\nPrivacy"
+        },
+        "http_status": 403
+      }
+    ]
+  }
+}
