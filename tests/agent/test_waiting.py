@@ -33,7 +33,8 @@ class Model:
 
     async def ainvoke(self, messages, output_format=None):
         self.calls += 1
-        return SimpleNamespace(completion={"ready": next(self.answers)})
+        answer = next(self.answers)
+        return SimpleNamespace(completion=answer if isinstance(answer, dict) else {"ready": answer, "access": "none"})
 
 
 # 按顺序提供 DOM 快照的浏览器会话替身。
@@ -461,3 +462,29 @@ def test_selector_tool_passes_min_count(monkeypatch):
     action = build_tools().registry.registry.actions["wait_for_selector"].function
     result = asyncio.run(action(browser_session=object(), selector="article", min_count=7))
     assert json.loads(result.extracted_content)["count"] == 12
+
+
+# 即使成功条件要求等待验证消失，语义检查发现访问门槛后也必须立即停止等待。
+@pytest.mark.parametrize("ready", [False, True])
+def test_semantic_access_gate_takes_priority_over_readiness(ready):
+    model = Model([{"ready": ready, "access": "manual"}, True])
+    session = Session(['{"text":"Security verification before accessing records"}',
+                       '{"text":"Records loaded"}'])
+    result = asyncio.run(waiter(model).content(session, "Wait until verification clears", 0.1, 2))
+    assert result["status"] == "needs_user"
+    assert result["access"] == "manual"
+    assert result["checks"] == model.calls == 1
+
+
+# 成功条件里的站点名或验证词不能自行触发接管，仍以当前页面的语义证据为准。
+def test_public_page_does_not_become_manual_from_criteria_text():
+    model = Model([{"ready": True, "access": "none"}])
+    result = asyncio.run(waiter(model).content(Session(['{"text":"Public records"}']),
+                                             "Cloudflare verification has cleared"))
+    assert result["status"] == "ready"
+
+
+# 新的访问判断必须显式返回，缺失时不能悄悄降为无需人工操作。
+def test_semantic_missing_access_assessment_is_invalid():
+    result = asyncio.run(waiter(Model([{"ready": True}])).content(Session(["{}"]), "Records"))
+    assert result["status"] == "llm_error"

@@ -685,3 +685,25 @@ def test_changed_extraction_mode_is_not_replace_progress(page):
     data = evaluate(page, BATCH_SELECTOR_SCRIPT, "article", {"n": {"selector": "p", "extract": "count"}})
     checks.remember(data["results"]["n"], "p")
     assert (page.url, "article", "click", "replace") not in checks.advances
+
+
+# 登录/验证的访问证据应在字段取证重置后继续约束入口，不能被 access=none 覆盖。
+def test_manual_access_evidence_survives_reset_and_follows_entry_redirect():
+    shared = set()
+    checks = SubmissionChecks(listing_url="https://fixture.test/", manual_urls=shared)
+    checks.aliases["https://fixture.test/"] = "https://fixture.test/challenge"
+    checks.remember_manual_access("https://fixture.test/challenge")
+    assert checks.check_access(candidate())
+    assert not checks.check_access(candidate(access="manual"))
+    restored = SubmissionChecks(listing_url="https://fixture.test/", manual_urls=shared)
+    assert restored.check_access(candidate())
+    assert restored.repair_summary()["manual_access_urls"]
+
+
+# 同站详情页的验证只约束该页面，不能推断普通列表入口或其他查询也需要验证。
+def test_manual_access_evidence_is_scoped_to_observed_entry():
+    checks = SubmissionChecks(listing_url="https://fixture.test/")
+    checks.remember_manual_access("https://fixture.test/detail")
+    assert not checks.check_access(candidate())
+    assert checks.check_access(candidate(start_url="https://fixture.test/detail"))
+    assert not checks.check_access(candidate(start_url="https://fixture.test/detail?public=1"))

@@ -29,7 +29,7 @@ def resource_key(spec, rule):
 
 # 字段测试按提取方式隔离；计数不依赖字段参数，替换模式仍比较同一规则的值。
 class SubmissionChecks:
-    def __init__(self, requirements=None, *, listing_url=None, reference_spec=None):
+    def __init__(self, requirements=None, *, listing_url=None, reference_spec=None, manual_urls=None):
         self.requirements = requirements
         self.listing_url = listing_url
         self.reference_spec = reference_spec
@@ -43,6 +43,24 @@ class SubmissionChecks:
         self.last_candidate = None
         self.network_summary = None
         self.resource_evidence = set()
+        self.manual_urls = manual_urls if manual_urls is not None else set()
+
+    # 访问证据按页面隔离；入口跳转后同时保留原地址，详情验证不升级为全站要求。
+    def remember_manual_access(self, url):
+        self.manual_urls.add(page_key(url))
+        if self.listing_url and self.actual_url(url) == self.actual_url(self.listing_url):
+            self.manual_urls.add(page_key(self.listing_url))
+
+    # 已观察到的访问前置条件不因等待完成、人工继续或字段取证重置而消失。
+    def check_access(self, spec):
+        if spec.access == "none" and (
+            page_key(spec.start_url) in self.manual_urls
+            or self.actual_url(spec.start_url) in self.manual_urls
+        ):
+            return [Feedback(code="invalid_spec", message=
+                'This target entry required login or security verification. Submit access="manual"; '
+                'waiting or successful user operation does not remove this prerequisite.')]
+        return []
 
     # 动作前固定字段和数量快照；后续工具结果不能覆盖用于比较的基线。
     def begin_action(self, kind, url):
@@ -213,6 +231,7 @@ class SubmissionChecks:
                 for url, item, kind, mode in sorted(self.advances)[:8]
             ],
         }
+        summary["manual_access_urls"] = sorted(self.manual_urls)[:8]
         if self.network_summary is not None:
             summary["network_test"] = self.network_summary
         return summary
@@ -229,6 +248,7 @@ class SubmissionChecks:
     # 生成可直接回给 Agent 的修复指令；用户字段名以合并后的列表/详情字段为准。
     def check(self, spec: ScraperSpec):
         issues = validate_spec(spec, self.requirements) if self.requirements else []
+        issues.extend(self.check_access(spec))
         for rule in spec.resources:
             if resource_key(spec, rule) not in self.resource_evidence:
                 issues.append(Feedback(code="invalid_spec", fields=[rule.field], message=
