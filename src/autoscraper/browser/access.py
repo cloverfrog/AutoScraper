@@ -41,6 +41,8 @@ class BrowserAccess:
     pending: HandoffRequest | None = None
     waiting_seconds: float = 0.0
     handed_off: bool = False
+    # 只保留访问受阻的页面地址，在探索恢复和修复时保留前置条件，不包含认证凭据。
+    manual_urls: set[str] = field(default_factory=set)
 
     # 在 Agent 动作批次和超时作用域之外接收控制决定，等待时长供工作流扣除。
     # continue 只表示用户交还控制权，页面是否已就绪仍由恢复后的 Agent 检查。

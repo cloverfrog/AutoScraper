@@ -131,6 +131,13 @@ generation are outside this first version. Do not promise successful full downlo
 
 Boundaries:
 Use read-only inspection and navigation; no automated login, form submission or purchases.
+Declare access="manual" in the final spec when you observe login or security verification
+at this target entry, including a challenge that clears after waiting. This describes this
+entry's prerequisite, not the whole website. Ordinary public pages use access="none".
+Keep this requirement after a successful manual operation; never put cookies or tokens in the spec.
+Cloudflare and other security challenge pages are access gates, not ordinary loading content.
+Do not try to wait out such a gate with wait_for_content or wait_for_selector, even if it may
+clear automatically. Call wait_for_user immediately and retain access="manual" after continuing.
 When login, QR code or verification blocks access, use wait_for_user to hand browser control
 to the user. Explain the observed blocker and needed operation; never ask for credentials in chat.
 After the user continues, observe the current page again and verify target access and task scope.
@@ -166,7 +173,8 @@ only when remaining checks need it. Historical repair summaries are not current-
 1. Start with inspect_page(root_selector="") to see page structure and actual button/link classes.
    Infer selectors from its DOM evidence. A missing root also returns a body sample; use that
    evidence to fix selectors instead of guessing multiple roots. For loading content, use wait_for_selector
-   when CSS is known, otherwise wait_for_content with explicit success_criteria; never poll
+   when CSS is known, otherwise wait_for_content with explicit success_criteria. This applies
+   only to ordinary async content; login/security verification requires wait_for_user. Never poll
    inspect_page. Readiness is only a hint to begin testing.
 2. Prefer test_fields to test ALL fields on the CURRENT page in one call. Also test the
    detail link as an extra attribute/href rule in that batch. Test pagination controls at PAGE
@@ -411,6 +419,7 @@ async def generate_spec(
                     from .submission import SubmissionChecks
                     exploration_tools.submission = SubmissionChecks(
                         requirements, listing_url=url, reference_spec=reference_spec,
+                        manual_urls=access.manual_urls,
                     )
                 agent.add_new_task(
                     "The user returned browser control. Observe the current page again; verify "
@@ -471,6 +480,12 @@ async def generate_spec(
             candidate = parse_spec_output(final).model_copy(
                 update={"content_timeout_ms": settings.content_timeout_ms}
             )
+            checks = exploration_tools.submission
+            access_issues = checks.check_access(candidate) if checks else []
+            if access_issues:
+                checks.last_candidate = candidate
+                checks.last_issues = access_issues
+                raise checks.rejection_error()
             if access.handed_off or access.state is not None:
                 await capture_access()
             return candidate

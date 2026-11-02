@@ -94,12 +94,14 @@ def test_state_file_is_private_atomic_and_absent_from_repr(tmp_path):
         loaded.load(path)
 
 
-def test_wait_ends_real_action_batch():
+@pytest.mark.parametrize("action_name", ["wait_for_user", "wait_for_content"])
+def test_wait_ends_real_action_batch(action_name):
     bu = pytest.importorskip("browser_use")
     from autoscraper.agent.tools import build_tools
 
     access = BrowserAccess()
     tools = build_tools(access=access)
+    tools.content_waiter.content = AsyncMock(return_value={"status": "needs_user", "access": "manual"})
     action_model = tools.registry.create_action_model()
     agent = object.__new__(bu.Agent)
     agent.browser_session = SimpleNamespace(
@@ -122,21 +124,27 @@ def test_wait_ends_real_action_batch():
     result = asyncio.run(
         agent.multi_act(
             [
-                action_model(wait_for_user=REQUEST.model_dump()),
+                action_model(**{action_name: REQUEST.model_dump() if action_name == "wait_for_user"
+                                else {"success_criteria": "Wait for verification to clear"}}),
                 action_model(navigate={"url": RULE["start_url"]}),
             ]
         )
     )
     assert len(result) == 1 and result[0].is_done
-    assert access.pending == REQUEST
+    assert access.pending is not None
+    if action_name == "wait_for_user":
+        assert access.pending == REQUEST
     assert agent._log_action.await_count == 1
 
 
 @pytest.mark.parametrize(
-    "answer,final_success",
-    [("continue", True), ("continue", False), ("cancel", False), (None, False)],
+    "answer,final_success,final_access",
+    [("continue", True, "manual"), ("continue", True, "none"),
+     ("continue", False, "manual"), ("cancel", False, "manual"), (None, False, "manual")],
 )
-def test_same_agent_resumes_and_clears_old_selector_evidence(monkeypatch, answer, final_success):
+def test_same_agent_resumes_and_clears_old_selector_evidence(
+    monkeypatch, answer, final_success, final_access
+):
     bu = pytest.importorskip("browser_use")
     observed = {"runs": 0, "instances": 0}
 
@@ -179,8 +187,9 @@ def test_same_agent_resumes_and_clears_old_selector_evidence(monkeypatch, answer
                 )
                 return SimpleNamespace(final_result=lambda: None)
             assert not self.tools.submission.tests
+            assert RULE["start_url"] in self.tools.submission.manual_urls
             return SimpleNamespace(
-                is_successful=lambda: final_success, final_result=lambda: json.dumps(RULE)
+                is_successful=lambda: final_success, final_result=lambda: json.dumps({**RULE, "access": final_access})
             )
 
     monkeypatch.setattr(bu, "BrowserSession", Browser)
@@ -191,7 +200,12 @@ def test_same_agent_resumes_and_clears_old_selector_evidence(monkeypatch, answer
     )
     call = generate_spec(RULE["start_url"], "two titles", settings, llm=object(), access=access)
     if answer == "continue":
-        if final_success:
+        if final_success and final_access == "none":
+            from autoscraper.agent.errors import InvalidSpecError
+            with pytest.raises(InvalidSpecError, match='access="manual"'):
+                asyncio.run(call)
+            assert capture.await_count == 1
+        elif final_success:
             assert asyncio.run(call).max_items == 2
             assert capture.await_count == 2
         else:
@@ -337,7 +351,7 @@ def test_authenticated_workflow_transfers_and_refreshes_cookie_and_local_storage
     monkeypatch.setattr(ScraperExecutor, "run_page", extract)
     access = BrowserAccess(handler=operate)
     with protected_site() as base:
-        holder.update(base=base, rule={**RULE, "start_url": base})
+        holder.update(base=base, rule={**RULE, "start_url": base, "access": "manual"})
         with sync_playwright() as playwright:
             executable_path = playwright.chromium.executable_path
         settings = AgentSettings(
@@ -423,7 +437,7 @@ def test_cli_handoff_preserves_outputs(monkeypatch, tmp_path, capsys, status, co
         assert "--headed" in report["resume_hint"]
 
 
-def test_executor_explicit_login_accepts_401_and_rechecks_target(monkeypatch):
+def test_executor_manual_access_accepts_401_and_rechecks_target(monkeypatch):
     import autoscraper.scraping.executor as executor
 
     holder = {}
@@ -433,7 +447,7 @@ def test_executor_explicit_login_accepts_401_and_rechecks_target(monkeypatch):
         with sync_playwright() as playwright:
 
             def launch(**kwargs):
-                holder["browser"] = playwright.chromium.launch(**kwargs)
+                holder["browser"] = playwright.chromium.launch(**{**kwargs, "headless": True})
                 return holder["browser"]
 
             yield SimpleNamespace(chromium=SimpleNamespace(launch=launch))
@@ -447,8 +461,8 @@ def test_executor_explicit_login_accepts_401_and_rechecks_target(monkeypatch):
     monkeypatch.setattr(executor, "sync_playwright", captured_playwright)
     with protected_site(401) as base:
         access = BrowserAccess(handler=login)
-        result = ScraperExecutor(access=access, login=True).run(
-            ScraperSpec.model_validate({**RULE, "start_url": base})
+        result = ScraperExecutor(headless=False, access=access).run(
+            ScraperSpec.model_validate({**RULE, "start_url": base, "access": "manual"})
         )
         assert result.records == [{"title": "A"}, {"title": "B"}]
         assert access.state is not None

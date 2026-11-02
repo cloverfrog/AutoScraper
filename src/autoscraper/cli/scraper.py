@@ -36,16 +36,12 @@ def main() -> int:
     parser.add_argument("--headed", action="store_true", help="Show the scraping browser")
     parser.add_argument("--auth-state", type=Path,
                         help="Load/save private authentication state for this site/account")
-    parser.add_argument("--login", action="store_true",
-                        help="Pause for manual login before scraping (requires --headed)")
     parser.add_argument(
         "--browser-path", dest="executable_path", default=os.getenv("AUTOSCRAPER_BROWSER_PATH"),
         help="Chromium / Chrome executable path (default: AUTOSCRAPER_BROWSER_PATH)",
     )
     args = parser.parse_args()
     try:
-        if args.login and not args.headed:
-            raise ValueError("--login requires --headed")
         if args.auth_state is not None and args.auth_state.resolve() in {
             args.spec.resolve(), *(output.resolve() for output in args.output)
         }:
@@ -63,12 +59,12 @@ def main() -> int:
             overrides["timeout_ms"] = args.navigation_timeout_ms
         if overrides:
             spec = ScraperSpec.model_validate({**spec.model_dump(), **overrides})
-        access = BrowserAccess(handler=wait_for_user if args.headed else None)
+        access = BrowserAccess(handler=wait_for_user if args.headed and sys.stdin.isatty() else None)
         if args.auth_state is not None and args.auth_state.exists():
             access.load(args.auth_state)
         result = ScraperExecutor(
             headless=not args.headed, executable_path=args.executable_path,
-            access=access, login=args.login,
+            access=access,
             resources=ResourceOptions(
                 directory=args.download_resources, max_files=args.resource_max_files,
                 max_file_bytes=args.resource_max_file_bytes,

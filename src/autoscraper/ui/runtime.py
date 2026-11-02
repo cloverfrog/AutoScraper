@@ -32,7 +32,6 @@ class RunConfig:
     execute: bool = False
     download_resources: bool = False
     headed: bool = False
-    login: bool = False
     auth_profile: str = ""
     browser_path: str = ""
     fields: str = ""
@@ -132,8 +131,6 @@ class JobManager:
             raise ValueError("未知运行模式")
         if config.auth_profile and not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", config.auth_profile):
             raise ValueError("认证名称仅允许 1–64 位英文字母、数字、下划线或连字符。")
-        if config.login and not config.headed:
-            raise ValueError("人工登录需要启用可见浏览器。")
         with self.lock:
             if self.active is not None:
                 raise ValueError("已有任务正在运行或等待人工操作，请先完成该任务。")
@@ -249,7 +246,7 @@ class JobManager:
             data = ScraperExecutor(
                 headless=not config.headed,
                 executable_path=config.browser_path or os.getenv("AUTOSCRAPER_BROWSER_PATH"),
-                access=access, login=config.login,
+                access=access,
                 resources=ResourceOptions(output) if config.download_resources else None,
             ).run(spec)
             network_truncated = spec.network is not None and data.stop_reason in {"scroll_limit", "max_pages"}

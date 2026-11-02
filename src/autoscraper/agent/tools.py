@@ -264,6 +264,7 @@ def build_tools(
     tools.network_capture = network_capture
     tools.submission = SubmissionChecks(
         requirements, listing_url=listing_url, reference_spec=reference_spec,
+        manual_urls=access.manual_urls if access is not None else None,
     ) if check_submission else None
     # 只开放导航与分页探索相关动作；继续禁止输入、文件和任意代码执行。
     for name in list(tools.registry.registry.actions):
@@ -282,10 +283,17 @@ def build_tools(
         @tools.action(
             description="Request human browser control when login, QR code, verification or "
             "another manual operation blocks access. Explain the observed evidence and needed "
-            "operation in reason. Stops this action batch until the user continues or cancels. "
+            "operation in reason. Use this immediately for an access security challenge, even "
+            "when it asks you to wait; do not use wait_for_content to clear verification. "
+            "The entry must retain access=manual after continuing. "
+            "Stops this action batch until the user continues or cancels. "
             "Never request credentials in chat."
         )
-        async def wait_for_user(reason: str) -> ActionResult:
+        async def wait_for_user(reason: str, browser_session: BrowserSession = None) -> ActionResult:
+            checks = tools.submission
+            current_url = await browser_session.get_current_page_url() if browser_session else listing_url
+            if checks and current_url:
+                checks.remember_manual_access(current_url)
             access.pending = HandoffRequest(reason=reason)
             return ActionResult(is_done=True, success=False,
                                 extracted_content='{"status":"needs_user"}')
@@ -506,6 +514,8 @@ def build_tools(
         description="Wait for at least min_count CSS matches (default 1), then return actual "
         "initial_count/count and status (DOM only for default min_count=1). "
         "After Load More with N records, use min_count=N+1. "
+        "Use only for ordinary content loading, never to clear login or security verification; "
+        "use wait_for_user for access gates. "
         "Deterministic, no LLM; prefer this over semantic waiting for known record selectors. "
         "Bounded by content timeout; returns ready/timeout/error."
     )
@@ -521,10 +531,13 @@ def build_tools(
 
     # 用描述性的成功条件等待未知动态内容，复用同一语义模型预算。
     @tools.action(
-        description="Wait for unknown dynamic content using semantic success_criteria. "
+        description="Wait for ordinary dynamic content using semantic success_criteria. "
+        "Never use this to wait out login or security verification, even if it may clear "
+        "automatically: use wait_for_user immediately and retain access=manual. "
         "Checks DOM immediately then every interval_seconds (0.1–10), at most "
         "max_checks (1–30). Separate limited LLM calls on changed DOM only; "
-        "bounded by content timeout. Returns DOM and ready/timeout/error status."
+        "bounded by content timeout. Returns DOM and ready/timeout/error status; "
+        "an observed access gate stops this batch for user control with needs_user."
     )
     async def wait_for_content(
         browser_session: BrowserSession,
@@ -532,14 +545,17 @@ def build_tools(
         interval_seconds: float = 1.0,
         max_checks: int = 10,
     ) -> ActionResult:
-        return ActionResult(
-            extracted_content=json.dumps(
-                await waiter.content(
-                    browser_session, success_criteria, interval_seconds, max_checks
-                ),
-                ensure_ascii=False,
-            )
-        )
+        result = await waiter.content(browser_session, success_criteria, interval_seconds, max_checks)
+        if result.get("status") == "needs_user":
+            current_url = await browser_session.get_current_page_url()
+            if tools.submission:
+                tools.submission.remember_manual_access(current_url)
+            if access is not None:
+                access.pending = HandoffRequest(reason="目标入口存在登录或安全验证，请在浏览器中完成后继续。")
+            # 与显式 wait_for_user 相同，必须终止动作批次，不能继续 navigate/done。
+            return ActionResult(is_done=True, success=False,
+                                extracted_content=json.dumps(result, ensure_ascii=False))
+        return ActionResult(extracted_content=json.dumps(result, ensure_ascii=False))
 
     if allow_unsupported:
 

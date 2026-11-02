@@ -260,11 +260,28 @@ Cookie 和 localStorage 认证状态默认只在本次任务中传递，供修�
 使用私有文件权限并原子替换；它包含敏感凭据，不应提交到仓库或分享。
 本实现不记录用户键入的账号密码，也不将状态快照交给模型或追踪记录。
 
-独立 Executor 可以复用该状态，也可以在抓取前主动暂停等待手动登录：
+规则通过 `"access": "none"`（默认）或 `"access": "manual"` 声明目标入口是否需要人工登录或安全验证。
+Agent 根据探索时的实际观察生成该字段，等待后自动消失的验证也应声明为 `manual`。
+登录或安全验证应立即使用 `wait_for_user`，不能当作普通加载调用内容等待。
+如果 Agent 误用语义等待，该次等待模型发现访问验证后会返回 `needs_user`、终止动作批次并进入
+现有人工接管流程。这个判断复用已有语义调用，不使用站点关键词或响应特征规则；仍依赖模型
+对当前页面证据的判断。已记录的入口访问要求在接管恢复和修复中保留，不能再提交为 `none`。
+试抓取、完整执行与独立 Executor 共用以下规则：
+
+| 协议 access | 已加载认证状态 | 行为 |
+| --- | --- | --- |
+| `none` | 否 | 直接抓取 |
+| `none` | 是 | 加载状态后直接抓取 |
+| `manual` | 否 | 先人工接管，继续后重新导航并正常校验 |
+| `manual` | 是 | 加载状态后直接抓取 |
+
+同次任务已完成接管并捕获的状态也会复用，避免试抓取和完整执行重复接管。
+认证文件／UI 名称首次使用、尚无状态时仍需接管；无可见浏览器或交互入口则返回 `needs_user`。
+独立 Executor 可以复用状态，或根据协议要求先完成人工操作：
 
 ```bash
 uv run autoscraper output/reports.json --output output/reports-data.json --auth-state .agent-runtime/auth/example-work.json
-uv run autoscraper output/reports.json --output output/reports-data.json --headed --login --auth-state .agent-runtime/auth/example-work.json
+uv run autoscraper output/reports.json --output output/reports-data.json --headed --auth-state .agent-runtime/auth/example-work.json
 ```
 
 无头模式、非交互 stdin 或 `--non-interactive` 下 Agent 遇到人工操作请求时，返回
@@ -273,7 +290,9 @@ uv run autoscraper output/reports.json --output output/reports-data.json --heade
 
 这一版支持同次进程中的人工接管，以及 Cookie/localStorage 快照复用。
 sessionStorage、IndexedDB 等认证方式和抓取中途认证失效后的自动识别、断点恢复尚未支持。
-执行器不会把普通内容超时直接认定为登录失效；状态过期时可用 `--headed --login` 重新登录后重跑。
+所有访问失败按实际错误结束，不自动判定认证状态过期，也不再触发第二轮接管。
+如果使用状态后失败，它可能已失效；可对 `access=manual` 的规则不带认证状态、使用 `--headed`
+重新运行。此建议不表示失败一定由凭据过期导致。
 
 ## 浏览器与缓存路径
 

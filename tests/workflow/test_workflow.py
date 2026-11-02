@@ -1326,3 +1326,70 @@ def test_validate_multi_element_values(value, valid):
     assert (not issues) is valid
     if not valid:
         assert issues[0].code == "missing_data"
+
+
+# 工作流必须保留访问声明，并在试抓取接管后为完整执行复用状态。
+@pytest.mark.parametrize("requirement", ["none", "manual"])
+@pytest.mark.parametrize("loaded", [False, True])
+def test_access_policy_shared_by_preview_and_execution(
+    monkeypatch, workflow, candidate, settings, requirement, loaded
+):
+    from contextlib import contextmanager
+    from playwright.sync_api import sync_playwright
+    from autoscraper.browser.access import BrowserAccess
+    import autoscraper.scraping.executor as executor_module
+
+    candidate = candidate.model_copy(update={"access": requirement})
+    install_candidates(monkeypatch, workflow, [candidate])
+    handoffs = []
+    access = BrowserAccess(
+        handler=lambda request: handoffs.append(request) or "continue",
+        state={"cookies": [], "origins": []} if loaded else None,
+    )
+
+    # 测试模拟可见启动参数，真实浏览器无头运行，避免测试依赖桌面显示服务。
+    @contextmanager
+    def browser_factory():
+        with sync_playwright() as playwright:
+            def launch(**kwargs):
+                assert kwargs["headless"] is False
+                browser = playwright.chromium.launch(**{**kwargs, "headless": True})
+                create_context = browser.new_context
+
+                def new_context(**options):
+                    context = create_context(**options)
+                    context.route("**/*", lambda route: route.fulfill(
+                        content_type="text/html", body='<article><h2>A</h2><b class="price">1</b></article>'
+                        '<article><h2>B</h2><b class="price">2</b></article>'))
+                    return context
+
+                browser.new_context = new_context
+                return browser
+            yield SimpleNamespace(chromium=SimpleNamespace(launch=launch))
+
+    monkeypatch.setattr(executor_module, "sync_playwright", browser_factory)
+    original = ScraperExecutor.run_page
+    runs = []
+
+    def extract(self, rule, page):
+        assert rule.access == requirement
+        runs.append(rule.max_items)
+        return original(self, rule, page)
+
+    monkeypatch.setattr(ScraperExecutor, "run_page", extract)
+    outcome = run_task(URL, TASK, settings.model_copy(update={"headless": False}),
+                       fields=["title", "price"], count=2, execute=True, access=access,
+                       validation=ValidationSettings(max_items=1))
+    assert outcome.status == "success", outcome.summary()
+    assert runs == [1, 2]
+    assert len(handoffs) == int(requirement == "manual" and not loaded)
+
+
+# Agent 已成功提交规则，但验证阶段无交互入口时，必须报告人工需求而非导航失败。
+def test_manual_preview_without_interaction_returns_needs_user(
+    monkeypatch, workflow, candidate, settings
+):
+    install_candidates(monkeypatch, workflow, [candidate.model_copy(update={"access": "manual"})])
+    outcome = run_task(URL, TASK, settings, fields=["title", "price"], count=2)
+    assert outcome.status == "needs_user"
+    assert outcome.pending_handoff is not None

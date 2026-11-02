@@ -222,6 +222,10 @@ class ResourceSpec(ProtocolModel):
 class ScraperSpec(ProtocolModel):
     version: Literal["1", "2", "3"] = "1"
     start_url: HttpUrl
+    # 目标入口的访问前置条件；只声明人工操作要求，不保存认证凭据。
+    access: Literal["none", "manual"] = Field(
+        default="none", description="Use manual when exploration observed login or security verification at the target entry"
+    )
     item_selector: NonEmpty | None = None
     fields: dict[NonEmpty, FieldSpec] = Field(default_factory=dict)
     network: NetworkSource | None = None
