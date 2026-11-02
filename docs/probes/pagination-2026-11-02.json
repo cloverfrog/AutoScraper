@@ -1651,6 +1651,23 @@
         },
         "http_status": 403
       }
-    ]
+    ],
+    "headed_follow_up": {
+      "date": "2026-11-02",
+      "headless": false,
+      "display": ":0",
+      "initial_navigation_http_status": 403,
+      "manual_attempt": "用户人工点击后反馈验证再次出现，无法通过",
+      "observed_titles": [
+        "请稍候…",
+        "Just a moment..."
+      ],
+      "observed_records": 0,
+      "observed_pagination_groups": 0,
+      "status": "blocked",
+      "cause": "unknown",
+      "local_evidence": "output/pagination-probe/headed-manual-20261102/",
+      "note": "仅记录有头人工验证受阻；没有探测滚动或点击分页。旧现场 blocked=false 暴露检测遗漏，现已补充中文及标题检测。"
+    }
   }
 }

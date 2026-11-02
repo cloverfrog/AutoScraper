@@ -40,13 +40,19 @@ SNAPSHOT = r"""site => {
             disabled: x.matches(':disabled') || x.getAttribute('aria-disabled') === 'true',
             html: x.outerHTML.slice(0, 1500)}))}));
     const text = document.body?.innerText || '';
-    return {url: location.href, title: document.title, record_nodes: records.length,
+    // 验证循环可能把临时挑战参数放入 URL；报告只保留业务查询参数。
+    const url = new URL(location.href);
+    for (const key of [...url.searchParams.keys()]) {
+        if (key.startsWith('__cf_chl')) url.searchParams.delete(key);
+    }
+    return {url: url.href, title: document.title, record_nodes: records.length,
         ids: [...new Set(records)], controls,
         active: controls.flatMap(x => x.active),
         scroll_top: root.scrollTop, scroll_height: root.scrollHeight,
         client_height: root.clientHeight,
         bottom: root.scrollTop + root.clientHeight >= root.scrollHeight - 2,
-        blocked: /Performing security verification|Verify you are human|Just a moment/i.test(text),
+        blocked: /Performing security verification|Verify you are human|Just a moment|正在进行安全验证|请稍候/i
+            .test(document.title + '\n' + text),
         loading: [...document.querySelectorAll('[aria-busy="true"], .loading, .spinner')]
             .filter(visible).slice(0, 10).map(e => ({tag: e.tagName, class: e.className})),
         body_excerpt: records.length ? null : text.slice(0, 1200)};

@@ -4,6 +4,8 @@
 import importlib.util
 from pathlib import Path
 
+import pytest
+
 import test_scraper
 
 
@@ -73,3 +75,23 @@ def test_conflicting_active_pages_have_no_order_evidence():
     before = {"ids": ["a"], "active": ["1", "1"]}
     after = {"ids": ["b"], "active": ["2", "5"]}
     assert probe_module.compare(before, after, {"a"})["adjacent_page"] is None
+
+
+# 有头浏览器实际出现中文验证页，以及只有英文标题、正文为空的挑战中间页。
+@pytest.mark.parametrize(
+    "html",
+    [
+        "<title>请稍候…</title><body>正在进行安全验证</body>",
+        "<title>Just a moment...</title><body></body>",
+    ],
+)
+def test_probe_recognizes_challenge_pages_and_omits_temporary_token(page, html):
+    page.route(
+        "https://fixture.test/**",
+        lambda route: route.fulfill(body=html, content_type="text/html; charset=utf-8"),
+    )
+    page.goto("https://fixture.test/observations?taxon_id=47126&__cf_chl_rt_tk=test-token")
+    state = page.evaluate(probe_module.SNAPSHOT, "inaturalist")
+    assert state["blocked"] is True
+    assert state["ids"] == []
+    assert state["url"] == "https://fixture.test/observations?taxon_id=47126"
