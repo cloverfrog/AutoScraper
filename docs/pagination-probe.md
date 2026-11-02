@@ -1,9 +1,39 @@
-# Issue #40：数字分页与混合分页探针
+# Issue #40：数字页码分页
 
-关联 [Issue #40](https://github.com/cloverfrog/AutoScraper/issues/40)。本次只调查网站行为，
-不修改生产分页协议、执行器或 Agent 提示词，不代表整个 Issue 已完成。
+本次仅处理 [Issue #40](https://github.com/cloverfrog/AutoScraper/issues/40) 的数字页码部分。
+复用现有 `click` + `mode: replace`，不新增分页类型。其他分页组合留待后续处理。
 
-## 运行
+Agent 探索指引增加以下要求：从实际 DOM 中识别当前活动页和下一数字按钮，优先使用
+相对当前活动页的动态 CSS；区分首页、末页与相邻页，不固定选择第 2 页，也不因类名
+包含 next 或图标是双箭头就认定为下一页。点击后同时观察 N → N+1 和记录字段更新。
+通用 `sample_passed` 不代表分页控件唯一，仍需检查匹配总数恰好为 1。
+若无法用可靠 CSS 定位相邻数字页码，应报告限制，不跳页或添加任意脚本。
+
+这次修改提升 Agent 的探索指引，并用执行器回归验证现有协议的适用性；没有增加
+自动识别所有网站页码语义的运行时机制，也不保证任意数字窗口结构都能支持。
+
+## 实测结果（2026-11-02）
+
+HN Algolia（`https://hn.algolia.com/?q=Python`）：
+
+- 每页 30 条，使用下面同一 CSS 连续推进 1 → 2 → … → 9。8 次点击均匹配唯一控件，
+  活动页码每次加一，每次新增 30 个身份，累计 270 个唯一身份。
+- 第 7 页数字窗口左边界从 1 移到 2；第 9 页窗口为 4～14。同一 CSS 继续有效。
+- `.Pagination_next button` 从第 1 页跳到第 34 页，该页 10 条；
+  `.Pagination_previous button` 返回第 1 页，确认双箭头分别表示末页和首页。
+- 现有执行器独立使用 `click/replace` 同样抓取 9 页、270 条唯一记录，重复数 0、
+  无错误，停止原因为 `max_items`，最终活动页 9。身份集合与连续探针一致。
+
+```css
+.Pagination_item-current + .Pagination_item:not(.Pagination_next) button
+```
+
+这是根据 HN 实际 DOM 推导的探针选择器，没有写入通用 Agent 提示词。
+完整规则见 [实测记录](probes/pagination-2026-11-02.json) 的 `hn.executor.spec`。
+原始报告、JSONL 和截图保存在本地 `output/pagination-probe/verified-20261102/`，
+纳入 Git 的记录仅保留数字页码部分。
+
+## 复现
 
 安装项目依赖与 Playwright Chromium 后执行：
 
@@ -11,120 +41,25 @@
 uv run python scripts/probe/probe_pagination.py --verify-executor
 ```
 
-默认分别访问 HN Algolia 和 iNaturalist。只调查一个网站：
+可用 `--browser-path` 或 `AUTOSCRAPER_BROWSER_PATH` 指定 Chromium，
+`--headed` 打开有头窗口（需要图形环境）。脚本只访问公开列表，不调用模型。
+默认连续点击 8 次，另做末页和首页对照；`--hn-steps` 可设为 1～15。
+`--wait-ms` 为动作后的完整观察窗口，默认 4000，可设为 1000～15000。
+
+输出默认位于 `output/pagination-probe/<UTC时间>/`，或用 `--output` 指定尚不存在的目录。
+保存 JSONL 动作日志、关键截图及 `report.json`；包含活动页码、全部分页控件、稳定
+身份链接、新增和重叠、动作前后状态。不同记录不单独作为相邻推进证据，无新增不推断
+自然结束。固定等待窗口仍可能遗漏迟到响应，不是生产加载完成判定。
+退出码 0 表示取得可观察列表，不代表所有验收通过；必须检查各动作的顺序及新增证据。
+
+## 验证
 
 ```bash
-uv run python scripts/probe/probe_pagination.py --site hn --verify-executor
-uv run python scripts/probe/probe_pagination.py --site inaturalist --headed
+uv run pytest -q tests/scraping/test_pagination_probe.py tests/scraping/test_dynamic_pagination.py tests/agent/test_agent.py
+uv run ruff check src/autoscraper/agent/explorer.py scripts/probe/probe_pagination.py tests/scraping/test_pagination_probe.py
 ```
 
-可用 `--browser-path` 或 `AUTOSCRAPER_BROWSER_PATH` 指定 Chromium。
-`--headed` 需要可用图形环境，仍使用临时、无登录状态的浏览器上下文。
-脚本不调用模型，不读取账号或 API Key，不处理验证挑战。
-
-输出默认位于 `output/pagination-probe/<UTC时间>/`。`--output` 可指定尚不存在的目录，
-防止不同实验日志混在一起。每个网站保存 JSONL 逐步日志、截图，运行结束保存
-`report.json`。每个动作记录动作前后状态、活动页码、全部分页区域、记录身份链接、
-新增身份、与上一批重叠数、滚动位置和等待时间。原始 HTML、请求头和 Cookie 不保存。
-
-默认动作预算为 HN 连续点击 8 次，另做一次末页、一次首页对照；iNaturalist 滚动 8 次。
-`--hn-steps` 和 `--inat-scrolls` 可设为 1～15，`--wait-ms` 可设为 1000～15000，默认 4000。
-每次动作等待完整观察窗口，不以活动页码先变就提前判定列表加载成功。窗口结束后的迟到
-响应仍可能遗漏，因此这是有界观察，并非生产加载完成判定。
-
-`--verify-executor` 会额外在独立上下文使用现有 `ScraperExecutor` 抓取 HN，
-提取标题和稳定 HN 详情链接，以链接去重；此过程不继承探针已打开的列表状态。
-`report.json` 保留完整规则、记录身份和执行结果。
-
-退出码 0 表示所选网站都取得了可观察列表；不等于所有分页验收通过。
-退出码 1 表示存在访问阻塞、无列表或执行错误，仍应检查报告与已保存的 JSONL。
-
-## 判断方法
-
-- 相邻推进：前后只有一个一致的活动页码，且后者恰好加一。多个区域显示相同活动页码
-  可以合并；若不同区域活动页码冲突，报告 `adjacent_page: null`，不猜测正确页码。
-- 新增记录：用稳定身份链接与当前实验阶段的累计集合比较。内容变了、顺序变了或
-  DOM 数量增长，都不能独立证明有新增记录。
-- 双箭头对照：先重开第一页，再点击右双箭头，之后点击左双箭头，记录实际页码。
-  日志中的累计去重集合仍保留前面的连续遍历；`sequential_unique_records` 仅统计连续阶段。
-- 多控件：完整记录各区域的可见性、文字、链接和禁用状态；点击选择器必须恰好匹配一个
-  可见且可用的控件。探针不会静默选择第一个按钮。
-- 滚动：使用现有执行器的真实滚动动作，每次一个视口；没有新增不自动宣告结束，
-  不自动点击 Next。加载元素信息只是通用观察线索，不能视为网站专用的可靠加载标志。
-
-iNaturalist 若可访问，先保存分页区域和候选身份链接，再观察滚动。
-其身份目前按 `/observations/<数字>` 链接收集，属于待现场确认的探针假设：
-`record_nodes` 为匹配链接节点数，可能包含一条记录的多个链接，`ids` 才是唯一身份集合，
-不能据此前者断言列表卡片数量。此阶段也不验证物种、日期、地点、观察者四个字段。
-
-若已从实际 DOM 找到唯一 Next 选择器，可显式传入：
-
-```bash
-uv run python scripts/probe/probe_pagination.py --site inaturalist \
-  --inat-next-selector '<已观察并确认的唯一 CSS>'
-```
-
-此时先在初始列表测试独立点击，再重新加载初始列表、重置身份集合，观察滚动，
-最后测试滚动后点击。需要人工比较各阶段的页码、身份与目标链接；探针不会据此自动
-生成通用的滚动转点击规则。若匹配多个元素，保存歧义结果并拒绝点击。
-
-## 本机结果（2026-11-02）
-
-最终实测结果和稳定身份保存在 [实验记录](probes/pagination-2026-11-02.json)。
-原始日志及截图位于 `output/pagination-probe/verified-20261102/`，未纳入 Git。
-
-HN Algolia：
-
-- 初始每页 30 条。下述同一选择器连续推进 1 → 2 → … → 9，8 次点击均恰好匹配一个
-  控件，活动页码每次加一，每次新增 30 个身份，累计 270 个唯一身份。
-- 到第 7 页时，数字窗口左边界从 1 移到 2；第 9 页窗口为 4～14。
-  动态相邻选择器仍有效，不必根据页码重写规则。
-- `.Pagination_next button` 从第 1 页直接到第 34 页，该页 10 条记录；
-  `.Pagination_previous button` 再回第 1 页，确认双箭头分别是末页和首页。
-
-```css
-.Pagination_item-current + .Pagination_item:not(.Pagination_next) button
-```
-
-现有声明式协议可使用 `type: click`、`mode: replace` 加上述 CSS。
-独立执行器实测同样抓取 9 页、270 条唯一记录，重复数为 0，无错误；
-停止原因为 `max_items`，最终活动页为 9。完整规则见实验记录的 `hn.executor.spec`。
-
-这说明 HN 数字分页可以先复用现有协议。仍需改进 Agent 对控件语义和相邻推进的验证；
-一次记录变化不能区分“相邻页”和“末页跳转”。此次没有遍历全部 34 页，也没有验证
-自然耗尽、虚拟列表或列表持续更新时的完整性。
-
-iNaturalist：
-
-- 默认无登录 Chromium 上返回 HTTP 403，页面内容为 Cloudflare 的
-  `Performing security verification`，未出现观察记录与分页区域。
-- 自动探针记录为 `blocked_or_no_records`；没有执行滚动或点击，未直接取得分页 DOM
-  或翻页前后的记录身份。
-- 随后在本机 `DISPLAY=:0` 打开有头 Chromium，由用户人工点击验证，用户反馈点击后
-  再次出现验证，未能进入列表。现场快照出现中文“正在进行安全验证”，以及英文
-  `Just a moment...` 空正文中间页；二者均没有记录和分页区域。已保存现场并关闭窗口。
-  具体阻塞原因未确定，不能据此认定是 IP、浏览器或站点配置中的哪一项导致。
-- 用户最终澄清现场行为：每页都是正常的滚动页面，但内容不会一次加载完，
-  需要向下滚动继续加载；整个滚动过程仍属于同一页，滚到底才是分页控件。
-  点击 Next 才进入下一页，下一页再次经历同页滚动加载。此为用户提供的证据，
-  并非自动探针复现，不外推其他视图或历史版本。
-- 此前报告将“滚动过程在同一页”误解为“滚动不触发加载”，据此得出
-  `click + replace` 即可的结论不成立，现予以撤回。需要分别处理同页加载批次和
-  页码切换，不能在当前页尚未加载完整时直接点击 Next。
-- 后续网站可访问时，应观察同页滚动何时加载、何时完成该页，以及底部分页控件
-  何时出现、是否可可靠用于阶段判断，再验证 Next 的唯一定位和相邻页推进。
-  用户尚未说明加载内容的具体 DOM 更新方式，不能预设只追加记录、只懒加载图片，
-  或到达某个固定批次就切换。跨同页批次及不同页继续保留稳定身份去重。
-  当前探针的固定次数滚动后点击只是一种实验操作，不能直接作为生产切换规则。
-
-## 离线检查
-
-```bash
-uv run pytest -q tests/scraping/test_pagination_probe.py
-uv run ruff check scripts/probe/probe_pagination.py tests/scraping/test_pagination_probe.py
-```
-
-模拟浏览器页面覆盖数字窗口移动、双箭头跳页和末页无相邻按钮，另检查多按钮不执行、
-重复批次无新增、多个区域活动页码冲突，以及中文/空正文挑战页识别。
-挑战 URL 的临时参数不写入探针快照。它们检查探针不会给出错误证据，
-不替代 iNaturalist 的真实网站验证。
+离线浏览器回归覆盖数字窗口移动、双箭头跳末页、多控件拒绝、重复批次、活动页码冲突。
+新增生产执行器回归完整遍历模拟网站的 1～12 页，校验访问和提取顺序，跨越窗口后
+不跳页，末页不存在相邻按钮时以 `no_next` 自然结束。实站未遍历全部 34 页，
+没有运行真实 LLM 端到端测试，也不声称完整解决 Issue #40。

@@ -4,8 +4,6 @@
 import importlib.util
 from pathlib import Path
 
-import pytest
-
 import test_scraper
 
 
@@ -20,6 +18,8 @@ page = test_scraper.page
 # 页码窗口在第 4 页后移；末页箭头故意跳到第 12 页，不能当作相邻推进。
 WINDOW_PAGE = """<main></main><ul class="Pagination"></ul><script>
 function render(n) {
+    window.visited = window.visited || [];
+    window.visited.push(n);
     document.querySelector('main').innerHTML = '<article class="Story"><a href="https://news.ycombinator.com/item?id=' + n + '">Record</a></article>';
     const start = Math.max(1, n - 2), end = Math.min(12, n + 3);
     let controls = '';
@@ -77,21 +77,38 @@ def test_conflicting_active_pages_have_no_order_evidence():
     assert probe_module.compare(before, after, {"a"})["adjacent_page"] is None
 
 
-# 有头浏览器实际出现中文验证页，以及只有英文标题、正文为空的挑战中间页。
-@pytest.mark.parametrize(
-    "html",
-    [
-        "<title>请稍候…</title><body>正在进行安全验证</body>",
-        "<title>Just a moment...</title><body></body>",
-    ],
-)
-def test_probe_recognizes_challenge_pages_and_omits_temporary_token(page, html):
+# 使用生产执行器遍历全部数字页码，确认窗口移动后不跳页，并在末页自然结束。
+def test_executor_traverses_numeric_pages_through_window_to_natural_end(page):
+    from autoscraper.scraping.executor import ScraperExecutor
+    from autoscraper.scraping.spec import ScraperSpec
+
     page.route(
         "https://fixture.test/**",
-        lambda route: route.fulfill(body=html, content_type="text/html; charset=utf-8"),
+        lambda route: route.fulfill(body=WINDOW_PAGE, content_type="text/html; charset=utf-8"),
     )
-    page.goto("https://fixture.test/observations?taxon_id=47126&__cf_chl_rt_tk=test-token")
-    state = page.evaluate(probe_module.SNAPSHOT, "inaturalist")
-    assert state["blocked"] is True
-    assert state["ids"] == []
-    assert state["url"] == "https://fixture.test/observations?taxon_id=47126"
+    spec = ScraperSpec.model_validate(
+        {
+            "start_url": "https://fixture.test/list",
+            "item_selector": "article.Story",
+            "fields": {"id": {"selector": "a", "extract": "attribute", "attribute": "href"}},
+            "dedupe_by": ["id"],
+            "max_items": 20,
+            "max_pages": 20,
+            "pagination": {
+                "type": "click",
+                "mode": "replace",
+                "next_selector": probe_module.HN_NEXT,
+            },
+            "timeout_ms": 1000,
+            "content_timeout_ms": 500,
+        }
+    )
+    result = ScraperExecutor().run_page(spec, page)
+    assert [record["id"] for record in result.records] == [
+        f"https://news.ycombinator.com/item?id={n}" for n in range(1, 13)
+    ]
+    assert page.evaluate("window.visited") == list(range(1, 13))
+    assert result.pages_visited == 12
+    assert result.stop_reason == "no_next"
+    assert result.duplicates == 0
+    assert result.errors == []

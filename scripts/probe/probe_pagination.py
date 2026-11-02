@@ -1,5 +1,5 @@
-# Issue #40：真实网站分页探针；只观察公开列表，不调用模型或修改生产分页协议。
-"""Opt-in Playwright probe for numeric and mixed pagination."""
+# Issue #40：数字页码探针；只观察公开列表，不调用模型或修改生产分页协议。
+"""Opt-in Playwright probe for numeric pagination."""
 
 import argparse
 from datetime import datetime, timezone
@@ -11,25 +11,18 @@ from time import monotonic
 from playwright.sync_api import Error as PlaywrightError, sync_playwright
 
 from autoscraper.scraping.executor import ScrapeError, ScraperExecutor
-from autoscraper.scraping.scrolling import scroll_step
 from autoscraper.scraping.spec import ScraperSpec
 
 
 HN_URL = "https://hn.algolia.com/?q=Python"
-INAT_URL = "https://www.inaturalist.org/observations?taxon_id=47126"
 HN_NEXT = ".Pagination_item-current + .Pagination_item:not(.Pagination_next) button"
 
 # 固定只读脚本：按稳定链接取身份，同时保留重复 DOM 节点数量与全部分页区域。
-# iNaturalist 身份链接只是待验证的探针假设，页面不可达时不能作为有效规则取证。
 SNAPSHOT = r"""site => {
     const visible = e => !!e.getClientRects().length && getComputedStyle(e).visibility !== 'hidden';
-    const roots = [...document.querySelectorAll(site === 'hn' ? 'ul.Pagination' : 'ul.pagination')];
-    const records = site === 'hn'
-        ? [...document.querySelectorAll('article.Story')].map(e =>
-            e.querySelector('a[href*="news.ycombinator.com/item?id="]')?.href).filter(Boolean)
-        : [...document.querySelectorAll('a[href]')].map(e => e.href)
-            .filter(h => /^https:\/\/www\.inaturalist\.org\/observations\/\d+(?:[?#]|$)/.test(h))
-            .map(h => h.split(/[?#]/)[0]);
+    const roots = [...document.querySelectorAll('ul.Pagination')];
+    const records = [...document.querySelectorAll('article.Story')].map(e =>
+        e.querySelector('a[href*="news.ycombinator.com/item?id="]')?.href).filter(Boolean);
     const root = document.scrollingElement;
     const controls = roots.map((e, group) => ({group, visible: visible(e),
         active: [...e.querySelectorAll('.Pagination_item-current, .active, [aria-current="page"]')]
@@ -127,23 +120,18 @@ class Probe:
         self.page.screenshot(path=str(self.output / f"{self.site}-initial.png"))
         return state
 
-    def action(self, label, selector=None):
+    def action(self, label, selector):
         before = self.snapshot()
-        details = {}
-        if selector:
-            control = self.page.locator(f"css={selector}")
-            details = {"selector": selector, "matches": control.count()}
-            if control.count() != 1:
-                self.save(label, before, **details, outcome="ambiguous_or_missing_control")
-                return None
-            if not control.is_visible() or not control.is_enabled():
-                self.save(label, before, **details, outcome="unavailable_control")
-                return None
+        control = self.page.locator(f"css={selector}")
+        details = {"selector": selector, "matches": control.count()}
+        if control.count() != 1:
+            self.save(label, before, **details, outcome="ambiguous_or_missing_control")
+            return None
+        if not control.is_visible() or not control.is_enabled():
+            self.save(label, before, **details, outcome="unavailable_control")
+            return None
         start = monotonic()
-        if selector:
-            control.click(timeout=10000)
-        else:
-            scroll_step(self.page, None)
+        control.click(timeout=10000)
         self.page.wait_for_timeout(self.wait_ms)
         after = self.snapshot()
         delta = compare(before, after, self.seen)
@@ -186,40 +174,6 @@ def probe_hn(browser, output, args):
             "sequential_unique_records": unique_records,
             "sequential_events": sequential,
             "events": probe.events,
-        }
-    finally:
-        context.close()
-
-
-# 混合分页分别观察滚动、独立点击和滚动后点击；不预设网站的自动切换时机。
-# 点击必须由显式选择器唯一定位，多个等价按钮也不静默取第一个。
-def probe_inaturalist(browser, output, args):
-    context = browser.new_context()
-    try:
-        probe = Probe(context.new_page(), "inaturalist", output, args.wait_ms)
-        state = probe.open(INAT_URL)
-        if state["blocked"] or not state["ids"]:
-            return {
-                "status": "blocked_or_no_records",
-                "events": probe.events,
-                "limitation": "未取得列表，不能推断滚动和页码衔接机制",
-            }
-        if args.inat_next_selector:
-            probe.action("independent_click", args.inat_next_selector)
-            probe.open(INAT_URL)
-        # 重置独立点击对照的身份集合，滚动阶段只与自己的初始列表比较。
-        probe.seen = set(probe.snapshot()["ids"])
-        for _ in range(args.inat_scrolls):
-            state = probe.action("scroll")
-            if state["blocked"]:
-                break
-        if args.inat_next_selector and not state["blocked"]:
-            probe.action("click_after_scroll", args.inat_next_selector)
-        probe.page.screenshot(path=str(output / "inaturalist-final.png"))
-        return {
-            "status": "observed",
-            "events": probe.events,
-            "limitation": "无新增不证明自然结束；未配置唯一点击控件时仅观察滚动",
         }
     finally:
         context.close()
@@ -270,7 +224,6 @@ def verify_hn_executor(browser, args):
 # 每次运行用独立输出目录；失败保存已收集事件及错误，不将访问阻塞记为分页通过。
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--site", choices=["all", "hn", "inaturalist"], default="all")
     parser.add_argument(
         "--output",
         type=Path,
@@ -281,13 +234,9 @@ def main():
     parser.add_argument("--headed", action="store_true")
     parser.add_argument("--wait-ms", type=int, default=4000)
     parser.add_argument("--hn-steps", type=int, default=8)
-    parser.add_argument("--inat-scrolls", type=int, default=8)
-    parser.add_argument("--inat-next-selector")
     parser.add_argument("--verify-executor", action="store_true")
     args = parser.parse_args()
-    if not (
-        1000 <= args.wait_ms <= 15000 and 1 <= args.hn_steps <= 15 and 1 <= args.inat_scrolls <= 15
-    ):
+    if not (1000 <= args.wait_ms <= 15000 and 1 <= args.hn_steps <= 15):
         parser.error("wait-ms 须在 1000..15000，动作次数须在 1..15")
     args.output.mkdir(parents=True, exist_ok=False)
     report = {
@@ -299,23 +248,14 @@ def main():
         browser = p.chromium.launch(executable_path=args.browser_path, headless=not args.headed)
         report["browser_version"] = browser.version
         try:
-            for name, runner in [("hn", probe_hn), ("inaturalist", probe_inaturalist)]:
-                if args.site not in {"all", name}:
-                    continue
-                try:
-                    report["sites"][name] = runner(browser, args.output, args)
-                    if (
-                        name == "hn"
-                        and args.verify_executor
-                        and report["sites"][name]["status"] == "observed"
-                    ):
-                        report["sites"][name]["executor"] = verify_hn_executor(browser, args)
-                except (PlaywrightError, ScrapeError) as exc:
-                    report["sites"].setdefault(name, {}).update(
-                        status="error",
-                        error=str(exc)[:2000],
-                        evidence=f"{name}.jsonl（若动作前已保存）",
-                    )
+            try:
+                report["sites"]["hn"] = probe_hn(browser, args.output, args)
+                if args.verify_executor and report["sites"]["hn"]["status"] == "observed":
+                    report["sites"]["hn"]["executor"] = verify_hn_executor(browser, args)
+            except (PlaywrightError, ScrapeError) as exc:
+                report["sites"].setdefault("hn", {}).update(
+                    status="error", error=str(exc)[:2000], evidence="hn.jsonl（若动作前已保存）"
+                )
         finally:
             browser.close()
     (args.output / "report.json").write_text(

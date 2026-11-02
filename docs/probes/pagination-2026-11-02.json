@@ -1,18 +1,15 @@
 {
-  "description": "Issue #40 真实网站探针的精简实测记录；省略重复的动作前快照、按钮 HTML 和空属性。身份变化列表改存数量，完整当前身份保留在各步 state.ids；执行器身份集合保存 SHA256，并与连续探针集合比较。完整原始证据见 source_report。",
+  "description": "Issue #40 数字页码部分的精简实测记录。省略重复的动作前快照、按钮 HTML 和空属性；身份变化列表改存数量，完整当前身份保留在 state.ids，执行器身份集合保存 SHA256 并与连续探针集合比较。原始报告的其他站点不属于本次提交范围。",
   "started_at": "2026-11-02T03:46:00.351804+00:00",
   "browser_version": "156.0.8078.4",
   "command": ".venv/bin/python scripts/probe/probe_pagination.py --verify-executor --output output/pagination-probe/verified-20261102",
   "source_report": "output/pagination-probe/verified-20261102/report.json",
   "settings": {
-    "site": "all",
     "output": "output/pagination-probe/verified-20261102",
     "browser_path": null,
     "headed": false,
     "wait_ms": 4000,
     "hn_steps": 8,
-    "inat_scrolls": 8,
-    "inat_next_selector": null,
     "verify_executor": true
   },
   "hn": {
@@ -1627,63 +1624,5 @@
     },
     "sequential_identity_set_sha256": "e9e29fb67176e5a02051037eb2f3d4635b962a5676662ba13e2c5d9a14cadcc6"
   },
-  "inaturalist": {
-    "status": "blocked_or_no_records",
-    "limitation": "未取得列表，不能推断滚动和页码衔接机制",
-    "events": [
-      {
-        "step": 0,
-        "action": "initial",
-        "state": {
-          "url": "https://www.inaturalist.org/observations?taxon_id=47126",
-          "title": "Just a moment...",
-          "record_nodes": 0,
-          "ids": [],
-          "controls": [],
-          "active": [],
-          "scroll_top": 0,
-          "scroll_height": 720,
-          "client_height": 720,
-          "bottom": true,
-          "blocked": true,
-          "loading": [],
-          "body_excerpt": "www.inaturalist.org\nPerforming security verification\n\nThis website uses a security service to protect against malicious bots. This page is displayed while the website verifies you are not a bot.\n\nRay ID: a54027e95e78ff47\nPerformance and Security by Cloudflare\nPrivacy"
-        },
-        "http_status": 403
-      }
-    ],
-    "headed_follow_up": {
-      "date": "2026-11-02",
-      "headless": false,
-      "display": ":0",
-      "initial_navigation_http_status": 403,
-      "manual_attempt": "用户人工点击后反馈验证再次出现，无法通过",
-      "observed_titles": [
-        "请稍候…",
-        "Just a moment..."
-      ],
-      "observed_records": 0,
-      "observed_pagination_groups": 0,
-      "status": "blocked",
-      "cause": "unknown",
-      "local_evidence": "output/pagination-probe/headed-manual-20261102/",
-      "note": "仅记录有头人工验证受阻；没有探测滚动或点击分页。旧现场 blocked=false 暴露检测遗漏，现已补充中文及标题检测。"
-    },
-    "user_observation": {
-      "date": "2026-11-02",
-      "source": "用户最新澄清，非自动探针复现",
-      "observation": "每一页都是个正常的滚动页面，一次不加载完，需要向下滚动才加载，然后滚到底是分页控件，整个滚动过程是在一页内的",
-      "scroll_loads_content_within_current_page": true,
-      "scroll_changes_page": false,
-      "page_transition": "到达该页底部分页控件后点击 Next 或数字页码",
-      "correction": "撤回先前滚动不触发加载、仅用 click/replace 即可的错误理解",
-      "remaining_validation": [
-        "同页滚动加载的具体 DOM 行为",
-        "当前页内容加载完成的证据",
-        "底部分页控件的出现条件及唯一定位",
-        "相邻页推进与跨批次跨页去重"
-      ],
-      "scope": "当前目标场景；不外推其他视图或历史行为"
-    }
-  }
+  "scope": "仅数字页码分页"
 }
