@@ -244,3 +244,15 @@ def test_network_budget_is_partial_in_spec_ui(tmp_path, monkeypatch, network, st
     assert state["status"] == ("partial" if network and stop_reason != "no_more_content" else "success")
     assert state["preview"] == [dict(title="Book")]
     assert {Path(path).name for path in state["files"]} == {"rule.json", "data.json", "data.csv"}
+
+
+# 新认证名称没有可加载状态；无头 UI 执行 manual 规则应结束为 needs_user，而不是挂住。
+def test_manual_spec_new_profile_without_browser_returns_needs_user(tmp_path):
+    manager = JobManager(tmp_path)
+    rule = json.dumps({"start_url": "https://fixture.test/", "access": "manual",
+                       "item_selector": "article", "fields": {"title": {"selector": "h2"}}})
+    job_id = manager.start(RunConfig(mode="spec", spec_json=rule, auth_profile="new-account"))
+    job = manager.get(job_id)
+    wait_for(lambda: job.done)
+    assert job.status == "needs_user", job.summary
+    assert not (tmp_path / "auth" / "new-account.json").exists()

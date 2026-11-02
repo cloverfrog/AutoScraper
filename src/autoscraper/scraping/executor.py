@@ -18,7 +18,7 @@ from .errors import (
     PaginationActionError, ScrapeError,
 )
 from .spec import FieldSpec, ScraperSpec
-from autoscraper.browser.access import BrowserAccess, HandoffRequest
+from autoscraper.browser.access import BrowserAccess, HandoffRequest, HandoffRequired
 from .values import FieldValue, record_identity
 from .filtering import evaluate_filters
 from .progress import STATE_SCRIPT, state_options, progressed
@@ -344,12 +344,11 @@ class ScraperExecutor:
     # 默认无头运行；工作流会传入与 Agent 探索相同的配置。
     # access 只在 run 自建上下文时载入/回收快照；run_page 的上下文状态由调用方管理。
     def __init__(self, *, headless: bool = True, executable_path: str | None = None,
-                 access: BrowserAccess | None = None, login: bool = False,
+                 access: BrowserAccess | None = None,
                  resources: ResourceOptions | None = None):
         self.headless = headless
         self.executable_path = executable_path
         self.access = access
-        self.login = login
         self.resources = resources
 
     # 执行规则并记录总体追踪指标；真正的浏览器创建与回收交给 _run。
@@ -364,6 +363,11 @@ class ScraperExecutor:
 
     # 创建浏览器和列表页面，执行结束或异常退出时统一关闭浏览器。
     def _run(self, spec: ScraperSpec) -> ScrapeResult:
+        # 已加载或本次任务接管后捕获的状态可复用；仅指定保存路径不等于已有状态。
+        manual = spec.access == "manual" and (self.access is None or self.access.state is None)
+        request = HandoffRequest(reason="请在可见浏览器完成目标入口的登录或安全验证，然后继续抓取。")
+        if manual and (self.headless or self.access is None or self.access.handler is None):
+            raise HandoffRequired(request)
         with sync_playwright() as playwright:
             browser = playwright.chromium.launch(
                 headless=self.headless, executable_path=self.executable_path
@@ -376,13 +380,17 @@ class ScraperExecutor:
                        if self.access is not None and self.access.state is not None else {})
                 )
                 page = context.new_page()
-                if self.login:
-                    if self.access is None:
-                        raise ValueError("Manual login requires a browser access handler")
-                    # 显式要求人工登录时允许先展示 HTTP 401/403 页面；用户继续后，
-                    # run_page 会重新导航目标地址并应用正常的 HTTP 与内容检查。
-                    page.goto(str(spec.start_url), wait_until="domcontentloaded", timeout=spec.timeout_ms)
-                    self.access.pending = HandoffRequest(reason="请完成登录，然后继续抓取目标页面。")
+                if manual:
+                    # 先展示目标入口，允许用户处理 HTTP 401/403 页面；继续后，
+                    # run_page 重新导航并应用正常检查，访问失败不再触发人工接管。
+                    url = str(spec.start_url)
+                    try:
+                        page.goto(url, wait_until="domcontentloaded", timeout=spec.timeout_ms)
+                    except PlaywrightTimeout as exc:
+                        raise NavigationTimeout(url, str(exc)) from exc
+                    except PlaywrightError as exc:
+                        raise NavigationError(url, str(exc)) from exc
+                    self.access.pending = request
                     self.access.resume()
                 result = self.run_page(spec, page)
                 failed = False

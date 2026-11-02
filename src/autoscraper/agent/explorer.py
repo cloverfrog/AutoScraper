@@ -131,6 +131,10 @@ generation are outside this first version. Do not promise successful full downlo
 
 Boundaries:
 Use read-only inspection and navigation; no automated login, form submission or purchases.
+Declare access="manual" in the final spec when you observe login or security verification
+at this target entry, including a challenge that clears after waiting. This describes this
+entry's prerequisite, not the whole website. Ordinary public pages use access="none".
+Keep this requirement after a successful manual operation; never put cookies or tokens in the spec.
 When login, QR code or verification blocks access, use wait_for_user to hand browser control
 to the user. Explain the observed blocker and needed operation; never ask for credentials in chat.
 After the user continues, observe the current page again and verify target access and task scope.

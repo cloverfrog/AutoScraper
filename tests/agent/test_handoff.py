@@ -337,7 +337,7 @@ def test_authenticated_workflow_transfers_and_refreshes_cookie_and_local_storage
     monkeypatch.setattr(ScraperExecutor, "run_page", extract)
     access = BrowserAccess(handler=operate)
     with protected_site() as base:
-        holder.update(base=base, rule={**RULE, "start_url": base})
+        holder.update(base=base, rule={**RULE, "start_url": base, "access": "manual"})
         with sync_playwright() as playwright:
             executable_path = playwright.chromium.executable_path
         settings = AgentSettings(
@@ -423,7 +423,7 @@ def test_cli_handoff_preserves_outputs(monkeypatch, tmp_path, capsys, status, co
         assert "--headed" in report["resume_hint"]
 
 
-def test_executor_explicit_login_accepts_401_and_rechecks_target(monkeypatch):
+def test_executor_manual_access_accepts_401_and_rechecks_target(monkeypatch):
     import autoscraper.scraping.executor as executor
 
     holder = {}
@@ -433,7 +433,7 @@ def test_executor_explicit_login_accepts_401_and_rechecks_target(monkeypatch):
         with sync_playwright() as playwright:
 
             def launch(**kwargs):
-                holder["browser"] = playwright.chromium.launch(**kwargs)
+                holder["browser"] = playwright.chromium.launch(**{**kwargs, "headless": True})
                 return holder["browser"]
 
             yield SimpleNamespace(chromium=SimpleNamespace(launch=launch))
@@ -447,8 +447,8 @@ def test_executor_explicit_login_accepts_401_and_rechecks_target(monkeypatch):
     monkeypatch.setattr(executor, "sync_playwright", captured_playwright)
     with protected_site(401) as base:
         access = BrowserAccess(handler=login)
-        result = ScraperExecutor(access=access, login=True).run(
-            ScraperSpec.model_validate({**RULE, "start_url": base})
+        result = ScraperExecutor(headless=False, access=access).run(
+            ScraperSpec.model_validate({**RULE, "start_url": base, "access": "manual"})
         )
         assert result.records == [{"title": "A"}, {"title": "B"}]
         assert access.state is not None

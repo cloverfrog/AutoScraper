@@ -52,7 +52,6 @@ def build_app(manager):
             spec_json=data["spec_json"] or "",
             initial_spec_json=data["initial_spec_json"] or "",
             execute=data["execute"], headed=data["headed"],
-            login=data["login"] if mode == "spec" else False,
             download_resources=data["download_resources"] if mode == "spec" else False,
             auth_profile=(data["auth_profile"] or "").strip(),
             browser_path=(data["browser_path"] or "").strip(),
@@ -160,7 +159,6 @@ def build_app(manager):
                 controls["spec_json"] = gr.Textbox(
                     label="规则 JSON（可直接粘贴或编辑）", value="", lines=10,
                 )
-                controls["login"] = gr.Checkbox(label="抓取前人工登录（需启用可见浏览器）")
                 controls["download_resources"] = gr.Checkbox(
                     label="保存协议声明的资源文件（默认仅导出 URL）", value=False,
                 )
