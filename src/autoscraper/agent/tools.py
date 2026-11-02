@@ -52,9 +52,6 @@ class TracedTools(Tools):
             return await super().act(action, **kwargs)
         name, inputs = next(iter(params.items()))
         capture = getattr(self, "network_capture", None)
-        if capture and name in {"navigate", "click", "scroll"}:
-            capture.actions.append((name, capture.buffer.sequence))
-            capture.actions = capture.actions[-40:]
         if checks and name == "done" and inputs.get("success") is not False and inputs.get("data"):
             candidate = ScraperSpec.model_validate(inputs["data"])
             checks.last_candidate = candidate
@@ -64,17 +61,15 @@ class TracedTools(Tools):
                 if capture:
                     network_result = await self.registry.registry.actions["test_network"].function(
                         source=candidate.network, dedupe_by=candidate.dedupe_by,
+                        start_url=str(candidate.start_url),
                     )
                     network_test = json.loads(network_result.extracted_content)
                     checks.network_summary = network_test
                 await self._refresh_control(candidate, kwargs.get("browser_session"))
                 issues = checks.check(candidate)
-                if not capture or rule_key(candidate.network, candidate.dedupe_by) not in capture.evidence:
-                    from autoscraper.workflow.validation import Feedback
-                    issues.append(Feedback(code="json_path_failure", message=
-                        "Use test_network with the exact final network rule; verify initial-page "
-                        "fields and genuinely new records after the pagination action. "
-                        + json.dumps((network_test or {}).get("diagnostics", []), ensure_ascii=False)))
+                if not capture or rule_key(candidate.network, candidate.dedupe_by, checks.actual_url(candidate.start_url)) not in capture.evidence:
+                    from .network import network_feedback
+                    issues.extend(network_feedback(network_test))
                 checks.last_issues = issues
                 if issues:
                     return ActionResult(extracted_content=json.dumps({
@@ -338,7 +333,7 @@ def build_tools(
             try:
                 data = await explore_network_scroll(
                     tools, network_capture, page, network, dedupe_by or [], perform_scroll,
-                    max_scrolls, wait_ms, content_timeout_ms,
+                    max_scrolls, wait_ms, content_timeout_ms, browser_session.get_current_page_url,
                 )
                 return ActionResult(extracted_content=json.dumps(data))
             except Exception:
