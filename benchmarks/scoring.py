@@ -8,6 +8,7 @@ from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
 from .common import read_json, sha256, write_json
+from .metrics import trace_metrics
 
 
 # 只消除无意义的表示差异；不修正截断文本、错误货币或相对链接。
@@ -121,65 +122,6 @@ def score_records(task, expected, actual, *, execution_ok=True):
     }
 
 
-# summary 为完整计量来源；只剩事件时报告下界，并明确日志是否损坏。
-def trace_metrics(run_dir, mode):
-    summaries = list((Path(run_dir) / "trace").glob("*/summary.json"))
-    if len(summaries) == 1:
-        try:
-            summary = read_json(summaries[0])
-            metrics = summary["metrics"]
-            if not isinstance(metrics, dict) or not isinstance(
-                metrics["llm_calls_by_source"], dict
-            ):
-                raise ValueError("invalid metrics")
-            if any(type(v) is not int or v < 0 for v in metrics["llm_calls_by_source"].values()):
-                raise ValueError("invalid request counts")
-            if mode == "executor":
-                metrics = {
-                    **metrics,
-                    "tokens": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
-                }
-            return {
-                **metrics,
-                "trace_complete": not summary.get("trace_errors")
-                and summary.get("termination") == "returned",
-                "metric_basis": "summary",
-            }
-        except (ValueError, TypeError, KeyError):
-            pass
-    sources, tokens = Counter(), Counter()
-    repairs = usage_calls = event_count = 0
-    corrupt = False
-    for path in (Path(run_dir) / "trace").glob("*/events.jsonl"):
-        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
-            try:
-                event = json.loads(line)
-                if not isinstance(event, dict) or not isinstance(event.get("payload", {}), dict):
-                    raise ValueError("invalid event")
-                event_count += 1
-                if event["event_type"] == "llm.started":
-                    sources[event.get("source", "other")] += 1
-                if event["event_type"] == "repair.started":
-                    repairs += 1
-                usage = event.get("payload", {}).get("usage")
-                if event["event_type"] == "llm.finished" and isinstance(usage, dict):
-                    usage_calls += 1
-                    tokens.update({k: v for k, v in usage.items() if type(v) in {int, float}})
-            except (ValueError, TypeError, KeyError):
-                corrupt = True
-    executor = mode == "executor"
-    return {
-        "llm_calls_by_source": dict(sources) if event_count or executor else None,
-        "tokens": dict(tokens) if usage_calls else ({"total_tokens": 0} if executor else None),
-        "usage_calls": usage_calls,
-        "usage_missing_calls": max(0, sum(sources.values()) - usage_calls),
-        "repairs": repairs if executor or event_count else None,
-        "trace_complete": False,
-        "metric_basis": "events_lower_bound",
-        "corrupt_events": corrupt,
-    }
-
-
 # 对批次自身保存的任务/真值副本评分，后续仓库更新不会悄悄改变历史成绩。
 def score_run(directory):
     directory = Path(directory)
@@ -202,6 +144,8 @@ def score_run(directory):
             execution = {}
     except (OSError, ValueError):
         execution = {}
+    if not isinstance(execution.get("outcome"), dict):
+        execution["outcome"] = {}
     try:
         process = read_json(directory / "process.json")
         if not isinstance(process, dict):
@@ -209,19 +153,71 @@ def score_run(directory):
     except (OSError, ValueError):
         process = {}
     execution_ok = (
-        process.get("exit_code") == 0
-        and not process.get("timed_out")
+        type(process.get("exit_code")) is int
+        and process["exit_code"] == 0
+        and process.get("timed_out") is False
+        and not process.get("interrupted")
         and execution.get("complete") is True
     )
     result = score_records(task, expected, actual, execution_ok=execution_ok)
     result["metrics"] = {
         **trace_metrics(directory, request["mode"]),
-        "wall_seconds": process.get("wall_seconds"),
+        "wall_seconds": process.get("wall_seconds")
+        if type(process.get("wall_seconds")) in {int, float}
+        and Decimal(str(process["wall_seconds"])).is_finite()
+        and process["wall_seconds"] >= 0
+        else None,
     }
     result["execution"] = execution
     result["process"] = process
+    result["failure_reasons"] = failure_reasons(result, execution, process)
     write_json(directory / "score.json", result)
     return result
+
+
+# 将业务反馈和外层进程失败共同保存；缺少元数据时也能解释失败，不能把无结果当成功。
+def failure_reasons(score, execution, process):
+    reasons = []
+    outcome = execution.get("outcome") or {}
+    if not isinstance(outcome, dict):
+        outcome = {}
+    if process.get("interrupted"):
+        reasons.append({"code": "process_interrupted"})
+    elif process.get("timed_out"):
+        reasons.append({"code": "process_timeout"})
+    elif (
+        type(process.get("exit_code")) is not int
+        or process["exit_code"] != 0
+        or process.get("timed_out") is not False
+    ):
+        reasons.append(
+            {
+                "code": "process_failed",
+                "exit_code": process.get("exit_code"),
+                "message": process.get("error") or process.get("stderr"),
+            }
+        )
+    if execution.get("complete") is not True:
+        reasons.append(
+            {
+                "code": "incomplete_execution",
+                "status": outcome.get("status"),
+                "message": execution.get("error"),
+            }
+        )
+    if isinstance(outcome.get("feedback"), list):
+        reasons.extend(outcome["feedback"])
+    if score["missing_data"]:
+        reasons.append({"code": "missing_data"})
+    elif not score["data_correct"]:
+        reasons.append(
+            {
+                "code": "data_mismatch",
+                "missing_records": score["missing_records"],
+                "order_correct": score["order_correct"],
+            }
+        )
+    return reasons
 
 
 # 每组和每任务分别汇总；只计已启动单元，未启动与阻塞单独列出。
@@ -245,16 +241,29 @@ def score_batch(directory):
             "directory": cell["directory"],
             "task_success": score["task_success"],
             "record_accuracy": score["record_accuracy"],
+            "record_precision": score["record_precision"],
+            "record_recall": score["record_recall"],
             "field_accuracy": score["field_accuracy"],
             "llm_calls": sum(sources.values()) if sources is not None else None,
             "llm_calls_by_source": sources,
             "tokens": metrics.get("tokens"),
             "usage_calls": metrics.get("usage_calls"),
             "usage_missing_calls": metrics.get("usage_missing_calls"),
+            "token_usage_complete": metrics.get("token_usage_complete"),
             "phase_seconds": metrics.get("phase_seconds"),
             "repairs": metrics.get("repairs"),
             "wall_seconds": metrics.get("wall_seconds"),
             "trace_complete": metrics.get("trace_complete"),
+            "metric_basis": metrics.get("metric_basis"),
+            "request_counts_complete": metrics.get("request_counts_complete"),
+            "exit_code": score["process"].get("exit_code"),
+            "timed_out": score["process"].get("timed_out"),
+            "interrupted": score["process"].get("interrupted", False),
+            "status": (score["execution"].get("outcome") or {}).get("status"),
+            "repair_not_started_reason": (score["execution"].get("outcome") or {}).get(
+                "repair_not_started_reason"
+            ),
+            "failure_reasons": score["failure_reasons"],
         }
         rows.append(row)
         # 复用记录不混进生成组成功率，单独作为同源规则的后续执行结果。
@@ -265,8 +274,25 @@ def score_batch(directory):
         successes = Counter(item["task"] for item in items if item["task_success"])
         costs = {}
         for key in ("llm_calls", "repairs", "wall_seconds"):
-            known = [item[key] for item in items if item[key] is not None]
-            costs[key] = {"observed_sum": sum(known), "known_runs": len(known), "runs": len(items)}
+            known = [
+                item[key]
+                for item in items
+                if item[key] is not None
+                and (key == "wall_seconds" or item["request_counts_complete"])
+            ]
+            lower_bounds = [
+                item[key]
+                for item in items
+                if item[key] is not None
+                and key != "wall_seconds"
+                and not item["request_counts_complete"]
+            ]
+            costs[key] = {
+                "observed_sum": sum(known) if known else None,
+                "known_runs": len(known),
+                "runs": len(items),
+                "lower_bound_sum": sum(lower_bounds) if lower_bounds else None,
+            }
         groups.append(
             {
                 "protocol": protocol,
@@ -288,7 +314,9 @@ def score_batch(directory):
                         if field in item["field_accuracy"]
                     )
                     / sum(field in item["field_accuracy"] for item in items)
-                    for field in {field for item in items for field in item["field_accuracy"]}
+                    for field in sorted(
+                        {field for item in items for field in item["field_accuracy"]}
+                    )
                 },
             }
         )
@@ -299,7 +327,9 @@ def score_batch(directory):
         "states": dict(Counter(cell["state"] for cell in manifest["cells"])),
         "groups": groups,
         "runs": rows,
-        "comparisons": comparisons(rows),
+        "comparisons": comparisons(
+            rows, complete=all(cell["state"] == "finished" for cell in manifest["cells"])
+        ),
     }
     write_json(directory / "summary.json", summary)
     with (directory / "summary.csv").open("w", encoding="utf-8", newline="") as stream:
@@ -339,7 +369,7 @@ def score_batch(directory):
 
 
 # 只有相同任务/重复编号的完整配对才计算提升，未知成本不按零补齐。
-def comparisons(rows):
+def comparisons(rows, *, complete=True):
     results = []
     for protocol, off, on in (
         ("equal-total", "total-no-repair", "total-repair"),
@@ -363,7 +393,8 @@ def comparisons(rows):
             "success_uplift_percentage_points": None,
             "mean_added_cost": {},
         }
-        if pairs:
+        # 不完整或不平衡批次只报配对覆盖，不生成易被误读为正式提升的数值。
+        if pairs and complete and result["balanced"]:
             result["success_uplift_percentage_points"] = (
                 100
                 * sum(
@@ -402,7 +433,9 @@ def comparisons(rows):
                     for key in pairs
                     if all(
                         by_group[name][key]["trace_complete"]
-                        and by_group[name][key]["usage_missing_calls"] == 0
+                        and (by_group[name][key].get("token_usage_complete") or {}).get(
+                            token, False
+                        )
                         and token in (by_group[name][key]["tokens"] or {})
                         for name in (off, on)
                     )

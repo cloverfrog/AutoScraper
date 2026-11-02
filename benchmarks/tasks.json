@@ -26,7 +26,7 @@
   {
     "id": "cars-load-more",
     "url": "https://webscraper.io/test-sites/load-more",
-    "task": "按默认顺序抓取前25辆车，点击Load More加载更多。输出字段名为name、description、year、status、url，分别为完整名称、卡片简述、卡片年份整段文本（如Year: 1955）、卡片状态徽章完整文本（如Available: 1、Reserved或Sold）和绝对详情链接。保持页面顺序。",
+    "task": "按默认顺序抓取前25辆车，点击Load More加载更多。输出字段名为name、description、year、status、url，分别为完整名称、卡片简述、保留Year:标签的卡片年份整段文本、卡片状态徽章完整文本（保留页面显示的库存数量）和绝对详情链接。保持页面顺序。",
     "count": 25,
     "key": "url",
     "fields": {"name": "text", "description": "text", "year": "text", "status": "text", "url": "url"}

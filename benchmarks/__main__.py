@@ -17,6 +17,8 @@ def main():
     check.add_argument("--tasks", nargs="+", choices=list(tasks()), default=list(tasks()))
     check.add_argument("--output-root", type=Path, default=Path("output/benchmark-checks"))
     check.add_argument("--browser-path")
+    audit = commands.add_parser("audit", help="Verify all frozen source evidence offline")
+    audit.add_argument("--output", type=Path, default=Path("output/benchmark-audit.json"))
     run = commands.add_parser("run", help="Run an isolated batch")
     run.add_argument("--config", type=Path, default=HOME / "configs/smoke.json")
     run.add_argument("--commit")
@@ -29,6 +31,16 @@ def main():
     score.add_argument("batch", type=Path)
     args = parser.parse_args()
     try:
+        if args.command == "audit":
+            from .evidence import audit_all
+
+            results = audit_all()
+            write_json(args.output, results)
+            for result in results:
+                print(
+                    f"{result['task']}: source_consistent={result['source_consistent']}, human_review_required={result['human_review_required']}"
+                )
+            return 0 if all(result["source_consistent"] for result in results) else 1
         if args.command == "score":
             summary = score_batch(args.batch)
             print(f"{args.batch / 'summary.md'} (complete={summary['complete']})")
@@ -60,6 +72,9 @@ def main():
         return (
             0 if summary["complete"] and all(row["task_success"] for row in summary["runs"]) else 1
         )
+    except KeyboardInterrupt:
+        print("Benchmark interrupted; no further runs started", file=sys.stderr)
+        return 130
     except (OSError, ValueError, KeyError, TypeError) as exc:
         print(f"Benchmark: {exc}", file=sys.stderr)
         return 2

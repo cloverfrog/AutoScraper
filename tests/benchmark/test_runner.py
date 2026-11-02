@@ -148,6 +148,7 @@ def test_failed_generation_never_falls_back_for_reuse(monkeypatch, tmp_path):
     config["tasks"] = ["local-network"]
     config["repeats"] = 1
     config["groups"] = config["groups"][:1]
+    config["groups"][0]["protocol"] = "fixture"
     config["groups"][0]["reuse_runs"] = 2
     monkeypatch.setattr(runner, "launch", lambda *args: {"exit_code": 1, "timed_out": False})
     batch = runner.run_batch(config, tmp_path, commit="a" * 40, allow_llm=True)
@@ -191,6 +192,8 @@ def test_worker_passes_budget_to_existing_agent_cli(monkeypatch, tmp_path, group
 
     def execute(args, trace):
         assert args.non_interactive
+        assert args.spec_input is None
+        assert "truth.json" not in str(args) and "candidate.json" not in str(args)
         assert args.model == config["model"]
         assert args.max_llm_calls == group["budget"]["max_llm_calls"]
         assert args.repair_reserve_calls == group["budget"]["repair_reserve_calls"]

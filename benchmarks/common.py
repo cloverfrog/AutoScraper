@@ -14,7 +14,11 @@ def now():
 
 
 def read_json(path):
-    return json.loads(Path(path).read_text(encoding="utf-8"))
+    # Python 默认容忍 NaN/Infinity；运行产物必须是标准 JSON，不能让非法值悄悄通过。
+    def reject_constant(value):
+        raise ValueError(f"Non-finite JSON constant: {value}")
+
+    return json.loads(Path(path).read_text(encoding="utf-8"), parse_constant=reject_constant)
 
 
 def write_json(path, value):

@@ -2,7 +2,9 @@
 import contextlib
 import io
 import json
+import os
 import sys
+import traceback
 from pathlib import Path
 
 from .common import read_json, sha256, write_json
@@ -21,7 +23,25 @@ def last_json(text):
     return {}
 
 
-def main(directory):
+# 同时保留 CLI 最终 JSON 与实时管道输出；超时杀进程时已输出的诊断仍由父进程保存。
+class LiveCapture(io.StringIO):
+    def __init__(self, stream):
+        super().__init__()
+        self.stream = stream
+
+    def write(self, text):
+        self.stream.write(text)
+        self.stream.flush()
+        return super().write(text)
+
+
+def sanitizer():
+    from autoscraper.observability.tracing import Sanitizer
+
+    return Sanitizer((os.getenv("AUTOSCRAPER_API_KEY"), os.getenv("DEEPSEEK_API_KEY")))
+
+
+def execute(directory):
     directory = Path(directory).resolve()
     request, task = read_json(directory / "request.json"), read_json(directory / "task.json")
     # 保存实际启动浏览器的版本；不安装或下载浏览器。
@@ -83,8 +103,9 @@ def main(directory):
             if request["browser_path"]:
                 arguments.extend(["--browser-path", request["browser_path"]])
         sys.argv = arguments
-        captured = io.StringIO()
-        with contextlib.redirect_stdout(captured):
+        captured = LiveCapture(sys.stdout)
+        errors = LiveCapture(sys.stderr)
+        with contextlib.redirect_stdout(captured), contextlib.redirect_stderr(errors):
             if request["mode"] == "executor":
                 trace = Trace(FileSink(directory / "trace"))
                 with trace.run(url=url, task=task["task"]):
@@ -93,8 +114,7 @@ def main(directory):
             else:
                 code = cli()
         raw = captured.getvalue()
-        print(raw, end="")
-        outcome = last_json(raw)
+        outcome = last_json(raw) or last_json(errors.getvalue())
         complete = code == 0 and (
             outcome.get("status") == "success" and not outcome.get("sample_only")
             if request["mode"] == "agent"
@@ -103,8 +123,26 @@ def main(directory):
             and outcome.get("stop_reason")
             in {"max_items", "no_next", "end_marker", "no_more_content", "no_pagination"}
         )
-        write_json(directory / "execution.json", {"complete": complete, "outcome": outcome})
+        write_json(
+            directory / "execution.json",
+            sanitizer().clean({"complete": complete, "outcome": outcome}),
+        )
         return code
+
+
+# 启动浏览器等阶段也可能失败；该层只补齐 Benchmark 元数据，不修复或重试 Agent。
+def main(directory):
+    directory = Path(directory).resolve()
+    try:
+        return execute(directory)
+    except Exception as exc:
+        error = sanitizer().text(f"{type(exc).__name__}: {exc}")
+        write_json(
+            directory / "execution.json",
+            {"complete": False, "error": error, "outcome": {"status": "worker_error"}},
+        )
+        print(sanitizer().text(traceback.format_exc()), file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":

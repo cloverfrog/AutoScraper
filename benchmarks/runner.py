@@ -37,9 +37,9 @@ LIMITS = {
     "timeout": (1, 900),
     "llm_timeout": (1, 120),
     "content_timeout_ms": (1, 120000),
-    "validation_items": (1, 10000),
-    "validation_pages": (1, 10000),
-    "validation_detail_pages": (1, 10000),
+    "validation_items": (1, 1000),
+    "validation_pages": (1, 20),
+    "validation_detail_pages": (1, 1000),
 }
 
 
@@ -146,7 +146,38 @@ def validate_config(value):
             or parsed.fragment
         ):
             raise ValueError("Provide a base_url without credentials or query parameters")
+    validate_protocols(groups)
     return config
+
+
+# 已命名的对照协议必须符合预算口径，不能仅改标签就输出不公平的对照结果。
+def validate_protocols(groups):
+    for protocol, names in (
+        ("equal-total", ("total-no-repair", "total-repair")),
+        ("equal-initial", ("initial-no-repair", "initial-repair")),
+    ):
+        selected = {group["id"]: group for group in groups if group["protocol"] == protocol}
+        if not selected:
+            continue
+        if set(selected) != set(names) or any(
+            group["mode"] != "agent" for group in selected.values()
+        ):
+            raise ValueError(f"{protocol} requires both named Agent groups")
+        off, on = (selected[name]["budget"] for name in names)
+        if off["max_repairs"] != 0 or on["max_repairs"] == 0 or off["repair_reserve_calls"]:
+            raise ValueError("Invalid repair control groups")
+        if any(
+            off[key] != on[key]
+            for key in BUDGET
+            if key not in {"max_llm_calls", "max_repairs", "repair_reserve_calls"}
+        ):
+            raise ValueError("Control groups must share non-repair budgets")
+        if protocol == "equal-total":
+            valid = off["max_llm_calls"] == on["max_llm_calls"] and on["repair_reserve_calls"] == 0
+        else:
+            valid = off["max_llm_calls"] == on["max_llm_calls"] - on["repair_reserve_calls"]
+        if not valid:
+            raise ValueError(f"Budgets do not satisfy {protocol}")
 
 
 def git(*args):
@@ -174,22 +205,24 @@ def launch(arguments, timeout):
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         start_new_session=os.name == "posix",
         env={**os.environ, "ANONYMIZED_TELEMETRY": "false", "BROWSER_USE_CLOUD_SYNC": "false"},
     )
     timed_out = False
+    interrupted = False
     try:
         stdout, stderr = process.communicate(timeout=timeout)
-    except subprocess.TimeoutExpired:
-        timed_out = True
-        if os.name == "posix":
-            try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-        else:
-            process.kill()
+    except (subprocess.TimeoutExpired, KeyboardInterrupt) as exc:
+        timed_out = isinstance(exc, subprocess.TimeoutExpired)
+        interrupted = isinstance(exc, KeyboardInterrupt)
+        kill_process(process)
         stdout, stderr = process.communicate()
+    except BaseException:
+        kill_process(process)
+        process.communicate()
+        raise
     # 和既有追踪保持相同凭据清理口径；stdout/stderr 不成为第二套事件系统。
     from autoscraper.observability.tracing import Sanitizer
 
@@ -197,29 +230,47 @@ def launch(arguments, timeout):
     return {
         "exit_code": process.returncode,
         "timed_out": timed_out,
+        "interrupted": interrupted,
         "wall_seconds": time.monotonic() - started,
         "stdout": sanitizer.text(stdout),
         "stderr": sanitizer.text(stderr),
     }
 
 
+# 父进程取消时也必须关闭独立会话中的浏览器/模型进程，避免后台继续产生费用。
+def kill_process(process):
+    if os.name == "posix":
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    else:
+        process.kill()
+
+
 # 每次预检重新采集源证据并与冻结答案严格比较；漂移不会写入正式答案。
 def check_task(task, output, *, timeout=600, browser_path=None):
-    validate_evidence(task)
-    arguments = ["-m", "benchmarks.oracle", "--task", task["id"], "--capture", str(output)]
-    if browser_path:
-        arguments += ["--browser-path", browser_path]
-    process = launch(arguments, timeout)
-    output.mkdir(parents=True, exist_ok=True)
-    result = {"task": task["id"], "checked_at": now(), "process": process, "passed": False}
+    from .evidence import audit_task
+
+    result = {"task": task["id"], "checked_at": now(), "process": None, "passed": False}
     try:
+        if not audit_task(task)["source_consistent"]:
+            raise ValueError("Frozen truth differs from original evidence")
+        arguments = ["-m", "benchmarks.oracle", "--task", task["id"], "--capture", str(output)]
+        if browser_path:
+            arguments += ["--browser-path", browser_path]
+        process = launch(arguments, timeout)
+        result["process"] = process
         candidate = read_json(output / "candidate.json")
         truth = validate_evidence(task)
         result["score"] = score_records(task, truth["records"], candidate["records"])
         result["passed"] = process["exit_code"] == 0 and result["score"]["task_success"]
     except (OSError, ValueError, KeyError, TypeError) as exc:
         result["error"] = str(exc)
+    output.mkdir(parents=True, exist_ok=True)
     write_json(output / "check.json", result)
+    if result["process"] and result["process"].get("interrupted"):
+        raise KeyboardInterrupt
     return result
 
 
@@ -227,8 +278,10 @@ def check_task(task, output, *, timeout=600, browser_path=None):
 def expand_cells(config):
     cells = []
     for repeat in range(1, config["repeats"] + 1):
-        groups = config["groups"] if repeat % 2 else list(reversed(config["groups"]))
-        for task_id in config["tasks"]:
+        for task_index, task_id in enumerate(config["tasks"]):
+            groups = (
+                config["groups"] if (repeat + task_index) % 2 else list(reversed(config["groups"]))
+            )
             for group in groups:
                 parent = None
                 for reuse in range(group["reuse_runs"] + 1):
@@ -333,10 +386,7 @@ def run_batch(config, output_root, *, commit, allow_llm=False, allow_dirty=False
             source = None
             if cell["reuse_index"]:
                 parent = directory / cell["parent"]
-                if (
-                    not (parent / "score.json").exists()
-                    or not read_json(parent / "score.json")["task_success"]
-                ):
+                if not reusable(parent):
                     cell.update(state="blocked", reason="generation_or_source_run_failed")
                 else:
                     source = parent / "spec.json"
@@ -363,6 +413,27 @@ def run_batch(config, output_root, *, commit, allow_llm=False, allow_dirty=False
 
                 score_run(run_dir)
                 cell["state"] = "finished"
+                if process.get("interrupted"):
+                    write_json(directory / "manifest.json", manifest)
+                    score_batch(directory)
+                    raise KeyboardInterrupt
         write_json(directory / "manifest.json", manifest)
     score_batch(directory)
     return directory
+
+
+# 调度只依据工作流是否发布了可执行规则，不读取 Ground Truth 的评分结论。
+def reusable(directory):
+    try:
+        process = read_json(directory / "process.json")
+        execution = read_json(directory / "execution.json")
+        return (
+            type(process.get("exit_code")) is int
+            and process["exit_code"] == 0
+            and process.get("timed_out") is False
+            and not process.get("interrupted")
+            and execution.get("complete") is True
+            and (directory / "spec.json").is_file()
+        )
+    except (OSError, ValueError, TypeError, AttributeError):
+        return False

@@ -155,7 +155,8 @@ browser_path；组字段为 id、mode（agent/executor）、protocol、budget、
 在组配置中加入 `"reuse_runs": 4` 即得到总计5次抓取：首次运行加4次独立重放。
 executor 组必须为每个任务明确提供 `specs` 映射；agent 组不得提供预填规则。
 同一生成运行的规则只供其自身后续重放，新进程/浏览器不使用探索缓存。
-生成失败或独立评分失败时，后续重放标记 blocked，不回退到已知好规则。
+工作流未成功发布规则时，后续重放标记 blocked，不回退到已知好规则。
+独立评分不参与调度：即使已发布规则的语义评分失败，也继续其计划内重放，避免按标准答案筛选样本。
 本地示例通过 benchmark 包装绑定临时端口，原 Spec 副本、哈希及绑定后的副本全部保留。
 
 ```bash
@@ -202,8 +203,8 @@ task.json、truth.json、request.json（输入哈希及 mode）、records.json�
 下额外修复预算带来的收益，并明确总预算不同。
 
 其他配置统一为每轮12 Step、等待模型最多8请求、工作流240秒、每请求输出最多3000 Token，
-外层完整子进程600秒，全部6任务各重复3次，共72个初始任务运行。每个重复轮次交替正反
-组序，减少总是先运行某组的时间偏差；不声称消除全部站点或供应商时间效应。
+外层完整子进程600秒，全部6任务各重复3次，共72个初始任务运行。按任务和重复轮次交替
+正反组序，减少总是先运行某组的时间偏差；不声称消除全部站点或供应商时间效应。
 
 主请求包括需求解析、探索、修复及结构化失败重试，不等于 Agent Step。
 语义等待模型的最多8请求独立于主预算，因此还需报告两者合计（24主请求组最多32请求）。
@@ -221,13 +222,17 @@ task.json、truth.json、request.json（输入哈希及 mode）、records.json�
 每次运行报告 requirements/main/wait 请求数及其合计、prompt/completion/total/cached
 Token、usage_calls、usage_missing_calls、阶段耗时、墙钟时间和修复次数。
 Token 没有 Usage 时为 null；部分可得时只汇总已报告值，同时报告缺失覆盖率，不估算费用。
-配对 Token 增量只使用两侧完整追踪、无缺失 Usage 且该 Token 字段均存在的运行。
+配对 Token 增量还要求该 Token 字段在每个请求的 Usage 中均存在。仅有 usage_missing_calls=0
+不能证明每个字段都完整；token_usage_calls 和 token_usage_complete 给出逐字段覆盖。
+请求通过 call_id 配对；缺少请求关联的旧日志仍可展示已报告值，但不作完整 Token 增量对照。
 无模型 executor 请求与 Token 为确定的零，不能将这种规则重放成本称为规则生成成本。
 
 summary 损坏或强杀只剩事件时，指标标记为下界；无任何事件的 Agent 请求/Token 为未知。
 trace_errors 或异常终止会标记计量不完整。未知值不按零补齐，成本增量保留实际可比较
 配对数。wall_seconds 包含子进程启动、浏览器版本探测、执行、导出及关闭，不包含批次
 源预检；trace duration 更接近工作流边界。嵌套阶段时长不能直接求和。
+中断或不平衡批次不输出 Repair 提升值；调用计量下界与完整成本分列。CSV 还保留退出码、
+超时、中断、业务状态、修复未启动原因和结构化 failure_reasons。
 
 ### Spec 复用与下一阶段 native baseline
 
@@ -264,6 +269,8 @@ output/benchmark/<时间_UUID>/
 项目和浏览器相关包版本，以及浏览器版本/可执行路径。输入和输出目录独立，不覆盖旧运行。
 单次失败不重置预算，不自动补跑。子进程超时终止整个 POSIX 进程组，保留已刷新事件；
 Windows 仅保证终止 Python 子进程，本版实际验收环境为 Linux。
+Linux 下 Ctrl+C 会终止整个子进程组，保存当前进程结果并停止后续单元，CLI 返回130；
+已完成单元可离线重评分，未运行单元保持 pending。
 
 公开页面会变化，重跑不能只凭 Git SHA 保证同一数据；必须同时检查任务、答案和源核验。
 供应商未公开 seed 时不伪造确定性保证。没有大样本与 native 实验前，不生成“提升X%”等
@@ -288,3 +295,13 @@ Ruff 检查和格式检查通过。两个任务的记录及所有目标字段准
 使用 `--allow-dirty`，因此明确属于非正式的基础设施验证。
 六个源任务均与冻结数据一致：一次全量源检查中滚动页因加载提示动画导致核验器过早滚动，
 原失败记录保留；修正核验器等待顺序后，单独复核通过，未改变答案或生产代码。
+
+## 真实模型 Pilot 前审查
+
+四次运行配置为 `benchmarks/configs/pilot.json`，审查结果、六任务人工复核清单、运行条件与
+命令见 [Pilot 准备审查](benchmark-pilot-review.md)。本轮新增 `audit` 子命令，可完全离线
+从冻结 HTML/JSON 重建答案并核对，不启动浏览器或模型：
+
+```bash
+uv run python -m benchmarks audit --output output/benchmark-audit.json
+```
