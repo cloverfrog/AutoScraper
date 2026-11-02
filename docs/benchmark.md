@@ -5,7 +5,7 @@ Loop 的提升与成本，以及生成 ScraperSpec 后重复执行的成本。�
 不引入数据库、UI、调度框架或额外的模型裁判。
 
 现阶段只交付基础设施与无模型验证。六个任务是便利样本，不能代表所有网站；固定模型名
-也不能保证供应商后端不变。正式付费实验及原生 browser-use 对照留到下一阶段。
+也不能保证供应商后端不变。真实 Pilot 后的原生对照见 [browser-use Baseline](benchmark-native.md)。
 
 ## 复用的现有能力
 
@@ -145,7 +145,7 @@ uv run --extra agent python -m benchmarks run \
 环境快照；捕获的进程输出复用现有 Sanitizer 清理明确凭据。
 
 配置字段为 tasks、groups、repeats、commit、model、base_url、budget、process_timeout、
-browser_path；组字段为 id、mode（agent/executor）、protocol、budget、specs、reuse_runs。
+browser_path；组字段为 id、mode（agent/executor/native）、protocol、budget、specs、reuse_runs。
 组预算覆盖公共预算；未知键、无效范围及修复关闭但预留非零的配置均拒绝。
 所有任务使用明确的 fields/count 参数；需求解析仍由现有流程执行并计费，不通过测试替身
 跳过。validation 的范围保持所有组一致，默认覆盖本版任务的完整记录数。
@@ -184,7 +184,8 @@ result = score_records(task, truth, raw_records, execution_ok=True)
 应保留原始输出及可审计的 JSON 解析过程，不用另一轮 LLM 修补。统一批次导入采用同样的
 task.json、truth.json、request.json（输入哈希及 mode）、records.json、process.json
 （exit_code/timed_out/wall_seconds）、execution.json（complete）和 manifest 单元结构；
-不提供计量追踪时 Agent 成本为未知，不记零。本版没有可执行的 browser-use 对照组。
+不提供计量追踪时 Agent 成本为未知，不记零。原生直抓组现已接入 native 模式，详见
+[browser-use Baseline](benchmark-native.md)，无需手动转换其结果。
 
 ## 成本口径与公平性
 
@@ -248,7 +249,8 @@ trace_errors 或异常终止会标记计量不完整。未知值不按零补齐�
 
 原生 browser-use 对照需固定相同底层版本、供应商模型、字段/顺序/数量、浏览器环境、
 请求及时间预算和独立评分；允许使用原生工具但不注入 AutoScraper Spec、标准答案或
-站点选择器。记录真实请求重试与 Token，不能以 Step 充当请求。正式实现和运行均不在本阶段。
+站点选择器。记录真实请求重试与 Token，不能以 Step 充当请求。后续新增的原生实现与
+两次试跑边界见 [browser-use Baseline](benchmark-native.md)。
 
 ## 产物与可复现性
 

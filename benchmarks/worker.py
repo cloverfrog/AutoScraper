@@ -58,6 +58,10 @@ def execute(directory):
         )
         browser.close()
     with task_site(task) as url:
+        if request["mode"] == "native":
+            from .native import run
+
+            return run(directory, task, request, url)
         if request["mode"] == "agent":
             from autoscraper.cli.agent import main as cli
 

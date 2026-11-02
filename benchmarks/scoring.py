@@ -361,7 +361,7 @@ def score_batch(directory):
     lines.extend(
         [
             "",
-            "示例 Spec 与小样本仅验证基础设施，不代表 Agent 成功率、Repair 收益或相对 browser-use 的优势。",
+            "以上为已启动运行的观测结果；任务、模式和预算见 manifest.json。小样本不能证明泛化能力或因果收益。",
         ]
     )
     (directory / "summary.md").write_text("\n".join(lines) + "\n", encoding="utf-8")

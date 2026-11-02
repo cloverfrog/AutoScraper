@@ -95,8 +95,8 @@ def validate_config(value):
         ):
             raise ValueError("Group IDs must be unique safe names")
         group_ids.add(name)
-        if group.get("mode") not in {"executor", "agent"}:
-            raise ValueError("Only executor and agent modes are implemented")
+        if group.get("mode") not in {"executor", "agent", "native"}:
+            raise ValueError("Only executor, agent and native modes are implemented")
         group.setdefault("protocol", "verification")
         if not isinstance(group["protocol"], str) or not re.fullmatch(
             r"[a-z0-9-]{1,64}", group["protocol"]
@@ -122,6 +122,15 @@ def validate_config(value):
         if budget["max_repairs"] == 0 and budget["repair_reserve_calls"]:
             raise ValueError("No-repair groups must explicitly set reserve to zero")
         group["budget"] = budget
+        if group["mode"] == "native" and (
+            budget["max_repairs"]
+            or budget["repair_reserve_calls"]
+            or budget["max_wait_llm_calls"]
+            or group["reuse_runs"]
+        ):
+            raise ValueError(
+                "Native direct-data runs have one shared budget, no Repair or Spec reuse"
+            )
         if group["mode"] == "executor":
             specs = group.get("specs", {})
             if not isinstance(specs, dict) or set(specs) != set(chosen):
@@ -131,7 +140,7 @@ def validate_config(value):
                     raise ValueError("Spec input must be an existing file")
         elif "specs" in group:
             raise ValueError("Agent groups generate from scratch; specs are executor inputs only")
-    if any(group["mode"] == "agent" for group in groups):
+    if any(group["mode"] in {"agent", "native"} for group in groups):
         if not isinstance(config.get("model"), str) or not config["model"].strip():
             raise ValueError("Agent runs require an explicit model")
         from urllib.parse import urlsplit
@@ -347,8 +356,8 @@ def prepare(directory, task, group, config, source_spec=None):
 
 def run_batch(config, output_root, *, commit, allow_llm=False, allow_dirty=False):
     config = validate_config(config)
-    if not allow_llm and any(group["mode"] == "agent" for group in config["groups"]):
-        raise ValueError("Agent groups require --allow-llm; no model requests were started")
+    if not allow_llm and any(group["mode"] in {"agent", "native"} for group in config["groups"]):
+        raise ValueError("Agent/native groups require --allow-llm; no model requests were started")
     provenance = verify_commit(commit or config.get("commit"), allow_dirty)
     if config.get("commit") and commit and config["commit"] != commit:
         raise ValueError("CLI and configuration commits differ")

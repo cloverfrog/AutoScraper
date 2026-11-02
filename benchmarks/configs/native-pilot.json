@@ -1,0 +1,17 @@
+{
+  "tasks": ["books-list", "cars-load-more"],
+  "model": "deepseek-flash",
+  "base_url": "https://api.deepseek.com",
+  "repeats": 1,
+  "process_timeout": 600,
+  "budget": {
+    "max_steps": 12,
+    "max_llm_calls": 32,
+    "repair_reserve_calls": 0,
+    "max_repairs": 0,
+    "max_wait_llm_calls": 0,
+    "max_output_tokens": 3000,
+    "timeout": 240
+  },
+  "groups": [{"id": "native-browser-use", "mode": "native", "protocol": "native-direct-data"}]
+}
