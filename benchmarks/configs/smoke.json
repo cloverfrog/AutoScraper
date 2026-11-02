@@ -1,0 +1,12 @@
+{
+  "tasks": ["books-detail", "local-network"],
+  "repeats": 1,
+  "process_timeout": 600,
+  "groups": [{
+    "id": "existing-spec", "mode": "executor", "protocol": "infrastructure",
+    "specs": {
+      "books-detail": "benchmarks/specs/books-detail.json",
+      "local-network": "benchmarks/specs/local-network.json"
+    }
+  }]
+}

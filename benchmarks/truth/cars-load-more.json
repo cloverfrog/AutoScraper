@@ -1,0 +1,195 @@
+{
+  "schema_version": 1,
+  "task": "cars-load-more",
+  "captured_at": "2026-11-02T09:35:15.898117+00:00",
+  "method": "independent source DOM/JSON; no AutoScraper extraction",
+  "review": {
+    "status": "source-reviewed",
+    "reviewer": "Codex",
+    "notes": "Reviewed source selectors, identity/order, page boundaries, full titles/descriptions and local literal values. Human review required before formal paid study."
+  },
+  "records": [
+    {
+      "name": "Mercedes-Benz W123 280E 1955",
+      "description": "Uncompromising Stuttgart saloon",
+      "year": "Year: 1955",
+      "status": "Available: 1",
+      "url": "https://webscraper.io/test-sites/product/mercedes-benz-w123-280e-1955-c001"
+    },
+    {
+      "name": "BMW E24 635CSi 1954",
+      "description": "Shark-nose grand tourer",
+      "year": "Year: 1954",
+      "status": "Reserved",
+      "url": "https://webscraper.io/test-sites/product/bmw-e24-635csi-1954-c002"
+    },
+    {
+      "name": "Jaguar XJ6 1983",
+      "description": "Silky British luxury saloon",
+      "year": "Year: 1983",
+      "status": "Reserved",
+      "url": "https://webscraper.io/test-sites/product/jaguar-xj6-1983-c003"
+    },
+    {
+      "name": "Nissan 300ZX Z31 1966",
+      "description": "Angular Japanese sports coupe",
+      "year": "Year: 1966",
+      "status": "Sold",
+      "url": "https://webscraper.io/test-sites/product/nissan-300zx-z31-1966-c004"
+    },
+    {
+      "name": "Ferrari F40 1984",
+      "description": "Raw Prancing Horse icon",
+      "year": "Year: 1984",
+      "status": "Reserved",
+      "url": "https://webscraper.io/test-sites/product/ferrari-f40-1984-c005"
+    },
+    {
+      "name": "Mercedes-Benz W123 280E 1972",
+      "description": "Early W123, driver condition",
+      "year": "Year: 1972",
+      "status": "Reserved",
+      "url": "https://webscraper.io/test-sites/product/mercedes-benz-w123-280e-1972-c006"
+    },
+    {
+      "name": "Toyota 2000GT 1970",
+      "description": "Japan's landmark sports car",
+      "year": "Year: 1970",
+      "status": "Available: 5",
+      "url": "https://webscraper.io/test-sites/product/toyota-2000gt-1970-c007"
+    },
+    {
+      "name": "Toyota MR2 AW11 1969",
+      "description": "Concours mid-engine two-seater",
+      "year": "Year: 1969",
+      "status": "Sold",
+      "url": "https://webscraper.io/test-sites/product/toyota-mr2-aw11-1969-c008"
+    },
+    {
+      "name": "Nissan 300ZX Z31 1978",
+      "description": "Z31 restoration project",
+      "year": "Year: 1978",
+      "status": "Available: 2",
+      "url": "https://webscraper.io/test-sites/product/nissan-300zx-z31-1978-c009"
+    },
+    {
+      "name": "Ferrari 308 GTS 1970",
+      "description": "Pininfarina Targa, restored",
+      "year": "Year: 1970",
+      "status": "Available: 5",
+      "url": "https://webscraper.io/test-sites/product/ferrari-308-gts-1970-c010"
+    },
+    {
+      "name": "Porsche 911 Carrera 1980",
+      "description": "Air-cooled Carrera, driver",
+      "year": "Year: 1980",
+      "status": "Available: 3",
+      "url": "https://webscraper.io/test-sites/product/porsche-911-carrera-1980-c011"
+    },
+    {
+      "name": "Ford GT40 1973",
+      "description": "Le Mans homologation coupe",
+      "year": "Year: 1973",
+      "status": "Sold",
+      "url": "https://webscraper.io/test-sites/product/ford-gt40-1973-c012"
+    },
+    {
+      "name": "Toyota AE86 Sprinter Trueno 1954",
+      "description": "Rear-drive twin-cam coupe",
+      "year": "Year: 1954",
+      "status": "Sold",
+      "url": "https://webscraper.io/test-sites/product/toyota-ae86-sprinter-trueno-1954-c013"
+    },
+    {
+      "name": "Jaguar XJ6 1986",
+      "description": "Late-series XJ6, driver",
+      "year": "Year: 1986",
+      "status": "Available: 4",
+      "url": "https://webscraper.io/test-sites/product/jaguar-xj6-1986-c014"
+    },
+    {
+      "name": "Porsche 928 S4 1973",
+      "description": "Transaxle grand tourer, Concours",
+      "year": "Year: 1973",
+      "status": "Available: 4",
+      "url": "https://webscraper.io/test-sites/product/porsche-928-s4-1973-c015"
+    },
+    {
+      "name": "Ford GT40 1952",
+      "description": "GT40, driver condition",
+      "year": "Year: 1952",
+      "status": "Sold",
+      "url": "https://webscraper.io/test-sites/product/ford-gt40-1952-c016"
+    },
+    {
+      "name": "BMW 2002 1978",
+      "description": "Concours 2002, five-speed",
+      "year": "Year: 1978",
+      "status": "Reserved",
+      "url": "https://webscraper.io/test-sites/product/bmw-2002-1978-c017"
+    },
+    {
+      "name": "Nissan Fairlady Z (S30) 1962",
+      "description": "S30 Fairlady Z, restored",
+      "year": "Year: 1962",
+      "status": "Available: 2",
+      "url": "https://webscraper.io/test-sites/product/nissan-fairlady-z-s30-1962-c018"
+    },
+    {
+      "name": "BMW E28 535i 1970",
+      "description": "E28 535i, restored",
+      "year": "Year: 1970",
+      "status": "Available: 3",
+      "url": "https://webscraper.io/test-sites/product/bmw-e28-535i-1970-c019"
+    },
+    {
+      "name": "Porsche 944 Turbo 1956",
+      "description": "Turbocharged transaxle coupe",
+      "year": "Year: 1956",
+      "status": "Sold",
+      "url": "https://webscraper.io/test-sites/product/porsche-944-turbo-1956-c020"
+    },
+    {
+      "name": "Ford Sierra Cosworth 1955",
+      "description": "Group A homologation, Concours",
+      "year": "Year: 1955",
+      "status": "Available: 4",
+      "url": "https://webscraper.io/test-sites/product/ford-sierra-cosworth-1955-c021"
+    },
+    {
+      "name": "Ferrari F40 1953",
+      "description": "F40, driver condition",
+      "year": "Year: 1953",
+      "status": "Available: 4",
+      "url": "https://webscraper.io/test-sites/product/ferrari-f40-1953-c022"
+    },
+    {
+      "name": "Jaguar XJ6 1975",
+      "description": "XJ6 project, mid-production",
+      "year": "Year: 1975",
+      "status": "Available: 1",
+      "url": "https://webscraper.io/test-sites/product/jaguar-xj6-1975-c023"
+    },
+    {
+      "name": "Porsche 944 Turbo 1952",
+      "description": "Turbocharged transaxle driver",
+      "year": "Year: 1952",
+      "status": "Sold",
+      "url": "https://webscraper.io/test-sites/product/porsche-944-turbo-1952-c024"
+    },
+    {
+      "name": "BMW E30 M3 1975",
+      "description": "Homologation M3, Concours",
+      "year": "Year: 1975",
+      "status": "Available: 2",
+      "url": "https://webscraper.io/test-sites/product/bmw-e30-m3-1975-c025"
+    }
+  ],
+  "evidence": [
+    {
+      "file": "evidence/cars-load-more/source-1.html",
+      "url": "https://webscraper.io/test-sites/load-more",
+      "sha256": "020866cf444db8ebb66ecc55388e6b9eca7793c4567c74761ff2d5ff185b451f"
+    }
+  ]
+}

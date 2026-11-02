@@ -1,0 +1,182 @@
+<!DOCTYPE html><html lang="en"><head>
+	<meta charset="UTF-8">
+	<title>Quotes to Scrape</title>
+    <link rel="stylesheet" href="/static/bootstrap.min.css">
+    <link rel="stylesheet" href="/static/main.css">
+    
+    
+</head>
+<body>
+    <div class="container">
+        <div class="row header-box">
+            <div class="col-md-8">
+                <h1>
+                    <a href="/" style="text-decoration: none">Quotes to Scrape</a>
+                </h1>
+            </div>
+            <div class="col-md-4">
+                <p>
+                
+                    <a href="/login">Login</a>
+                
+                </p>
+            </div>
+        </div>
+    
+<script src="/static/jquery.js"></script>
+<script>
+    var delayInMilliseconds = 10000
+    setTimeout(function() {
+        var data = [
+    {
+        "tags": [
+            "love",
+            "poetry"
+        ],
+        "author": {
+            "name": "Pablo Neruda",
+            "goodreads_link": "/author/show/4026.Pablo_Neruda",
+            "slug": "Pablo-Neruda"
+        },
+        "text": "\u201cI love you without knowing how, or when, or from where. I love you simply, without problems or pride: I love you in this way because I do not know any other way of loving but this, in which there is no I or you, so intimate that your hand upon my chest is my hand, so intimate that when I fall asleep your eyes close.\u201d"
+    },
+    {
+        "tags": [
+            "happiness"
+        ],
+        "author": {
+            "name": "Ralph Waldo Emerson",
+            "goodreads_link": "/author/show/12080.Ralph_Waldo_Emerson",
+            "slug": "Ralph-Waldo-Emerson"
+        },
+        "text": "\u201cFor every minute you are angry you lose sixty seconds of happiness.\u201d"
+    },
+    {
+        "tags": [
+            "attributed-no-source"
+        ],
+        "author": {
+            "name": "Mother Teresa",
+            "goodreads_link": "/author/show/838305.Mother_Teresa",
+            "slug": "Mother-Teresa"
+        },
+        "text": "\u201cIf you judge people, you have no time to love them.\u201d"
+    },
+    {
+        "tags": [
+            "humor",
+            "religion"
+        ],
+        "author": {
+            "name": "Garrison Keillor",
+            "goodreads_link": "/author/show/2014.Garrison_Keillor",
+            "slug": "Garrison-Keillor"
+        },
+        "text": "\u201cAnyone who thinks sitting in church can make you a Christian must also think that sitting in a garage can make you a car.\u201d"
+    },
+    {
+        "tags": [
+            "humor"
+        ],
+        "author": {
+            "name": "Jim Henson",
+            "goodreads_link": "/author/show/4427.Jim_Henson",
+            "slug": "Jim-Henson"
+        },
+        "text": "\u201cBeauty is in the eye of the beholder and it may be necessary from time to time to give a stupid or misinformed beholder a black eye.\u201d"
+    },
+    {
+        "tags": [
+            "comedy",
+            "life",
+            "yourself"
+        ],
+        "author": {
+            "name": "Dr. Seuss",
+            "goodreads_link": "/author/show/61105.Dr_Seuss",
+            "slug": "Dr-Seuss"
+        },
+        "text": "\u201cToday you are You, that is truer than true. There is no one alive who is Youer than You.\u201d"
+    },
+    {
+        "tags": [
+            "children",
+            "fairy-tales"
+        ],
+        "author": {
+            "name": "Albert Einstein",
+            "goodreads_link": "/author/show/9810.Albert_Einstein",
+            "slug": "Albert-Einstein"
+        },
+        "text": "\u201cIf you want your children to be intelligent, read them fairy tales. If you want them to be more intelligent, read them more fairy tales.\u201d"
+    },
+    {
+        "tags": [],
+        "author": {
+            "name": "J.K. Rowling",
+            "goodreads_link": "/author/show/1077326.J_K_Rowling",
+            "slug": "J-K-Rowling"
+        },
+        "text": "\u201cIt is impossible to live without failing at something, unless you live so cautiously that you might as well not have lived at all - in which case, you fail by default.\u201d"
+    },
+    {
+        "tags": [
+            "imagination"
+        ],
+        "author": {
+            "name": "Albert Einstein",
+            "goodreads_link": "/author/show/9810.Albert_Einstein",
+            "slug": "Albert-Einstein"
+        },
+        "text": "\u201cLogic will get you from A to Z; imagination will get you everywhere.\u201d"
+    },
+    {
+        "tags": [
+            "music"
+        ],
+        "author": {
+            "name": "Bob Marley",
+            "goodreads_link": "/author/show/25241.Bob_Marley",
+            "slug": "Bob-Marley"
+        },
+        "text": "\u201cOne good thing about music, when it hits you, you feel no pain.\u201d"
+    }
+];
+        for (var i in data) {
+            var d = data[i];
+            var tags = $.map(d['tags'], function(t) {
+                return "<a class='tag'>" + t + "</a>";
+            }).join(" ");
+            document.getElementById("quotesPlaceholder").innerHTML += "<div class='quote'><span class='text'>" + d['text'] + "</span><span>by <small class='author'>" + d['author']['name'] + "</small></span><div class='tags'>Tags: " + tags + "</div></div>";
+        }
+    }, delayInMilliseconds);
+</script>
+<div id="quotesPlaceholder"><div class="quote"><span class="text">“I love you without knowing how, or when, or from where. I love you simply, without problems or pride: I love you in this way because I do not know any other way of loving but this, in which there is no I or you, so intimate that your hand upon my chest is my hand, so intimate that when I fall asleep your eyes close.”</span><span>by <small class="author">Pablo Neruda</small></span><div class="tags">Tags: <a class="tag">love</a> <a class="tag">poetry</a></div></div><div class="quote"><span class="text">“For every minute you are angry you lose sixty seconds of happiness.”</span><span>by <small class="author">Ralph Waldo Emerson</small></span><div class="tags">Tags: <a class="tag">happiness</a></div></div><div class="quote"><span class="text">“If you judge people, you have no time to love them.”</span><span>by <small class="author">Mother Teresa</small></span><div class="tags">Tags: <a class="tag">attributed-no-source</a></div></div><div class="quote"><span class="text">“Anyone who thinks sitting in church can make you a Christian must also think that sitting in a garage can make you a car.”</span><span>by <small class="author">Garrison Keillor</small></span><div class="tags">Tags: <a class="tag">humor</a> <a class="tag">religion</a></div></div><div class="quote"><span class="text">“Beauty is in the eye of the beholder and it may be necessary from time to time to give a stupid or misinformed beholder a black eye.”</span><span>by <small class="author">Jim Henson</small></span><div class="tags">Tags: <a class="tag">humor</a></div></div><div class="quote"><span class="text">“Today you are You, that is truer than true. There is no one alive who is Youer than You.”</span><span>by <small class="author">Dr. Seuss</small></span><div class="tags">Tags: <a class="tag">comedy</a> <a class="tag">life</a> <a class="tag">yourself</a></div></div><div class="quote"><span class="text">“If you want your children to be intelligent, read them fairy tales. If you want them to be more intelligent, read them more fairy tales.”</span><span>by <small class="author">Albert Einstein</small></span><div class="tags">Tags: <a class="tag">children</a> <a class="tag">fairy-tales</a></div></div><div class="quote"><span class="text">“It is impossible to live without failing at something, unless you live so cautiously that you might as well not have lived at all - in which case, you fail by default.”</span><span>by <small class="author">J.K. Rowling</small></span><div class="tags">Tags: </div></div><div class="quote"><span class="text">“Logic will get you from A to Z; imagination will get you everywhere.”</span><span>by <small class="author">Albert Einstein</small></span><div class="tags">Tags: <a class="tag">imagination</a></div></div><div class="quote"><span class="text">“One good thing about music, when it hits you, you feel no pain.”</span><span>by <small class="author">Bob Marley</small></span><div class="tags">Tags: <a class="tag">music</a></div></div></div>
+<nav>
+    <ul class="pager">
+        
+        <li class="previous">
+            <a href="/js-delayed/page/2/"><span aria-hidden="true">←</span> Previous</a>
+        </li>
+        
+        
+        <li class="next">
+            <a href="/js-delayed/page/4/">Next <span aria-hidden="true">→</span></a>
+        </li>
+        
+    </ul>
+</nav>
+
+    </div>
+    <footer class="footer">
+        <div class="container">
+            <p class="text-muted">
+                Quotes by: <a href="https://www.goodreads.com/quotes">GoodReads.com</a>
+            </p>
+            <p class="copyright">
+                Made with <span class="zyte">❤</span> by <a class="zyte" href="https://www.zyte.com">Zyte</a>
+            </p>
+        </div>
+    </footer>
+
+</body></html>

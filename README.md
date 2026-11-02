@@ -2,6 +2,9 @@
 
 输入网站 URL 和自然语言需求，由 browser-use Agent 探索网页并生成抓取规则，再交给 Playwright Executor 导出数据。
 
+轻量级评测工具及六个冻结任务见 [Benchmark 设计与使用方法](docs/benchmark.md)。默认验证不调用模型，
+支持独立评分、批量运行、Repair 预算对照与已有规则重放；正式付费和原生 browser-use 对照留待下一阶段。
+
 图片与普通附件可通过协议的 `resources` 声明资源字段及请求/响应模式。Agent 仅验证轻量证据；
 独立执行已有规则时，用 `--download-resources output/assets` 或 UI 的“保存协议声明的资源文件”开关启用保存。
 默认只导出数据与 URL，Agent 工作流始终不下载资源文件。详见 [资源抓取](docs/resources.md)。

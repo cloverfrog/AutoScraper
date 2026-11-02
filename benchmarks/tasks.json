@@ -1,0 +1,50 @@
+[
+  {
+    "id": "books-list",
+    "url": "https://books.toscrape.com/",
+    "task": "按网站默认顺序抓取前25本书，跨页继续。输出字段名为title、price、url，分别为完整书名、保留英镑符号的价格文本和绝对详情链接。保持页面顺序。",
+    "count": 25,
+    "key": "url",
+    "fields": {"title": "text", "price": "text", "url": "url"}
+  },
+  {
+    "id": "books-detail",
+    "url": "https://books.toscrape.com/",
+    "task": "按网站默认顺序抓取前5本书。输出字段名为title、price、url、description，分别为完整书名、保留英镑符号的价格文本、绝对详情链接和详情页完整产品描述。保持页面顺序。",
+    "count": 5,
+    "key": "url",
+    "fields": {"title": "text", "price": "text", "url": "url", "description": "text"}
+  },
+  {
+    "id": "quotes-delayed",
+    "url": "https://quotes.toscrape.com/js-delayed/",
+    "task": "等待延迟加载，按网站默认顺序跨页抓取前25条语录。输出字段名为quote、author、tags，分别为完整语录（含页面引号）、作者和按页面顺序排列的标签字符串列表。保持记录顺序。",
+    "count": 25,
+    "key": "quote",
+    "fields": {"quote": "text", "author": "text", "tags": "text_list"}
+  },
+  {
+    "id": "cars-load-more",
+    "url": "https://webscraper.io/test-sites/load-more",
+    "task": "按默认顺序抓取前25辆车，点击Load More加载更多。输出字段名为name、description、year、status、url，分别为完整名称、卡片简述、卡片年份整段文本（如Year: 1955）、卡片状态徽章完整文本（如Available: 1、Reserved或Sold）和绝对详情链接。保持页面顺序。",
+    "count": 25,
+    "key": "url",
+    "fields": {"name": "text", "description": "text", "year": "text", "status": "text", "url": "url"}
+  },
+  {
+    "id": "quotes-scroll",
+    "url": "https://quotes.toscrape.com/scroll",
+    "task": "通过滚动加载，按默认顺序抓取前25条语录。输出字段名为quote、author、tags，分别为完整语录（含页面引号）、作者和按页面顺序排列的标签字符串列表。保持记录顺序。",
+    "count": 25,
+    "key": "quote",
+    "fields": {"quote": "text", "author": "text", "tags": "text_list"}
+  },
+  {
+    "id": "local-network",
+    "url": "local://network-demo/",
+    "task": "从该本地示例的JSON网络响应抓取全部2条记录，点击Next继续。输出字段名为id、title、stock、price、active，分别为数值ID、标题、数值库存、数值价格和布尔启用状态。必须保留负数、0及false，按响应页面顺序返回。",
+    "count": 2,
+    "key": "id",
+    "fields": {"id": "number", "title": "text", "stock": "number", "price": "number", "active": "boolean"}
+  }
+]

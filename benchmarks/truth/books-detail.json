@@ -1,0 +1,75 @@
+{
+  "schema_version": 1,
+  "task": "books-detail",
+  "captured_at": "2026-11-02T09:34:35.774824+00:00",
+  "method": "independent source DOM/JSON; no AutoScraper extraction",
+  "review": {
+    "status": "source-reviewed",
+    "reviewer": "Codex",
+    "notes": "Reviewed source selectors, identity/order, page boundaries, full titles/descriptions and local literal values. Human review required before formal paid study."
+  },
+  "records": [
+    {
+      "title": "A Light in the Attic",
+      "price": "£51.77",
+      "url": "https://books.toscrape.com/catalogue/a-light-in-the-attic_1000/index.html",
+      "description": "It's hard to imagine a world without A Light in the Attic. This now-classic collection of poetry and drawings from Shel Silverstein celebrates its 20th anniversary with this special edition. Silverstein's humorous and creative verse can amuse the dowdiest of readers. Lemon-faced adults and fidgety kids sit still and read these rhythmic words and laugh and smile and love th It's hard to imagine a world without A Light in the Attic. This now-classic collection of poetry and drawings from Shel Silverstein celebrates its 20th anniversary with this special edition. Silverstein's humorous and creative verse can amuse the dowdiest of readers. Lemon-faced adults and fidgety kids sit still and read these rhythmic words and laugh and smile and love that Silverstein. Need proof of his genius? RockabyeRockabye baby, in the treetopDon't you know a treetopIs no safe place to rock?And who put you up there,And your cradle, too?Baby, I think someone down here'sGot it in for you. Shel, you never sounded so good. ...more"
+    },
+    {
+      "title": "Tipping the Velvet",
+      "price": "£53.74",
+      "url": "https://books.toscrape.com/catalogue/tipping-the-velvet_999/index.html",
+      "description": "\"Erotic and absorbing...Written with starling power.\"--\"The New York Times Book Review \" Nan King, an oyster girl, is captivated by the music hall phenomenon Kitty Butler, a male impersonator extraordinaire treading the boards in Canterbury. Through a friend at the box office, Nan manages to visit all her shows and finally meet her heroine. Soon after, she becomes Kitty's \"Erotic and absorbing...Written with starling power.\"--\"The New York Times Book Review \" Nan King, an oyster girl, is captivated by the music hall phenomenon Kitty Butler, a male impersonator extraordinaire treading the boards in Canterbury. Through a friend at the box office, Nan manages to visit all her shows and finally meet her heroine. Soon after, she becomes Kitty's dresser and the two head for the bright lights of Leicester Square where they begin a glittering career as music-hall stars in an all-singing and dancing double act. At the same time, behind closed doors, they admit their attraction to each other and their affair begins. ...more"
+    },
+    {
+      "title": "Soumission",
+      "price": "£50.10",
+      "url": "https://books.toscrape.com/catalogue/soumission_998/index.html",
+      "description": "Dans une France assez proche de la nôtre, un homme s’engage dans la carrière universitaire. Peu motivé par l’enseignement, il s’attend à une vie ennuyeuse mais calme, protégée des grands drames historiques. Cependant les forces en jeu dans le pays ont fissuré le système politique jusqu’à provoquer son effondrement. Cette implosion sans soubresauts, sans vraie révolution, s Dans une France assez proche de la nôtre, un homme s’engage dans la carrière universitaire. Peu motivé par l’enseignement, il s’attend à une vie ennuyeuse mais calme, protégée des grands drames historiques. Cependant les forces en jeu dans le pays ont fissuré le système politique jusqu’à provoquer son effondrement. Cette implosion sans soubresauts, sans vraie révolution, se développe comme un mauvais rêve.Le talent de l’auteur, sa force visionnaire nous entraînent sur un terrain ambigu et glissant ; son regard sur notre civilisation vieillissante fait coexister dans ce roman les intuitions poétiques, les effets comiques, une mélancolie fataliste.Ce livre est une saisissante fable politique et morale. ...more"
+    },
+    {
+      "title": "Sharp Objects",
+      "price": "£47.82",
+      "url": "https://books.toscrape.com/catalogue/sharp-objects_997/index.html",
+      "description": "WICKED above her hipbone, GIRL across her heart Words are like a road map to reporter Camille Preaker’s troubled past. Fresh from a brief stay at a psych hospital, Camille’s first assignment from the second-rate daily paper where she works brings her reluctantly back to her hometown to cover the murders of two preteen girls. NASTY on her kneecap, BABYDOLL on her leg Since WICKED above her hipbone, GIRL across her heart Words are like a road map to reporter Camille Preaker’s troubled past. Fresh from a brief stay at a psych hospital, Camille’s first assignment from the second-rate daily paper where she works brings her reluctantly back to her hometown to cover the murders of two preteen girls. NASTY on her kneecap, BABYDOLL on her leg Since she left town eight years ago, Camille has hardly spoken to her neurotic, hypochondriac mother or to the half-sister she barely knows: a beautiful thirteen-year-old with an eerie grip on the town. Now, installed again in her family’s Victorian mansion, Camille is haunted by the childhood tragedy she has spent her whole life trying to cut from her memory. HARMFUL on her wrist, WHORE on her ankle As Camille works to uncover the truth about these violent crimes, she finds herself identifying with the young victims—a bit too strongly. Clues keep leading to dead ends, forcing Camille to unravel the psychological puzzle of her own past to get at the story. Dogged by her own demons, Camille will have to confront what happened to her years before if she wants to survive this homecoming.With its taut, crafted writing, Sharp Objects is addictive, haunting, and unforgettable. ...more"
+    },
+    {
+      "title": "Sapiens: A Brief History of Humankind",
+      "price": "£54.23",
+      "url": "https://books.toscrape.com/catalogue/sapiens-a-brief-history-of-humankind_996/index.html",
+      "description": "From a renowned historian comes a groundbreaking narrative of humanity’s creation and evolution—a #1 international bestseller—that explores the ways in which biology and history have defined us and enhanced our understanding of what it means to be “human.”One hundred thousand years ago, at least six different species of humans inhabited Earth. Yet today there is only one—h From a renowned historian comes a groundbreaking narrative of humanity’s creation and evolution—a #1 international bestseller—that explores the ways in which biology and history have defined us and enhanced our understanding of what it means to be “human.”One hundred thousand years ago, at least six different species of humans inhabited Earth. Yet today there is only one—homo sapiens. What happened to the others? And what may happen to us?Most books about the history of humanity pursue either a historical or a biological approach, but Dr. Yuval Noah Harari breaks the mold with this highly original book that begins about 70,000 years ago with the appearance of modern cognition. From examining the role evolving humans have played in the global ecosystem to charting the rise of empires, Sapiens integrates history and science to reconsider accepted narratives, connect past developments with contemporary concerns, and examine specific events within the context of larger ideas.Dr. Harari also compels us to look ahead, because over the last few decades humans have begun to bend laws of natural selection that have governed life for the past four billion years. We are acquiring the ability to design not only the world around us, but also ourselves. Where is this leading us, and what do we want to become?Featuring 27 photographs, 6 maps, and 25 illustrations/diagrams, this provocative and insightful work is sure to spark debate and is essential reading for aficionados of Jared Diamond, James Gleick, Matt Ridley, Robert Wright, and Sharon Moalem. ...more"
+    }
+  ],
+  "evidence": [
+    {
+      "file": "evidence/books-detail/source-1.html",
+      "url": "https://books.toscrape.com/",
+      "sha256": "569f5535da173563ade6cb45bd3f92018d2a691421f889e8e7f669b604235309"
+    },
+    {
+      "file": "evidence/books-detail/source-2.html",
+      "url": "https://books.toscrape.com/catalogue/a-light-in-the-attic_1000/index.html",
+      "sha256": "fe252d58636096e094a21647402383e8d73949fe5b2b128cfb133e9209eff436"
+    },
+    {
+      "file": "evidence/books-detail/source-3.html",
+      "url": "https://books.toscrape.com/catalogue/tipping-the-velvet_999/index.html",
+      "sha256": "af272be5f9e33fb5a01c1555c5ffcd4b78f0d029c741303b76eb0cb80fb361e3"
+    },
+    {
+      "file": "evidence/books-detail/source-4.html",
+      "url": "https://books.toscrape.com/catalogue/soumission_998/index.html",
+      "sha256": "4d12de5c7a6666a7cb833c541c53f990edbd3d29909cb70a20a77003258ebcdd"
+    },
+    {
+      "file": "evidence/books-detail/source-5.html",
+      "url": "https://books.toscrape.com/catalogue/sharp-objects_997/index.html",
+      "sha256": "b6a8e9a518f4ed0de35a26ec944fdef2dacaa222f7ec4159b3c2ad18134fadcc"
+    },
+    {
+      "file": "evidence/books-detail/source-6.html",
+      "url": "https://books.toscrape.com/catalogue/sapiens-a-brief-history-of-humankind_996/index.html",
+      "sha256": "2f020b0647c77a5a0b7f8ef9d3adbc879d7d7e548734f34f6d4d22abf8a2b91a"
+    }
+  ]
+}

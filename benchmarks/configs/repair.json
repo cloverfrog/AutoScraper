@@ -1,0 +1,17 @@
+{
+  "tasks": ["books-list", "books-detail", "quotes-delayed", "cars-load-more", "quotes-scroll", "local-network"],
+  "model": "deepseek-flash",
+  "base_url": "https://api.deepseek.com",
+  "repeats": 3,
+  "process_timeout": 600,
+  "budget": {
+    "max_steps": 12, "max_wait_llm_calls": 8, "max_output_tokens": 3000,
+    "timeout": 240
+  },
+  "groups": [
+    {"id": "total-no-repair", "mode": "agent", "protocol": "equal-total", "budget": {"max_llm_calls": 24, "repair_reserve_calls": 0, "max_repairs": 0}},
+    {"id": "total-repair", "mode": "agent", "protocol": "equal-total", "budget": {"max_llm_calls": 24, "repair_reserve_calls": 0, "max_repairs": 2}},
+    {"id": "initial-no-repair", "mode": "agent", "protocol": "equal-initial", "budget": {"max_llm_calls": 18, "repair_reserve_calls": 0, "max_repairs": 0}},
+    {"id": "initial-repair", "mode": "agent", "protocol": "equal-initial", "budget": {"max_llm_calls": 24, "repair_reserve_calls": 6, "max_repairs": 2}}
+  ]
+}

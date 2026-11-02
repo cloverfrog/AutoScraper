@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "task": "local-network",
+  "captured_at": "2026-11-02T09:35:21.109899+00:00",
+  "method": "independent source DOM/JSON; no AutoScraper extraction",
+  "review": {
+    "status": "source-reviewed",
+    "reviewer": "Codex",
+    "notes": "Reviewed source selectors, identity/order, page boundaries, full titles/descriptions and local literal values. Human review required before formal paid study."
+  },
+  "records": [
+    {
+      "id": 1,
+      "title": "Book 1",
+      "stock": 41,
+      "price": -1.25,
+      "active": false
+    },
+    {
+      "id": 2,
+      "title": "Book 2",
+      "stock": 42,
+      "price": 0,
+      "active": false
+    }
+  ],
+  "evidence": [
+    {
+      "file": "evidence/local-network/source-1.json",
+      "url": "http://127.0.0.1:36041/api/items?page=1",
+      "sha256": "0c58b42be6e49e41dcd790fd1d71c3f50c070b491cdbd1a5994ad8ffe557179d"
+    },
+    {
+      "file": "evidence/local-network/source-2.json",
+      "url": "http://127.0.0.1:36041/api/items?page=2",
+      "sha256": "94f8eccc77576b081b8e5ce85fa646d8c98ae1a8504d41e65c53c0e2726efd76"
+    }
+  ]
+}
