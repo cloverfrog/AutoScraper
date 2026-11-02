@@ -118,6 +118,13 @@ JSON 导出保留数组和整数；CSV 将文本列表编码为 JSON 单元格�
 `transform: "absolute_url"` 使用当前页面最终 URL 解析相对链接，只接受 HTTP(S)。`required` 默认 true，兼容保留为整次运行的定位证据要求，不要求每条值非空；单条缺失输出 null。未知协议字段、未知版本、无效数量及无效去重字段会在执行前被拒绝。CSS 语法在浏览器执行时验证。
 
 `pagination` 使用显式 `type` 判别：`link` / `click` / `scroll`，旧 JSON 需迁移。
+
+数字页码可以复用 `click` + `mode: replace`：根据实际 DOM，用相对当前活动页的动态 CSS
+定位下一数字按钮，并排除首页、末页或省略号；不要固定选择第 2 页。探索时同时确认
+活动页从 N 变为 N+1、声明的记录字段发生更新；仅记录不同不能证明没有跳到末页。
+`test_selector` 的 `sample_passed` 不代表控件唯一，分页控件仍须匹配恰好一个元素。
+若页码不连续或窗口结构无法稳定定位相邻页，应明确报告限制，不跳页、不注入脚本。
+
 `link` 的 `next_selector` 唯一匹配具有 href 的 Next 链接，保留 URL 循环检测。
 `click` 的 `next_selector` 匹配按钮，`mode` 为 `append`（默认）或 `replace`；
 追加模式等待记录数增加，替换模式等待声明的列表字段内容更新。

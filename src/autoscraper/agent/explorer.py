@@ -184,6 +184,14 @@ only when remaining checks need it. Historical repair summaries are not current-
    After a Load More click with N records observed by test_selector, use wait_for_selector
    with the exact item selector and min_count=N+1. Do not use semantic wait_for_content to count
    records: its DOM evidence is sampled. Read the returned actual count before submitting rules.
+   For numeric pagination, inspect the active page and candidate button number. Derive reusable
+   CSS relative to the active marker from observed DOM, excluding first/last-page controls;
+   never fix the selector to page 2 or infer Next from a class name or double arrow alone.
+   Verify the active page advances from N to N+1 AND the declared record fields update.
+   Different records alone also occur when jumping to the last page and do not prove adjacency.
+   Inspect the exact control test count: sample_passed does not mean exactly one page control.
+   If no reliable adjacent-number CSS can be derived (e.g. gaps or an ellipsis), report the
+   limitation instead of skipping pages or supplying custom code.
    For detail fields, navigate to an observed detail href and test with item_selector="html".
 
 Protocol semantics:
@@ -205,7 +213,8 @@ Protocol semantics:
   already present in listing fields.
   Only one detail page per record; detail.max_pages budgets navigation attempts, including failures.
 - pagination requires explicit type: link, click or scroll. link.next_selector matches one href.
-  click.next_selector matches one actionable Next/Load More control; mode=append (default) waits
+  click.next_selector matches one actionable Next/Load More or adjacent numeric-page control;
+  mode=append (default) waits
   for increased record count, mode=replace waits for declared list field values to change.
   scroll optionally has container_selector, max_scrolls (default 100) and no_change_limit (default 3).
   click/scroll may declare observed loading_selector/end_selector; never invent these markers.
