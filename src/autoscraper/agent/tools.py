@@ -52,18 +52,25 @@ class TracedTools(Tools):
             return await super().act(action, **kwargs)
         name, inputs = next(iter(params.items()))
         capture = getattr(self, "network_capture", None)
+        network_action = None
+        session = kwargs.get("browser_session")
+        if capture and session:
+            if name in {"test_network", "explore_scroll"}:
+                capture.test_page = await session.get_current_page_url()
+            if name in {"navigate", "click", "scroll"}:
+                from .network_actions import observe_action
+                network_action = await observe_action(self, capture, session, name, inputs)
         if checks and name == "done" and inputs.get("success") is not False and inputs.get("data"):
             candidate = ScraperSpec.model_validate(inputs["data"])
             checks.last_candidate = candidate
             if candidate.network is not None:
-                from .network import rule_key
+                from .network import rule_key, validate_network
                 network_test = None
                 if capture:
-                    network_result = await self.registry.registry.actions["test_network"].function(
-                        source=candidate.network, dedupe_by=candidate.dedupe_by,
-                        start_url=str(candidate.start_url),
+                    network_test = await validate_network(
+                        self, capture, self.network_timeout_ms, candidate.network,
+                        candidate.dedupe_by, str(candidate.start_url),
                     )
-                    network_test = json.loads(network_result.extracted_content)
                     checks.network_summary = network_test
                 await self._refresh_control(candidate, kwargs.get("browser_session"))
                 issues = checks.check(candidate)
@@ -108,6 +115,9 @@ class TracedTools(Tools):
             if name in {"click", "scroll"}:
                 await self._begin_action(name, url, kwargs["browser_session"])
         result = await super().act(action, **kwargs)
+        if network_action is not None:
+            network_action["success"] = not result.error
+            network_action["destination"] = page_key(await session.get_current_page_url())
         if checks and not result.error:
             if name == "navigate":
                 actual = await kwargs["browser_session"].get_current_page_url()
@@ -257,6 +267,7 @@ def build_tools(
 ) -> Tools:
     tools = TracedTools()
     tools.network_capture = network_capture
+    tools.network_timeout_ms = content_timeout_ms
     tools.submission = SubmissionChecks(
         requirements, listing_url=listing_url, reference_spec=reference_spec,
     ) if check_submission else None

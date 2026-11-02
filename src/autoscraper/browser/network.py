@@ -158,7 +158,9 @@ class AgentResponseCapture:
         self.playwright = None
         self.context = None
         self.evidence = set()
-        self.test_windows = {}
+        self.test_page = ""
+        self.test_origins = {}
+        self.pagination_targets = []
         self.last_test_signature = None
         self.json_documents = []
         self.actions = []
@@ -256,6 +258,8 @@ class AgentResponseCapture:
         self.pending.clear()
         self.buffer.clear()
         self.evidence.clear()
-        self.test_windows.clear()
+        self.test_page = ""
+        self.pagination_targets.clear()
+        self.test_origins.clear()
         self.json_documents.clear()
         self.last_test_signature = None

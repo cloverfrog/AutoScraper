@@ -11,8 +11,9 @@ from types import SimpleNamespace
 import pytest
 
 from autoscraper.agent.explorer import AgentSettings
-from autoscraper.agent.network import sample_output, pagination_action
+from autoscraper.agent.network import sample_output
 from autoscraper.browser.network import AgentResponseCapture, CapturedResponse
+from autoscraper.agent.network_actions import begin_action
 from autoscraper.scraping.executor import ScraperExecutor
 from autoscraper.scraping.spec import ScraperSpec
 from autoscraper.workflow.runner import run_task
@@ -22,7 +23,25 @@ from autoscraper.observability.tracing import summarize_tool_output
 
 @pytest.fixture
 def local_site():
-    handler = runpy.run_path("examples/network_demo.py")["Handler"]
+    base_handler = runpy.run_path("examples/network_demo.py")["Handler"]
+
+    # 链接分页仍只由页面脚本发起 JSON 请求，用原 navigate 验证 href 关联。
+    class handler(base_handler):
+        def do_GET(self):
+            from urllib.parse import parse_qs, urlsplit
+            parts = urlsplit(self.path)
+            if parts.path != "/link":
+                return super().do_GET()
+            number = int(parse_qs(parts.query).get("page", ["1"])[0])
+            link = '<a id="next" href="/link?page=2">Next</a>' if number < 2 else ""
+            body = (f'<main></main>{link}'
+                    f'<script>fetch("/api/items?page={number}").then(r=>r.json()).then(d=>'
+                    '{document.querySelector("main").textContent=d.data.items[0].title;});</script>').encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
     server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
     thread = Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -34,7 +53,7 @@ def local_site():
         thread.join(timeout=5)
 
 
-@pytest.mark.parametrize("pagination", ["click", "scroll", "search"])
+@pytest.mark.parametrize("pagination", ["click", "scroll", "search", "link"])
 def test_agent_tools_generate_validated_reusable_network_rule(monkeypatch, local_site, explicit_unfiltered_requirements, tmp_path, pagination):
     bu = pytest.importorskip("browser_use")
     from browser_use import ActionResult
@@ -48,6 +67,9 @@ def test_agent_tools_generate_validated_reusable_network_rule(monkeypatch, local
     start_url = local_site + "scroll" if pagination == "scroll" else local_site
     if pagination == "search":
         start_url += "?q=Python"
+    if pagination == "link":
+        start_url = local_site + "link"
+        spec_data["network"]["pagination"] = dict(type="link", next_selector="#next")
     spec_data.update(start_url=start_url, max_items=10)
     if pagination == "scroll":
         spec_data["network"]["pagination"] = dict(type="scroll", loading_selector="#loading",
@@ -70,7 +92,7 @@ def test_agent_tools_generate_validated_reusable_network_rule(monkeypatch, local
             page = capture.context.pages[0]
 
             async def navigate(**kwargs):
-                await page.goto(start_url)
+                await page.goto(kwargs["params"].url)
                 return ActionResult(extracted_content="navigated")
 
             self.tools.registry.registry.actions["navigate"].function = navigate
@@ -90,7 +112,7 @@ def test_agent_tools_generate_validated_reusable_network_rule(monkeypatch, local
             assert inspected["complete"] and "sample" in inspected
             assert inspected["sample"]["data"]["items"]["items"][0]["stock"] == 41
             observations["initial"] = inspected
-            params = {"source": spec_data["network"], "dedupe_by": ["id"], "start_url": start_url}
+            params = {"source": spec_data["network"], "dedupe_by": ["id"]}
             initial_test = json.loads((await act({"test_network": params})).extracted_content)
             assert initial_test["extracted"] == initial_test["added"] == 1
             assert not initial_test["pagination_verified"]
@@ -106,12 +128,32 @@ def test_agent_tools_generate_validated_reusable_network_rule(monkeypatch, local
                 feedback = json.loads(explored.extracted_content)
                 assert feedback["count"] == 2 and feedback["added"] == 1, feedback
                 assert feedback["stop_reason"] == "end_marker", feedback
+            elif pagination == "link":
+                await act({"navigate": {"url": local_site + "link?page=2"}})
             else:
-                advanced = await act({"advance_network": {"source": spec_data["network"]}})
-                assert json.loads(advanced.extracted_content)["status"] == "observed", advanced
+                if pagination == "click":
+                    # 错误控件也能产生同接口的新数据，但不能验证最终 Next。
+                    await page.evaluate("""() => {
+                        const button=document.createElement('button'); button.id='other';
+                        button.textContent='Other'; button.onclick=async()=>{
+                            await (await fetch('/api/items?page=99')).text(); window.otherDone=true;
+                        }; document.body.appendChild(button);
+                    }""")
+                    await self.browser.get_browser_state_summary()
+                    nodes = await self.browser.get_selector_map()
+                    other = next(i for i, node in nodes.items() if node.attributes.get("id") == "other")
+                    await act({"click": {"index": other}})
+                    await page.wait_for_function("window.otherDone === true")
+                    wrong = json.loads((await act({"test_network": params})).extracted_content)
+                    assert wrong["status"] == "failed" and "pagination_evidence_missing" in wrong["errors"]
+                await self.browser.get_browser_state_summary()
+                selector_map = await self.browser.get_selector_map()
+                index = next(index for index, node in selector_map.items() if node.attributes.get("id") == "next")
+                clicked = await act({"click": {"index": index}})
+                assert not clicked.error, clicked
             await page.wait_for_function("document.querySelector('main').textContent === 'Book 2'")
             tested = json.loads((await act({"test_network": params})).extracted_content)
-            assert tested["status"] == "passed" and tested["responses"] == 2, (tested, [(e.id, e.page_url) for e in capture.buffer.entries.values()], capture.actions)
+            assert tested["status"] == "passed" and tested["responses"] == (3 if pagination == "click" else 2), (tested, [(e.id, e.page_url) for e in capture.buffer.entries.values()], capture.actions)
             done = await act({"done": {"data": spec_data}})
             assert done.is_done and done.success, done.extracted_content
             return SimpleNamespace(is_successful=lambda: True, final_result=lambda: done.extracted_content)
@@ -122,7 +164,7 @@ def test_agent_tools_generate_validated_reusable_network_rule(monkeypatch, local
                        "抓取标题和 DOM 不可见的库存、价格及启用状态", settings,
                        fields=["id", "title", "stock", "price", "active"], count=10, execute=True,
                        validation=ValidationSettings(max_repairs=0))
-    assert outcome.status == "success", outcome.model_dump()
+    assert outcome.status == "success", outcome.summary()
     assert len(outcome.data.records) == 2 and not outcome.sample_only
     assert observations["initial"]["url"] == local_site+"api/items"
     # 保存后从新浏览器独立重跑，证明规则不依赖探索缓存或模型。
@@ -158,10 +200,8 @@ def test_network_evidence_uses_exact_paths_and_dedupe_keys(kind):
     for number in (1, 2):
         capture.buffer.entries[number] = CapturedResponse(number, "https://fixture.test/api", "GET",
             page_url="https://fixture.test/", body=[dict(id=1, stock=number)], complete=True, status=200)
-    from autoscraper.scraping.spec import NetworkSource
-    observed = pagination_action(NetworkSource.model_validate(source), "https://fixture.test/", 1)
-    observed["end"] = 2
-    capture.actions = [observed]
+    observed = begin_action(capture, kind, "https://fixture.test/", 1)
+    observed.update(end=2, success=True, selectors=["button" if kind == "click" else ""])
     tools = build_tools(network_capture=capture, check_submission=True, listing_url="https://fixture.test/")
     action = tools.registry.registry.actions["test_network"].function
     async def run():

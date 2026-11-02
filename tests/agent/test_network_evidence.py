@@ -5,8 +5,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from autoscraper.agent.network import network_feedback, pagination_action, rule_key
+from autoscraper.agent.network import network_feedback, validate_network, rule_key
 from autoscraper.agent.submission import page_key
+from autoscraper.agent.network_actions import begin_action
 from autoscraper.agent.tools import build_tools
 from autoscraper.browser.network import AgentResponseCapture, CapturedResponse, ResponseBuffer
 from autoscraper.scraping.spec import NetworkSource, ScraperSpec
@@ -35,6 +36,8 @@ def response(capture, *, page=URL, status=200, error=None, body=None, complete=T
 
 
 def call(tools, name="test_network", **kwargs):
+    if name == "test_network" and "start_url" in kwargs:
+        return asyncio.run(validate_network(tools, tools.network_capture, 30, **kwargs))
     return json.loads(asyncio.run(tools.registry.registry.actions[name].function(**kwargs)).extracted_content)
 
 
@@ -71,15 +74,19 @@ def test_http_history_requires_fresh_initial_evidence_and_new_failure_revokes_su
     response(capture)
     assert "http_status" in call(tools, source=source)["errors"]
     # 明确选定新尝试的请求边界，而不是任意忽略失败；新窗口必须独立通过。
-    passed = call(tools, source=source, since_response_id=1)
+    # 普通重新导航自动开启新验证窗口，无新增模型工具参数。
+    navigation = begin_action(capture, "navigate", URL, 1)
+    navigation["success"] = True
+    passed = call(tools, source=source)
     assert passed["status"] == "passed"
     assert call(tools, source=source)["status"] == "passed"
     response(capture, status=400, error="http_status")
     current = call(tools, source=source)
     assert current["status"] == "failed" and "http_status" in current["errors"]
     assert rule_key(source, [], URL) not in capture.evidence
-    assert call(tools, source=source, since_response_id=0)["errors"] == ["invalid_response_boundary"]
-    empty = call(tools, source=source, since_response_id=3)
+    navigation = begin_action(capture, "navigate", URL, 3)
+    navigation["success"] = True
+    empty = call(tools, source=source)
     assert "no_matching_responses" in empty["errors"] and not empty["initial_page_verified"]
 
 
@@ -126,19 +133,6 @@ def test_raw_dedupe_key_explains_declared_field_constraint():
     assert call(tools, source=source, dedupe_by=["id"])["status"] == "passed"
 
 
-def test_nested_inspection_changes_focus_without_exposing_sensitive_parent():
-    capture, tools, source = setup()
-    response(capture, body={"results": [{"taxon": {"parent": {"name": "plant"}},
-                                         "token": {"nested": "private"}}]})
-    root = call(tools, "inspect_network_response", response_id=1)
-    assert root["sample"]["results"]["items"][0]["taxon"]["parent"]["truncated"]
-    deep = call(tools, "inspect_network_response", response_id=1, path=["results", 0, "taxon", "parent"])
-    assert deep["sample"] == {"name": "plant"}
-    secret = call(tools, "inspect_network_response", response_id=1, path=["results", 0, "token", "nested"])
-    assert "private" not in json.dumps(secret) and secret["sample"] == "[redacted]"
-    missing = call(tools, "inspect_network_response", response_id=1, path=["missing"])
-    assert missing["error"] == "inspection_path_failure"
-
 
 @pytest.mark.parametrize("kind", ["click", "link", "scroll"])
 def test_pagination_requires_exact_control_page_and_action_window(kind):
@@ -149,9 +143,13 @@ def test_pagination_requires_exact_control_page_and_action_window(kind):
     # 任意点击、导航或滚动，即使出现新数据也不能验证最终规则。
     capture.actions = [(kind, 1)]
     assert "pagination_evidence_missing" in call(tools, source=source)["errors"]
-    exact = pagination_action(source, URL, 1)
-    exact["end"] = 2
-    capture.actions = [exact]
+    capture.actions = []
+    exact = begin_action(capture, "navigate" if kind == "link" else kind, URL, 1)
+    exact.update(end=2, success=True, selectors=["#next" if kind != "scroll" else "#list"])
+    # 本例 link 仍在同一页面取数，不应被当成重新导航初始页的窗口。
+    if kind == "link":
+        exact["destination"] = URL + "?page=2"
+        capture.buffer.entries[2].page_url = exact["destination"]
     assert call(tools, source=source)["status"] == "passed"
     exact["page"] = URL + "other"
     assert call(tools, source=source)["status"] == "failed"
@@ -159,7 +157,7 @@ def test_pagination_requires_exact_control_page_and_action_window(kind):
     exact["end"] = 1
     assert call(tools, source=source)["status"] == "failed"
     exact["end"] = 2
-    exact["pagination"] = {**pagination, **({"next_selector": "#other"} if kind != "scroll" else {"container_selector": "#other"})}
+    exact["selectors"] = ["#other"]
     assert call(tools, source=source)["status"] == "failed"
 
 
@@ -186,61 +184,15 @@ def test_evicted_window_requires_recapture_and_cannot_restore_old_success():
     capture.buffer.dropped = 1
     response(capture)
     assert "response_limit" in call(tools, source=source)["errors"]
-    assert call(tools, source=source, since_response_id=1)["status"] == "passed"
-
-
-@pytest.mark.parametrize("kind", ["click", "link"])
-@pytest.mark.parametrize("usable", [True, False])
-def test_exact_action_tool_binds_destination_and_rejects_other_control(kind, usable):
-    capture, tools, source = setup({**SOURCE, "pagination": dict(type=kind, next_selector="#next")})
-    response(capture)
-    # 动作前已经发起的请求，即使稍后完成，也不算动作后的证据。
-    inflight = response(capture, complete=False)
-    destination = URL + "?page=2" if kind == "link" else URL
-
-    class Element:
-        async def evaluate(self, script):
-            assert "aria-disabled" in script and "visibility" in script
-            return json.dumps(usable)
-
-        async def get_attribute(self, name):
-            assert name == "href"
-            return "?page=2"
-
-        async def click(self):
-            response(capture)
-            inflight.complete = True
-
-    class Page:
-        url = URL
-
-        async def get_elements_by_css_selector(self, selector):
-            return [Element()] if selector == "#next" else []
-
-        async def goto(self, target):
-            assert target == destination
-            self.url = target
-            response(capture, page=target)
-            inflight.complete = True
-
-    page = Page()
-
-    async def current_page():
-        return page
-
-    async def current_url():
-        return page.url
-
-    session = SimpleNamespace(must_get_current_page=current_page, get_current_page_url=current_url)
-    advanced = call(tools, "advance_network", browser_session=session, source=source)
-    if not usable:
-        assert advanced["errors"] == ["pagination_action_failure"]
-        assert not capture.actions
-        return
-    assert advanced["status"] == "observed" and advanced["baseline"] == 2
+    navigation = begin_action(capture, "navigate", URL, 1)
+    navigation["success"] = True
     assert call(tools, source=source)["status"] == "passed"
-    capture.buffer.entries.pop(3)
-    assert call(tools, source=source)["status"] == "failed"
-    changed = source.model_copy(update={"pagination": source.pagination.model_copy(update={"next_selector": "#wrong"})})
-    failed = call(tools, "advance_network", browser_session=session, source=changed)
-    assert failed["errors"] == ["pagination_action_failure"]
+
+
+# 首轮模型输入契约：不新增工具、参数或深层探查入口。
+def test_original_network_tool_contract_is_preserved():
+    _, tools, _ = setup()
+    actions = tools.registry.registry.actions
+    assert "advance_network" not in actions
+    assert set(actions["inspect_network_response"].param_model.model_fields) == {"response_id"}
+    assert set(actions["test_network"].param_model.model_fields) == {"source", "dedupe_by"}
